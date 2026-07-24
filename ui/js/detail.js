@@ -1,7 +1,7 @@
 // card detail: attributes header + markdown body + event timeline (chat lives in the chat panel)
 import { S, card, lieutenant, lieutenants, lieutenantColor, cardStatus, cardActivityTs, cardRecency, kindEmoji, render, toggleFilter, filterSelected } from './state.js';
 import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, uriBasename, setHtmlIfChanged, isImageMime } from './util.js';
-import { md, mdEnhance } from './md.js';
+import { md, mdEnhance, copyText } from './md.js';
 import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
 import { openCardThread, syncChatToMain } from './chat.js';
@@ -194,6 +194,7 @@ const avFrame = document.getElementById('av-frame');
 const avExpand = document.getElementById('av-expand');
 const avDownload = document.getElementById('av-download');
 const avSrcBtn = document.getElementById('av-src');
+const avCopyBtn = document.getElementById('av-copy');
 const MD_EXT = /\.(md|markdown)$/i;
 const HTML_EXT = /\.html?$/i;
 // Reset the shared overlay to a clean text-mode state (used by both openers).
@@ -215,6 +216,10 @@ function avReset(name, uri) {
   avShowSrc = false;
   avSrcBtn.hidden = true;
   avSrcBtn.classList.remove('on');
+  avText = null;
+  avCopyBtn.hidden = true;
+  avCopyBtn.textContent = '⧉';
+  avCopyBtn.classList.remove('ok');
   avModal.classList.remove('expanded'); // each open starts at the default size
   avOverlay.hidden = false;
 }
@@ -222,9 +227,20 @@ function avReset(name, uri) {
 // head). avMd holds the raw text while a markdown preview is up; the toggle
 // re-renders in place, so it also survives expand/restore.
 let avMd = null, avShowSrc = false;
+// The full text source currently in the viewer (markdown or plain) — what the
+// head ⧉ copies, regardless of the rendered ⇄ source toggle. Text-only: image /
+// video / iframe / download states never set it, so the button stays hidden there.
+let avText = null;
+function avCopyable(text) { avText = text; avCopyBtn.hidden = false; }
+avCopyBtn.onclick = () => copyText(avText == null ? '' : avText).then((ok) => {
+  avCopyBtn.textContent = ok ? '✓' : '✗';
+  avCopyBtn.classList.toggle('ok', ok);
+  setTimeout(() => { avCopyBtn.textContent = '⧉'; avCopyBtn.classList.remove('ok'); }, 1500);
+});
 function showMarkdown(text) {
   avMd = text;
   avSrcBtn.hidden = false;
+  avCopyable(text);
   renderAvMd();
 }
 function renderAvMd() {
@@ -293,6 +309,7 @@ async function openArtifact(uri) {
     } else {
       avBody.className = '';
       avBody.textContent = r.content; // non-markdown: plain preformatted text
+      avCopyable(r.content);
     }
   } catch (e) {
     offerDownload('⚠ no preview — ' + e.message + ' (use ⬇ to download)'); // binary / too large / unreadable
@@ -319,7 +336,7 @@ export async function openAttachment(att) {
   const showVideo = () => { avBody.hidden = true; avVideoWrap.hidden = false; avVideo.src = url; };
   const showText = (text) => {
     if (isMdArtifact(att, name)) showMarkdown(text);
-    else { avBody.className = ''; avBody.textContent = text; }
+    else { avBody.className = ''; avBody.textContent = text; avCopyable(text); }
   };
   const mime = String(att.mime || '');
   // Decide from mime/extension when possible; a promoted artifact carries only

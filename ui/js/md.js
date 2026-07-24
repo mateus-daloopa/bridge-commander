@@ -86,6 +86,33 @@ export function mdEnhance(root) {
   }
 }
 
+// ---------- clipboard ----------
+// The one copy helper behind every copy affordance (code blocks, message
+// bubbles, artifact viewer). navigator.clipboard requires a secure context —
+// over plain HTTP (tailnet IP) it is undefined, so the hidden-textarea
+// execCommand path is the one that actually runs there. execCommand only works
+// inside a real user gesture, so that branch must reach it synchronously from
+// the click: the clipboard check throws no await in the way.
+export function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).then(() => true, () => execCopy(text));
+  }
+  return Promise.resolve(execCopy(text));
+}
+function execCopy(text) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const done = document.execCommand('copy');
+    ta.remove();
+    return done;
+  } catch (e) { return false; }
+}
+
 // ---------- code blocks: copy button ----------
 // The button lives in a position:relative wrapper AROUND the pre (not inside
 // it) so it stays put when the code scrolls horizontally. Hover-reveal on
@@ -101,31 +128,11 @@ function addCopyButton(pre, code) {
   btn.className = 'copy-btn';
   btn.textContent = 'copy';
   btn.setAttribute('aria-label', 'copy code to clipboard');
-  btn.onclick = async () => {
-    const text = code.textContent;
-    let done = false;
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(text);
-        done = true;
-      }
-    } catch (e) { /* focus/permission issue — fall through to execCommand */ }
-    if (!done) {
-      try {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        done = document.execCommand('copy');
-        ta.remove();
-      } catch (e) { /* both paths failed */ }
-    }
+  btn.onclick = () => copyText(code.textContent).then((done) => {
     btn.textContent = done ? '✓ copied' : 'failed';
     btn.classList.toggle('ok', done);
     setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('ok'); }, 1500);
-  };
+  });
   wrap.appendChild(btn);
 }
 

@@ -5,7 +5,7 @@
 import { S, card, cards, lieutenants, lieutenant, lieutenantColor, lieutenantName, lieutenantAvatar, lieutenantUnread, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
 import { api } from './api.js';
 import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged, fmtSize, isImageMime, statusBlockHtml, ctxBarHtml, owedIndHtml } from './util.js';
-import { md, mdEnhance } from './md.js';
+import { md, mdEnhance, copyText } from './md.js';
 import { speakMessage, trackMessages } from './voice.js';
 import { openAttachment } from './detail.js';
 import { avatarHtml } from './avatars.js';
@@ -173,13 +173,19 @@ function msgHtml(m, promote, avatarIdx) {
   // speak button only on lieutenant bubbles; 🔊 icon, no message text in markup
   const speakBtn = mine ? '' :
     '<button class="msg-speak" type="button" data-speak title="read this message aloud" aria-label="read this message aloud">🔊</button>';
+  // copy button on BOTH sides: puts the raw markdown source on the clipboard
+  // (one tap → the iPhone Action-button shortcut reads it aloud). Delegated on
+  // the feed via data-copy — deliberately NOT a second index-mapped wiring pass
+  // like the speak buttons, so it can't desync that mapping.
+  const copyBtn = !hasText ? '' :
+    '<button class="msg-copy" type="button" data-copy="' + esc(m.text) + '" title="copy message text" aria-label="copy message text">⧉</button>';
   // face sits inside the bubble, top-left — same face for every agent bubble in
   // this feed (a card thread's interlocutor is always the owning lieutenant,
   // so even a worker's stamped-as-owner say gets its face)
   const hasAvatar = !mine && avatarIdx != null;
   const face = hasAvatar ? avatarHtml(avatarIdx, 'msg-face') : '';
   return '<div class="msg ' + (mine ? 'user' : 'agent') + (hasAvatar ? ' has-avatar' : '') + '">' + face + chipHtml(m) + body + atts +
-    '<span class="ts">' + who + hhmm(m.ts) + '</span>' + speakBtn + '</div>';
+    '<span class="ts">' + who + hhmm(m.ts) + '</span>' + copyBtn + speakBtn + '</div>';
 }
 // empty-conversation placeholder: the lieutenant's face (or its colored dot,
 // same fallback rule as everywhere else) above the "no messages yet" text
@@ -489,6 +495,19 @@ feedEl.addEventListener('click', (e) => {
   if (chip) {
     e.stopPropagation();
     openCardConversation(chip.dataset.chipCard);
+    return;
+  }
+  // bubble copy button: message source travels in data-copy (esc()'d in the
+  // markup, unescaped back by dataset) — copyText is called synchronously from
+  // the gesture so the insecure-context execCommand fallback works.
+  const cp = e.target.closest('.msg-copy');
+  if (cp) {
+    e.stopPropagation();
+    copyText(cp.dataset.copy || '').then((ok) => {
+      cp.textContent = ok ? '✓' : '✗';
+      cp.classList.toggle('ok', ok);
+      setTimeout(() => { cp.textContent = '⧉'; cp.classList.remove('ok'); }, 1500);
+    });
     return;
   }
   const pin = e.target.closest('.att-pin');
