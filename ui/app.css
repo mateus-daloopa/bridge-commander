@@ -165,6 +165,19 @@ body.resizing { user-select: none; cursor: col-resize; }
 .msg-speak:hover { opacity: 1; color: var(--text); border-color: var(--faint); }
 .msg-speak.speaking { opacity: 1; color: var(--accent); border-color: var(--accent2); }
 @media (hover: none) { .msg-speak { opacity: .6; } } /* touch: always visible, small */
+/* per-message copy button, same family — BOTH sides; on agent bubbles it sits
+   left of the 🔊 (one tap → clipboard → the phone's read-aloud shortcut) */
+.msg.user { position: relative; }
+.msg-copy {
+  position: absolute; right: 4px; bottom: 3px; padding: 1px 5px; line-height: 1;
+  font-size: 12px; border-radius: 6px; background: var(--panel2); border: 1px solid var(--line);
+  color: var(--dim); cursor: pointer; opacity: 0; transition: opacity .12s;
+}
+.msg.agent .msg-copy { right: 32px; }
+.msg:hover .msg-copy, .msg-copy:focus-visible { opacity: .85; }
+.msg-copy:hover { opacity: 1; color: var(--text); border-color: var(--faint); }
+.msg-copy.ok { opacity: 1; color: var(--ok); border-color: var(--ok); }
+@media (hover: none) { .msg-copy { opacity: .6; } } /* touch: always visible, small */
 
 /* slash-command request+reply: the SYSTEM speaking, not a lieutenant. Full-width
    console block — monospace, dim palette, subtle border, a small ⌘ affordance —
@@ -991,6 +1004,10 @@ a.a-uri { color: var(--accent); }
 #av-src { flex: none; color: var(--dim); font-size: 12px; font-family: var(--mono); padding: 2px 6px; border: 1px solid transparent; border-radius: 6px; }
 #av-src:hover { color: var(--text); }
 #av-src.on { color: var(--accent); border-color: var(--accent2); }
+/* head copy button (text artifacts only): copies the FULL source, whichever view is up */
+#av-copy { flex: none; color: var(--dim); font-size: 14px; padding: 2px 6px; }
+#av-copy:hover { color: var(--text); }
+#av-copy.ok { color: var(--ok); }
 #av-body {
   flex: 1; min-height: 60px; overflow: auto; padding: 12px 16px; margin: 0;
   font-family: var(--mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
