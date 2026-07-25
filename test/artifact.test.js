@@ -81,6 +81,31 @@ test('raw=1 for a listed .mp4 → video/mp4, inline, Accept-Ranges; Range → 20
   }
 });
 
+test('raw=1 for a listed .mp3 → audio/mpeg, inline, Accept-Ranges; Range → 206 slice', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    const aud = path.join(s.dir, 'reply.mp3');
+    fs.writeFileSync(aud, 'FAKE-MP3-BYTES-0123456789'); // headers/range only — no real codec needed
+    const { uri } = await cardWithArtifact(s, aud, 'worker voice reply');
+    const raw = s.base + '/api/artifact?uri=' + encodeURIComponent(uri) + '&raw=1';
+
+    const res = await fetch(raw);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.headers.get('content-type'), 'audio/mpeg');
+    assert.match(res.headers.get('content-disposition') || '', /^inline/);
+    assert.strictEqual(res.headers.get('accept-ranges'), 'bytes');
+    assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff');
+
+    // <audio> seeking rides the same Range path that makes iOS Safari play <video>
+    const r2 = await fetch(raw, { headers: { Range: 'bytes=0-1' } });
+    assert.strictEqual(r2.status, 206);
+    assert.strictEqual(r2.headers.get('content-range'), 'bytes 0-1/25');
+    assert.strictEqual(await r2.text(), 'FA');
+  } finally {
+    await s.stop();
+  }
+});
+
 test('raw=1 for a uri NOT listed on any card → 404 (auth guard holds for raw too)', async () => {
   const s = await startServerWithLieutenant();
   try {

@@ -1018,6 +1018,9 @@ a.a-uri { color: var(--accent); }
 /* image attachment preview (shares the av-overlay) */
 #av-img-wrap, #av-video-wrap { flex: 1; min-height: 60px; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 12px; }
 #av-img, #av-video { max-width: 100%; max-height: 76vh; object-fit: contain; border-radius: 6px; }
+/* audio is a wide short control, not a contained box — span the modal width */
+#av-audio-wrap { flex: none; display: flex; align-items: center; padding: 24px 16px; }
+#av-audio { width: 100%; min-width: 0; }
 /* rendered html artifact (shares the av-overlay) — fills the body; white backdrop
    so a self-contained page renders on its own canvas, not the board's dark bg */
 #av-frame { flex: 1; min-height: 60px; width: 100%; border: 0; background: #fff; }
