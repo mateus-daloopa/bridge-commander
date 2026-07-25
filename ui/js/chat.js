@@ -9,6 +9,7 @@ import { md, mdEnhance, copyText } from './md.js';
 import { speakMessage, trackMessages } from './voice.js';
 import { openAttachment } from './detail.js';
 import { avatarHtml } from './avatars.js';
+import { isEchoOf, addPending, pendingFor } from './pending.js';
 
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
@@ -184,8 +185,10 @@ function msgHtml(m, promote, avatarIdx) {
   // so even a worker's stamped-as-owner say gets its face)
   const hasAvatar = !mine && avatarIdx != null;
   const face = hasAvatar ? avatarHtml(avatarIdx, 'msg-face') : '';
-  return '<div class="msg ' + (mine ? 'user' : 'agent') + (hasAvatar ? ' has-avatar' : '') + '">' + face + chipHtml(m) + body + atts +
-    '<span class="ts">' + who + hhmm(m.ts) + '</span>' + copyBtn + speakBtn + '</div>';
+  // an optimistic (pending) send renders as a normal captain bubble, dimmed,
+  // with a clock on the timestamp — provisional, but never error-looking
+  return '<div class="msg ' + (mine ? 'user' : 'agent') + (m._pending ? ' pending' : '') + (hasAvatar ? ' has-avatar' : '') + '">' + face + chipHtml(m) + body + atts +
+    '<span class="ts">' + (m._pending ? '🕓 ' : '') + who + hhmm(m.ts) + '</span>' + copyBtn + speakBtn + '</div>';
 }
 // empty-conversation placeholder: the lieutenant's face (or its colored dot,
 // same fallback rule as everywhere else) above the "no messages yet" text
@@ -367,8 +370,16 @@ export function renderChat() {
     const speakable = m.author !== USER && !(m.cmd && typeof m.cmd === 'object');
     blocks.push({ html: h + msgHtml(m, isCard, avatarIdx), msg: speakable ? m : null });
   };
+  // optimistic sends: reconciled against the server thread on every render
+  // (the entry drops in the same paint that first shows its echo — never both),
+  // rendered after everything the server sent, in send order. The unified
+  // stream also merges the owned card threads' pendings, chip-labeled, so a
+  // just-sent thread message doesn't vanish when the captain taps back.
+  const pendMsg = (p, extra) => Object.assign(
+    { author: USER, text: p.text, attachments: p.atts, ts: p.ts, _pending: true }, extra);
   if (isCard) {
     for (const m of c.thread || []) push(m);
+    for (const p of pendingFor(target, c.thread || [])) push(pendMsg(p));
   } else {
     // only the newest COLLAPSE_KEEP messages render by default; older history
     // sits behind the expander (anchored cutoff — see collapsedHidden above)
@@ -377,6 +388,15 @@ export function renderChat() {
     const hidden = mainExpanded ? 0 : Math.min(collapsedHidden, msgs.length);
     if (hidden) blocks.push({ html: '<button class="feed-expand" type="button">show earlier messages (' + hidden + ')</button>' });
     for (const m of msgs.slice(hidden)) push(m);
+    const pend = pendingFor(target, (lt && lt.chat) || []).map((p) => [p, null]);
+    if (lt) for (const cc of cards()) {
+      if (cc.owner !== lt.id) continue;
+      for (const p of pendingFor('card:' + cc.id, cc.thread || [])) {
+        pend.push([p, { _card: cc.id, _cardTitle: cc.title || cc.id, _cardEmoji: cardEmoji(cc) }]);
+      }
+    }
+    pend.sort((a, b) => a[0].seq - b[0].seq);
+    for (const [p, extra] of pend) push(pendMsg(p, extra));
   }
   // owed tails: the filtered view shows its own target's; the unified stream
   // also surfaces every owed CARD thread of this lieutenant (chip-labeled), so
@@ -540,9 +560,10 @@ async function promoteAttachment(att, btn) {
 }
 
 // ---------- composer ----------
-// The input clears ONLY once the message is confirmed delivered AND visible in
-// the chat timeline; until then the text is the captain's only copy. On failure
-// it stays in the composer with an error indication — never silently eaten.
+// The message is never nowhere: the text stays in the input until the POST
+// 200 (delivery), at which point it moves to the thread as a pending bubble
+// until the server echo replaces it. On failure it stays in the composer with
+// an error indication — never silently eaten.
 const sendBtn = document.querySelector('#chat-form button[type=submit]');
 const sendErrEl = document.getElementById('chat-send-err');
 const fileInput = document.getElementById('chat-file');
@@ -681,7 +702,7 @@ function threadMsgs(target) {
 let echoWatch = 0;
 async function watchEcho(target, text) {
   const token = ++echoWatch;
-  const seen = () => threadMsgs(target).some((m) => m.author === USER && m.text === text);
+  const seen = () => threadMsgs(target).some((m) => isEchoOf(m, { text })); // same predicate the pending bubble reconciles by
   for (let i = 0; i < 120; i++) { // 250ms steps: refetch at 3s, hint at 10s, give up at 30s
     if (token !== echoWatch) return;
     if (seen()) { clearSyncHint(); return; }
@@ -737,13 +758,16 @@ async function send() {
     // (the server re-resolves them authoritatively by id).
     const metas = await Promise.all(atts.map((p) => api.uploadAttachment(p.file)));
     await api.feedback(target, text, metas);
-    // The 200 IS delivery (write-ahead queue) — clear the composer now. The
-    // soft watchdog only flags a stalled echo; attachments-only has no text
-    // to match, so the 200 alone confirms it.
+    // The 200 IS delivery (write-ahead queue) — clear the composer now, and in
+    // the SAME paint put the message in the thread as a pending bubble, so
+    // there is never a frame where it exists nowhere. The soft watchdog only
+    // flags a stalled echo.
+    addPending(target, text, metas);
     inputEl.value = '';
     closeSlash();
     pendingAtts = [];
     renderPendingAtts();
+    render();
     if (text) watchEcho(target, text);
   } catch (e) {
     setSendError(e.message); // a real POST failure: red + input preserved

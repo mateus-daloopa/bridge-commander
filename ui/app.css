@@ -127,6 +127,8 @@ body.resizing { user-select: none; cursor: col-resize; }
 @keyframes msg-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .msg.agent { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .msg.user { align-self: flex-end; background: var(--user-bubble); border: 1px solid var(--user-line); border-bottom-right-radius: 4px; }
+/* optimistic send awaiting its server echo: same bubble, visibly provisional */
+.msg.pending { opacity: .55; }
 .msg .ts { display: block; color: var(--faint); font-size: 11px; margin-top: 4px; font-family: var(--mono); }
 .msg .pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* the card chip on a unified-stream bubble: which card thread this message
