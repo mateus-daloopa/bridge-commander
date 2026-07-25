@@ -119,13 +119,16 @@ const UPLOAD_MAX_BYTES = parseInt(process.env.BC_UPLOAD_MAX_BYTES, 10) > 0
 // preview cap; over-cap → 413.
 const ARTIFACT_MAX_BYTES = parseInt(process.env.BC_ARTIFACT_MAX_BYTES, 10) > 0
   ? parseInt(process.env.BC_ARTIFACT_MAX_BYTES, 10) : 25 * 1024 * 1024;
-// Extension → Content-Type for raw artifact byte serving. Images render inline
-// in the viewer; pdf may render inline; everything else downloads.
+// Extension → Content-Type for raw artifact byte serving. Images, video, and
+// audio render inline in the viewer; pdf may render inline; everything else
+// downloads.
 const ARTIFACT_MIME = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
   '.webp': 'image/webp', '.svg': 'image/svg+xml', '.bmp': 'image/bmp', '.avif': 'image/avif',
   '.pdf': 'application/pdf',
   '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
+  '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.opus': 'audio/ogg', '.flac': 'audio/flac',
 };
 
 const DEFAULT_PORT = 4780;
@@ -2206,11 +2209,11 @@ const server = http.createServer(async (req, res) => {
         const ctype = isHtml ? 'text/html; charset=utf-8'
           : am ? (attMime || 'application/octet-stream')
           : (ARTIFACT_MIME[ext] || 'application/octet-stream');
-        // Images, video, pdf, and rendered html show inline in the browser; other
-        // binaries download. Same hardening as the attachments serve: nosniff pins
-        // the Content-Type; the sandbox CSP neutralizes an uploaded SVG/HTML if it
+        // Images, video, audio, pdf, and rendered html show inline in the browser;
+        // other binaries download. Same hardening as the attachments serve: nosniff
+        // pins the Content-Type; the sandbox CSP neutralizes an uploaded SVG/HTML if it
         // is navigated to as a document (inline <img>/<video> subresources unaffected).
-        const inline = isHtml || /^(image|video)\//.test(ctype) || ctype === 'application/pdf';
+        const inline = isHtml || /^(image|video|audio)\//.test(ctype) || ctype === 'application/pdf';
         const csp = isHtml ? 'sandbox allow-scripts' : 'sandbox';
         let data;
         try { data = fs.readFileSync(file); }
