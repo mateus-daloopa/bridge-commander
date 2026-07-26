@@ -133,8 +133,19 @@ const ARTIFACT_MIME = {
 
 const DEFAULT_PORT = 4780;
 // External TTS proxy timeouts — a hanging engine must never hang the board.
+// Speech scales with the text: an engine synthesizing a real chat message runs
+// for tens of seconds (voxcpm2 measured 31 s for 1200 characters, and 1200 is
+// what we send), so a flat 20 s cut every long message off mid-synthesis and
+// dropped it to the browser voice. Budget per character with a floor, and cap
+// it — a minute of silence is a broken engine either way.
 const TTS_VOICES_MS = 3000;
-const TTS_SPEECH_MS = 20000;
+const TTS_SPEECH_MS_MIN = 20000;
+const TTS_SPEECH_MS_PER_CHAR = 60;
+const TTS_SPEECH_MS_MAX = 180000;
+function speechTimeoutMs(input) {
+  const n = typeof input === 'string' ? input.length : 0;
+  return Math.min(TTS_SPEECH_MS_MAX, Math.max(TTS_SPEECH_MS_MIN, n * TTS_SPEECH_MS_PER_CHAR));
+}
 
 // ---------- workspace config (.bridge-commander/config.json) ----------
 function readConfig() {
@@ -2194,7 +2205,7 @@ const server = http.createServer(async (req, res) => {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(TTS_SPEECH_MS),
+          signal: AbortSignal.timeout(speechTimeoutMs(payload.input)),
         });
       } catch (e) {
         return sendJson(res, 502, { error: String((e && e.message) || e) });

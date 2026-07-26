@@ -147,3 +147,28 @@ test('an explicit voice wins and suppresses the default lang (they must agree)',
     assert.ok(!('lang' in seen), 'no lang alongside an explicit voice');
   } finally { await s.stop(); engine.close(); }
 });
+
+// The timeout has to outlive a real message. voxcpm2 measured 31 s for the 1200
+// characters the UI sends; the flat 20 s that used to be here cut every long
+// message off mid-synthesis and silently dropped it to the browser voice.
+test('the speech timeout scales with the text, so a long message is not cut off', async () => {
+  const port = await freePort();
+  let seen = null;
+  // An engine that answers only AFTER 20 s — the old flat cap — and reports the
+  // wait it survived. If the proxy still cut at 20 s, this request never lands.
+  const engine = http.createServer((req, res) => {
+    const t0 = Date.now();
+    setTimeout(() => {
+      seen = Date.now() - t0;
+      res.writeHead(200, { 'Content-Type': 'audio/wav' });
+      res.end(Buffer.from('RIFFfake'));
+    }, 22000);
+  });
+  await new Promise((r) => engine.listen(port, '127.0.0.1', r));
+  const s = await startServer({ seed: seedConfig({ tts: { url: 'http://127.0.0.1:' + port } }) });
+  try {
+    const r = await s.api('POST', '/api/tts/speech', { input: 'x'.repeat(1200) });
+    assert.equal(r.status, 200, 'a 1200-character message must survive a 22 s synthesis');
+    assert.ok(seen >= 22000, 'the engine really did take longer than the old flat cap');
+  } finally { await s.stop(); engine.close(); }
+});
