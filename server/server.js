@@ -137,10 +137,6 @@ const DEFAULT_PORT = 4780;
 // for as long as synthesis runs (~34 s for the 1200 characters the UI sends), so a
 // cap on the total would truncate every long message. This is the gap allowed
 // before the first chunk and between any two after it.
-const TTS_VOICES_MS = 3000;
-const TTS_SPEECH_MS = parseInt(process.env.BC_TTS_SPEECH_MS, 10) > 0
-  ? parseInt(process.env.BC_TTS_SPEECH_MS, 10) : 20000;
-
 // ---------- workspace config (.bridge-commander/config.json) ----------
 function readConfig() {
   try {
@@ -156,11 +152,11 @@ function userConfig() {
     const voices = c.voices.filter((v) => typeof v === 'string' && v.trim()).map((v) => v.trim());
     if (voices.length) out.voices = voices;
   }
-  // The engine URL is server-side only — the browser talks to /api/tts/* and
-  // never needs to reach the engine itself. No tts config => no tts key => the
-  // UI is byte-for-byte what it was before this feature existed.
+  // The browser IS the engine's client — url and defaults go to it whole. No tts
+  // config => no tts key => the UI is byte-for-byte what it was before this
+  // feature existed.
   const t = ttsConfig();
-  if (t) out.tts = { enabled: true, lang: t.lang, voice: t.voice };
+  if (t) out.tts = Object.assign({ enabled: true }, t);
   return out;
 }
 // External TTS engine (voxbench API), optional: config.json
@@ -2164,69 +2160,6 @@ const server = http.createServer(async (req, res) => {
     // ----- reads -----
     if (route === 'GET /api/board') return sendJson(res, 200, publicBoard(url.searchParams.get('user') || 'user'));
     if (route === 'GET /api/config') return sendJson(res, 200, userConfig());
-    // ----- external TTS proxy (the engines send no CORS headers) -----
-    // Both routes are short-timeout and never let a sick engine wedge the board:
-    // voices degrades to an empty list with a reason, speech answers an error the
-    // UI turns into a fallback to the browser's own voice.
-    if (route === 'GET /api/tts/voices') {
-      const t = ttsConfig();
-      if (!t) return sendJson(res, 200, { voices: [], error: 'tts not configured' });
-      try {
-        const r = await fetch(t.url + '/v1/voices', { signal: AbortSignal.timeout(TTS_VOICES_MS) });
-        if (!r.ok) return sendJson(res, 200, { voices: [], error: 'engine http ' + r.status });
-        const j = await r.json();
-        return sendJson(res, 200, { voices: Array.isArray(j && j.voices) ? j.voices : [] });
-      } catch (e) {
-        return sendJson(res, 200, { voices: [], error: String((e && e.message) || e) });
-      }
-    }
-    if (route === 'POST /api/tts/speech') {
-      const t = ttsConfig();
-      if (!t) return sendJson(res, 503, { error: 'tts not configured' });
-      let body;
-      try { body = JSON.parse((await readBody(req)) || '{}'); } catch (e) { return sendJson(res, 400, { error: 'bad json' }); }
-      if (!body || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { error: 'bad body' });
-      // Body through, with the workspace defaults filled in where the caller said
-      // nothing. voice implies lang for the engine, so only send lang when there
-      // is no voice — sending both is a 400 when they disagree.
-      const payload = Object.assign({}, body);
-      if (!payload.voice && t.voice) payload.voice = t.voice;
-      if (!payload.voice && !payload.lang && t.lang) payload.lang = t.lang;
-      if (!payload.params && Object.keys(t.params).length) payload.params = t.params;
-      const ac = new AbortController();
-      let timer = null;
-      let over = false;
-      const arm = () => { clearTimeout(timer); timer = setTimeout(() => ac.abort(), TTS_SPEECH_MS); };
-      arm();
-      // The listener hung up (stop button, or a newer message superseding this
-      // one): stop the engine too. Synthesis nobody is waiting for is a GPU busy
-      // for half a minute, and voxcpm2 dies outright when an abandoned message
-      // overlaps the next one — which is exactly what cancel-then-speak does.
-      res.on('close', () => { if (!over) ac.abort(); });
-      let r;
-      try {
-        r = await fetch(t.url + '/v1/audio/speech', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payload),
-          signal: ac.signal,
-        });
-      } catch (e) {
-        clearTimeout(timer);
-        return sendJson(res, 502, { error: String((e && e.message) || e) });
-      }
-      const head = { 'Content-Type': r.headers.get('content-type') || 'application/octet-stream', 'Cache-Control': 'no-store' };
-      const rate = r.headers.get('x-sample-rate');
-      if (rate) head['x-sample-rate'] = rate;
-      res.writeHead(r.status, head);
-      if (!r.body) { over = true; clearTimeout(timer); return res.end(); }
-      // Every chunk resets the clock, so a stream may run as long as synthesis
-      // does and is still cut off when it goes quiet.
-      try { for await (const chunk of r.body) { arm(); res.write(chunk); } } catch (e) {}
-      over = true;
-      clearTimeout(timer);
-      return res.end();
-    }
     if (route === 'GET /api/status') {
       let pending = 0;
       for (const lt of queueIds()) pending += pendingItems(lt).length;
