@@ -1,5 +1,6 @@
-// Speaker over an external TTS engine, reached through the server's proxy
-// (/api/tts/voices, /api/tts/speech — the engines send no CORS headers).
+// Speaker over an external TTS engine, reached DIRECTLY: the engine answers CORS
+// now, so the browser is its client and the board is not in the path at all.
+// `cfg` is /api/config's tts block — {url, lang, voice, params}.
 //
 // Speech is always STREAMING: the body is raw signed 16-bit little-endian mono
 // PCM (no header, no framing) at the rate in `x-sample-rate`, and it plays as it
@@ -16,25 +17,39 @@
 const LEAD = 0.05;                              // schedule this far ahead of "now"
 
 export function remoteSpeaker(cfg) {
+  const url = (cfg && cfg.url) || '';
   const lang = (cfg && cfg.lang) || '';
+  const params = (cfg && cfg.params) || null;
   let ctx = null;                               // the AudioContext playing right now
   let reader = null;                            // the body being read right now
   let endStream = null;                         // resolves the stream awaiting its last buffer
   let gen = 0;                                  // bumped by cancel(); stale work stops quietly
+  let ac = null;                                // aborts the ENGINE, not just the playback
 
   function stop() {
+    // Abandoned synthesis keeps the GPU busy for another half-minute, and voxcpm2
+    // dies outright when it overlaps the next request — which is exactly the shape
+    // of the stop button and of a superseding message. The abort has to reach the
+    // engine, so it is the request that is cut, not only the reader.
+    if (ac) { const a = ac; ac = null; try { a.abort(); } catch (e) {} }
     if (reader) { const rd = reader; reader = null; try { rd.cancel(); } catch (e) {} }
     if (ctx) { const c = ctx; ctx = null; try { c.close(); } catch (e) {} }
     const done = endStream; endStream = null;
     if (done) done();                           // a cancelled message is finished, not failed
   }
+  // The workspace defaults fill in here now. voice implies lang for the engine, so
+  // only send lang when there is no voice — sending both is a 400 when they disagree.
   function post(input, voice) {
     const body = { input, stream: true };
     if (voice) body.voice = voice;
-    return fetch('/api/tts/speech', {
+    else if (lang) body.lang = lang;
+    if (params && Object.keys(params).length) body.params = params;
+    ac = new AbortController();
+    return fetch(url + '/v1/audio/speech', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
+      signal: ac.signal,
     });
   }
 
@@ -96,7 +111,7 @@ export function remoteSpeaker(cfg) {
     // Portuguese fine, it just brings an accent. Picking a voice is the captain's
     // ear, not ours — the language is on the label so he can see what he is picking.
     voices() {
-      return fetch('/api/tts/voices')
+      return fetch(url + '/v1/voices')
         .then((r) => r.json())
         .then((j) => ((j && j.voices) || [])
           .map((v) => ({ id: v.id, name: v.name, lang: (v.langs || []).join(',') || lang })))
@@ -105,15 +120,22 @@ export function remoteSpeaker(cfg) {
     async speak(text, opts) {
       const my = ++gen;
       stop();                                   // a new message supersedes the old one, sound and all
-      const voice = (opts && opts.voice) || '';
-      // A voice the engine lists but cannot use is a 400 (the catalogue is shared
-      // across engines): retry once on the engine's own default before giving up.
-      let r = await post(text, voice);
-      if (r.status === 400 && voice) r = await post(text, '');
-      if (!r.ok) throw new Error('tts http ' + r.status);
-      const rate = Number(r.headers.get('x-sample-rate'));
-      if (!rate) throw new Error('tts did not stream');
-      return playStream(r, rate, my);
+      const voice = (opts && opts.voice) || (cfg && cfg.voice) || '';
+      try {
+        // A voice the engine lists but cannot use is a 400 (the catalogue is shared
+        // across engines): retry once on the workspace language before giving up.
+        let r = await post(text, voice);
+        if (r.status === 400 && voice) r = await post(text, '');
+        if (!r.ok) throw new Error('tts http ' + r.status);
+        const rate = Number(r.headers.get('x-sample-rate'));
+        if (!rate) throw new Error('tts did not stream');
+        return await playStream(r, rate, my);
+      } catch (e) {
+        // Our own abort is not a failure — it must not reach withFallback, or the
+        // browser voice would speak the message the captain just stopped.
+        if (my !== gen) return;
+        throw e;
+      }
     },
     cancel() { gen++; stop(); },
   };
