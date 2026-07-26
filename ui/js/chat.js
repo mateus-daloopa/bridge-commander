@@ -283,7 +283,7 @@ function wireSpeak(blocks, target) {
     const key = target + '|' + m.ts + '|' + m.author; // stable per message, for toggle-off
     btn.onclick = (e) => {
       e.stopPropagation();
-      const spoke = speakMessage(m.text, key);
+      const spoke = speakMessage(m.text, key, m.author);
       btn.classList.toggle('speaking', spoke);
     };
   });

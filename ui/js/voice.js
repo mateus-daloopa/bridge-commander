@@ -97,21 +97,24 @@ let speaking = false;
 // a shorter wait by throwing the rest of the answer away. Streaming removed the
 // wait, so the cap only truncated: a 2664-character reply stopped mid-sentence,
 // at 45% of itself. Stopping early is the bubble's job, not a slice().
-function speakPlain(plain) {
+function speakPlain(plain, who) {
   const my = ++session;
   speaker.cancel();
   speaking = true;
   speakingBubble.show();
-  speaker.speak(plain, { voice: pickedVoice() })
+  // `who` is the author, and it is not decoration: the remote speaker puts it on
+  // the phone's lock screen, which is where the captain sees WHO is talking to
+  // him while the screen is off. Nothing here knows that — it just carries it.
+  speaker.speak(plain, { voice: pickedVoice(), who })
     .catch(() => {})
     .then(() => { if (my !== session) return; speaking = false; speakingBubble.hide(); });
 }
-export function speak(text) {
+export function speak(text, who) {
   if (!voiceOn) return;
   const plain = stripForSpeech(text);
   if (!plain) return;
   manualSpeakingKey = null;                  // an auto-speak supersedes any manual toggle state
-  speakPlain(plain);
+  speakPlain(plain, who);
 }
 export function stopSpeaking() {
   session++;
@@ -151,14 +154,14 @@ const speakingBubble = (() => {
 // primer needed. Returns true if it spoke, false if there was nothing to say.
 // Clicking again while this message is speaking stops it (cheap toggle).
 let manualSpeakingKey = null;
-export function speakMessage(text, key) {
+export function speakMessage(text, key, who) {
   if (key != null && manualSpeakingKey === key && speaking) {
     manualSpeakingKey = null; stopSpeaking(); return false; // toggle off
   }
   const plain = stripForSpeech(text);
   if (!plain) return false;
   manualSpeakingKey = key != null ? key : null;
-  speakPlain(plain);
+  speakPlain(plain, who);
   return true;
 }
 function setVoiceOn(on) {
@@ -190,7 +193,7 @@ export function trackMessages(doc) {
     const k = scope + '|' + m.ts + '|' + m.author + '|' + m.text;
     if (!seenMsgs.has(k)) {
       seenMsgs.add(k);
-      if (!firstLoad && m.author !== 'user') speak(m.text);
+      if (!firstLoad && m.author !== 'user') speak(m.text, m.author);
     }
   }
   firstLoad = false;

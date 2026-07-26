@@ -1,6 +1,10 @@
 // The speaker seam. One interface, two implementations, one composition:
 //
-//   { id, key, voices(), speak(text, {voice}), cancel() }
+//   { id, key, voices(), speak(text, {voice, who}), cancel() }
+//
+// `who` is the author of what is being spoken. The browser speaker ignores it;
+// the remote one shows it on the lock screen, because a phone with its screen
+// off is exactly where "who is talking" stops being obvious.
 //
 // voices() answers [{id, name, lang}] whatever is behind it — a browser voice's
 // name|lang pair and an engine voice's opaque id both come out as an `id`, so

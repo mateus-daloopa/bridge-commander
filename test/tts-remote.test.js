@@ -14,15 +14,21 @@ test.before(async () => {
     await import(pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'tts', 'remote.js')).href));
 });
 
-// A recording AudioContext: every scheduled buffer, with the time it starts.
-function fakeAudioContext() {
+// A recording AudioContext: every scheduled buffer, with the time it starts and
+// the node it was connected to. `withStream` is a browser that can route into a
+// media element; without it the context is an old one that cannot, which is the
+// fallback every other test in this file runs on.
+function fakeAudioContext(withStream) {
   const scheduled = [];
+  const nodes = {};
   let closed = false;
   class Ctx {
-    constructor(opts) { this.sampleRate = opts && opts.sampleRate; this.state = 'running'; this.destination = {}; }
+    constructor(opts) { this.sampleRate = opts && opts.sampleRate; this.state = 'running'; nodes.destination = this.destination = {}; }
     get currentTime() { return 0; }
     resume() { return Promise.resolve(); }
     close() { closed = true; return Promise.resolve(); }
+    createGain() { return (nodes.gain = { to: null, connect(n) { this.to = n; }, disconnect() { this.to = null; } }); }
+    createMediaStreamDestination() { return (nodes.msd = { stream: { id: 'live' } }); }
     createBuffer(ch, len, rate) {
       const data = new Float32Array(len);
       return { length: len, duration: len / rate, getChannelData: () => data };
@@ -30,15 +36,40 @@ function fakeAudioContext() {
     createBufferSource() {
       let ended = false, cb = null;
       return {
-        connect() {},
-        start(at) { scheduled.push({ at, buffer: this.buffer }); setTimeout(() => { ended = true; if (cb) cb(); }, 1); },
+        connect(n) { this.to = n; },
+        start(at) { scheduled.push({ at, buffer: this.buffer, to: this.to }); setTimeout(() => { ended = true; if (cb) cb(); }, 1); },
         set onended(f) { cb = f; if (ended) f(); },
         get onended() { return cb; },
       };
     }
   }
-  global.window = { AudioContext: Ctx };
-  return { scheduled, closed: () => closed };
+  if (!withStream) { delete Ctx.prototype.createGain; delete Ctx.prototype.createMediaStreamDestination; }
+  global.window = { AudioContext: Ctx, MediaMetadata: function (m) { Object.assign(this, m); } };
+  return { scheduled, nodes, closed: () => closed };
+}
+
+// The hidden <audio>. remote.js keeps ONE for the life of the page — iOS blesses
+// an element once and only inside a tap — so this is one element for the file.
+const sinkEl = {
+  plays: 0, paused: true, refuse: false, fed: [], _src: null,
+  get srcObject() { return this._src; },
+  set srcObject(v) { this._src = v; if (v) this.fed.push(v); },
+  play() { this.plays++; this.paused = false; return this.refuse ? Promise.reject(new Error('autoplay blocked')) : Promise.resolve(); },
+  pause() { this.paused = true; },
+};
+// A page with a DOM and a lock screen. Returns the mediaSession, recording every
+// title it was ever given — closeSink() clears it, so the last value is not it.
+function fakeDom() {
+  Object.assign(sinkEl, { plays: 0, paused: true, refuse: false, fed: [], _src: null });
+  global.document = { createElement: () => sinkEl, body: { appendChild() {} } };
+  const session = {
+    playbackState: 'none', handlers: {}, titles: [], _m: null,
+    get metadata() { return this._m; },
+    set metadata(m) { this._m = m; if (m) this.titles.push(m.title); },
+    setActionHandler(a, f) { this.handlers[a] = f; },
+  };
+  Object.defineProperty(global, 'navigator', { value: { mediaSession: session }, configurable: true });
+  return session;
 }
 
 // PCM body: signed 16-bit LE, handed over in `chunks` pieces (a chunk may end
@@ -193,6 +224,59 @@ test('a new message aborts the one it supersedes', async () => {
   await first;
   assert.ok(posts[0].signal.aborted, 'the superseded request was cut at the engine');
   assert.equal(posts[1].signal.aborted, false);
+});
+
+// ── the screen going off ──────────────────────────────────────────────────
+// Straight out of the AudioContext the sound dies the moment the phone locks:
+// the OS suspends the page and the context with it. Through a media element that
+// is playing it is real playback to the OS and keeps going.
+test('the sound leaves through a media element, and the lock screen says who is speaking', async () => {
+  const audio = fakeAudioContext(true);
+  const session = fakeDom();
+  fakeFetch(() => pcmResponse([0, 100, -100, 0, 50, -50], 4, 24000));
+  await remoteSpeaker({ url: 'http://e' }).speak('olá', { who: 'Ana' });
+  assert.ok(audio.scheduled.length, 'it spoke');
+  assert.deepEqual(sinkEl.fed, [audio.nodes.msd.stream], 'the element is fed the context’s own stream');
+  assert.ok(sinkEl.plays >= 1, 'and is actually playing — a paused element is not playback to the OS');
+  for (const s of audio.scheduled) assert.equal(s.to, audio.nodes.gain, 'no buffer goes straight to the speakers');
+  assert.equal(audio.nodes.gain.to, audio.nodes.msd, 'and the bus feeds the element');
+  assert.deepEqual(session.titles, ['Ana'], 'the lock screen names the lieutenant, not the message');
+  // Over means over: a dead player must not sit on the lock screen afterwards.
+  assert.equal(sinkEl.srcObject, null, 'the element was released');
+  assert.ok(sinkEl.paused);
+  assert.equal(session.playbackState, 'none');
+});
+
+// The lock-screen stop has to be the stop BUTTON — same path, same abort. One
+// that only mutes the page leaves the GPU synthesizing into the next message,
+// which is the overlap that kills voxcpm2's CUDA context.
+test('the lock screen stop aborts the ENGINE, not just this page’s speakers', async () => {
+  fakeAudioContext(true);
+  const session = fakeDom();
+  const posts = fakeFetch(() => new Response(new ReadableStream({
+    start(c) { c.enqueue(new Uint8Array([0, 1, 0, 1])); },      // never closes on its own
+  }), { status: 200, headers: { 'x-sample-rate': '24000' } }));
+  const done = remoteSpeaker({ url: 'http://e' }).speak('olá', { who: 'Ana' });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(posts[0].signal.aborted, false, 'still synthesizing');
+  session.handlers.stop();
+  await done;                                    // stopped is finished, not failed
+  assert.ok(posts[0].signal.aborted, 'the abort has to reach the GPU');
+  assert.ok(sinkEl.paused, 'and the lock screen player goes away with it');
+});
+
+// Everything is scheduled onto a bus rather than onto a node picked per chunk,
+// so a refusal moves what is ALREADY playing — not just what comes after it.
+test('an element that is not allowed to play falls back to the speakers, never to silence', async () => {
+  const audio = fakeAudioContext(true);
+  const session = fakeDom();
+  sinkEl.refuse = true;
+  fakeFetch(() => pcmResponse([0, 100, -100, 0, 50, -50], 4, 24000));
+  await remoteSpeaker({ url: 'http://e' }).speak('olá', { who: 'Ana' });
+  assert.ok(audio.scheduled.length, 'it still spoke');
+  assert.equal(audio.nodes.gain.to, audio.nodes.destination, 'the whole bus moved to the speakers');
+  for (const s of audio.scheduled) assert.equal(s.to, audio.nodes.gain, 'including buffers already scheduled');
+  assert.deepEqual(session.titles, [], 'nothing is playing on the lock screen, so nothing is announced');
 });
 
 // The catalogue is not filtered by the workspace language: voxcpm2 clones from

@@ -4,7 +4,8 @@
 //
 // Speech is always STREAMING: the body is raw signed 16-bit little-endian mono
 // PCM (no header, no framing) at the rate in `x-sample-rate`, and it plays as it
-// arrives instead of after the whole synthesis.
+// arrives instead of after the whole synthesis. It leaves through a hidden
+// <audio> element so it survives the phone's screen going off — see sink() below.
 //
 // An engine that cannot stream is not handled here. It answers 400, speak()
 // rejects, and the browser voice takes the message — a worse voice, never
@@ -15,6 +16,37 @@
 // Nothing here knows what happens next — that is withFallback's job.
 
 const LEAD = 0.05;                              // schedule this far ahead of "now"
+
+// Sound leaves through a hidden <audio> element instead of straight out of the
+// AudioContext. The OS suspends a page — and its context with it — the moment
+// the screen goes off; a media element that is playing is real playback to the
+// OS and stays scheduled, which is why a plain audio file survives a lock and a
+// live stream does not. Same buffers, same seams, one extra hop.
+// Refused (autoplay blocked, or a browser without createMediaStreamDestination)
+// the buffers go to the speakers: today's behaviour, never silence.
+let el = null;              // ONE element for the page: iOS blesses it once, in a gesture
+let primed = false;
+function sink() {
+  if (el || typeof document === 'undefined') return el;
+  el = document.createElement('audio');
+  el.playsInline = true;
+  document.body.appendChild(el);
+  return el;
+}
+// iOS only allows play() inside the tap. speak() runs in the click that asked
+// for it, so the element is opened there — before the fetch, before any await.
+// Once is enough: the blessing sticks for the life of the element.
+function primeSink() {
+  const a = sink();
+  if (a && !primed) { primed = true; a.play().catch(() => {}); }
+}
+// Let the element go, so the lock screen stops showing a player for speech that
+// is over. Dropping srcObject is what ends it — pause alone leaves the sheet up.
+function closeSink() {
+  if (el) { el.pause(); el.srcObject = null; }
+  const s = typeof navigator !== 'undefined' && navigator.mediaSession;
+  if (s) { s.playbackState = 'none'; s.metadata = null; }
+}
 
 export function remoteSpeaker(cfg) {
   const url = (cfg && cfg.url) || '';
@@ -34,8 +66,21 @@ export function remoteSpeaker(cfg) {
     if (ac) { const a = ac; ac = null; try { a.abort(); } catch (e) {} }
     if (reader) { const rd = reader; reader = null; try { rd.cancel(); } catch (e) {} }
     if (ctx) { const c = ctx; ctx = null; try { c.close(); } catch (e) {} }
+    closeSink();
     const done = endStream; endStream = null;
     if (done) done();                           // a cancelled message is finished, not failed
+  }
+  function cancel() { gen++; stop(); }
+  // The lock screen: WHO is speaking, and a stop that IS the stop button — the
+  // same path, so the abort reaches the ENGINE. A stop that only mutes the page
+  // leaves the GPU synthesizing an abandoned message into the next one, which is
+  // the exact overlap that kills voxcpm2.
+  function announce(who) {
+    const s = typeof navigator !== 'undefined' && navigator.mediaSession;
+    if (!s) return;
+    if (window.MediaMetadata) s.metadata = new window.MediaMetadata({ title: who || 'Bridge Commander', artist: 'Bridge Commander' });
+    s.playbackState = 'playing';
+    for (const a of ['stop', 'pause']) { try { s.setActionHandler(a, cancel); } catch (e) {} }
   }
   // The workspace defaults fill in here now. voice implies lang for the engine, so
   // only send lang when there is no voice — sending both is a 400 when they disagree.
@@ -55,7 +100,7 @@ export function remoteSpeaker(cfg) {
 
   // Play raw PCM as it arrives, buffer scheduled back to back so the seams are
   // silent. Resolves when the last one has finished, rejects if the stream dies.
-  async function playStream(res, rate, my) {
+  async function playStream(res, rate, my, who) {
     const c = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: rate });
     ctx = c;
     // Audio the page has not been allowed to make yet: resume() then waits for a
@@ -64,6 +109,19 @@ export function remoteSpeaker(cfg) {
     if (c.state !== 'running') {
       await Promise.race([c.resume().catch(() => {}), new Promise((r) => setTimeout(r, 250))]);
       if (c.state !== 'running') throw new Error('tts audio blocked');
+    }
+    // Everything is scheduled onto `bus`, not onto the destination, so a refused
+    // element reroutes what is ALREADY scheduled — no chunk is lost to the
+    // fallback. play() is not awaited: it must not stand between the first byte
+    // and the first sample.
+    let bus = c.destination;
+    const a = sink();
+    if (a && c.createMediaStreamDestination) {
+      const out = c.createMediaStreamDestination();
+      a.srcObject = out.stream;
+      bus = c.createGain();
+      bus.connect(out);
+      a.play().then(() => announce(who), () => { bus.disconnect(); bus.connect(c.destination); });
     }
     const rd = res.body.getReader();
     reader = rd;
@@ -85,7 +143,7 @@ export function remoteSpeaker(cfg) {
         for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
         const src = c.createBufferSource();
         src.buffer = buf;
-        src.connect(c.destination);
+        src.connect(bus);
         at = Math.max(at, c.currentTime + LEAD); // never schedule in the past (a slow engine underruns)
         src.start(at);
         at += buf.duration;
@@ -98,6 +156,9 @@ export function remoteSpeaker(cfg) {
       endStream = null;
       if (reader === rd) reader = null;
       if (ctx === c) { ctx = null; try { c.close(); } catch (e) {} }
+      // Spoken, or failed: let the element go. Superseded is NOT ours to close —
+      // stop() already did, and the message that replaced us owns it now.
+      if (my === gen) closeSink();
     }
   }
 
@@ -120,6 +181,7 @@ export function remoteSpeaker(cfg) {
     async speak(text, opts) {
       const my = ++gen;
       stop();                                   // a new message supersedes the old one, sound and all
+      primeSink();                              // still inside the click; the fetch below is the first await
       const voice = (opts && opts.voice) || (cfg && cfg.voice) || '';
       try {
         // A voice the engine lists but cannot use is a 400 (the catalogue is shared
@@ -129,7 +191,7 @@ export function remoteSpeaker(cfg) {
         if (!r.ok) throw new Error('tts http ' + r.status);
         const rate = Number(r.headers.get('x-sample-rate'));
         if (!rate) throw new Error('tts did not stream');
-        return await playStream(r, rate, my);
+        return await playStream(r, rate, my, opts && opts.who);
       } catch (e) {
         // Our own abort is not a failure — it must not reach withFallback, or the
         // browser voice would speak the message the captain just stopped.
@@ -137,6 +199,6 @@ export function remoteSpeaker(cfg) {
         throw e;
       }
     },
-    cancel() { gen++; stop(); },
+    cancel,
   };
 }
