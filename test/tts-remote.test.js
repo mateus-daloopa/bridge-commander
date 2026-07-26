@@ -21,12 +21,14 @@ test.before(async () => {
 function fakeAudioContext(withStream) {
   const scheduled = [];
   const nodes = {};
+  const ctxs = [];
   let closed = false;
   class Ctx {
-    constructor(opts) { this.sampleRate = opts && opts.sampleRate; this.state = 'running'; nodes.destination = this.destination = {}; }
+    constructor(opts) { this.sampleRate = opts && opts.sampleRate; this.state = 'running'; nodes.destination = this.destination = {}; ctxs.push(this); }
     get currentTime() { return 0; }
-    resume() { return Promise.resolve(); }
-    close() { closed = true; return Promise.resolve(); }
+    resume() { this.state = 'running'; return Promise.resolve(); }
+    suspend() { this.state = 'suspended'; this.suspends = (this.suspends || 0) + 1; return Promise.resolve(); }
+    close() { closed = true; this.state = 'closed'; return Promise.resolve(); }
     createGain() { return (nodes.gain = { to: null, connect(n) { this.to = n; }, disconnect() { this.to = null; } }); }
     createMediaStreamDestination() { return (nodes.msd = { stream: { id: 'live' } }); }
     createBuffer(ch, len, rate) {
@@ -45,7 +47,7 @@ function fakeAudioContext(withStream) {
   }
   if (!withStream) { delete Ctx.prototype.createGain; delete Ctx.prototype.createMediaStreamDestination; }
   global.window = { AudioContext: Ctx, MediaMetadata: function (m) { Object.assign(this, m); } };
-  return { scheduled, nodes, closed: () => closed };
+  return { scheduled, nodes, ctxs, closed: () => closed };
 }
 
 // The hidden <audio>. remote.js keeps ONE for the life of the page — iOS blesses
@@ -263,6 +265,87 @@ test('the lock screen stop aborts the ENGINE, not just this page’s speakers', 
   await done;                                    // stopped is finished, not failed
   assert.ok(posts[0].signal.aborted, 'the abort has to reach the GPU');
   assert.ok(sinkEl.paused, 'and the lock screen player goes away with it');
+});
+
+// Pause used to be wired to the same cancel() as stop: it aborted the request,
+// closed the context and dropped the buffers, so play never brought the message
+// back. Pause suspends instead — and it has to stop BOTH halves, element first:
+// a suspended context with the element still pulling on the stream chews the
+// last fragment over and over, which is a syllable repeating mid-word.
+test('the lock screen pause freezes the message, and play brings it back', async () => {
+  const audio = fakeAudioContext(true);
+  const session = fakeDom();
+  let feed;
+  const posts = fakeFetch(() => new Response(new ReadableStream({
+    start(c) { c.enqueue(new Uint8Array([0, 1, 0, 1])); feed = c; },   // more to come
+  }), { status: 200, headers: { 'x-sample-rate': '24000' } }));
+  const done = remoteSpeaker({ url: 'http://e' }).speak('olá', { who: 'Ana' });
+  await new Promise((r) => setTimeout(r, 10));
+  const ctx = audio.ctxs[0];
+  assert.equal(session.playbackState, 'playing');
+
+  session.handlers.pause();
+  assert.ok(sinkEl.paused, 'the element stops pulling — otherwise it repeats the last fragment');
+  assert.equal(ctx.state, 'suspended', 'and the clock freezes');
+  assert.equal(session.playbackState, 'paused', 'or the lock screen offers the wrong button');
+  assert.equal(posts[0].signal.aborted, false, 'pause is NOT destructive: the engine keeps synthesizing');
+
+  // Chunks arriving during the pause queue against a stopped clock: nothing lost.
+  const queued = audio.scheduled.length;
+  feed.enqueue(new Uint8Array([0, 2, 0, 2]));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(audio.scheduled.length > queued, 'what arrived while paused was queued, not dropped');
+
+  const plays = sinkEl.plays;
+  session.handlers.play();
+  assert.equal(ctx.state, 'running', 'the clock first');
+  assert.ok(sinkEl.plays > plays, 'then the element');
+  assert.equal(session.playbackState, 'playing');
+
+  session.handlers.stop();
+  await done;
+  assert.ok(posts[0].signal.aborted, 'stop stays the only destructive verb, and reaches the GPU');
+});
+
+// Stop while paused has to abort too — a frozen message left synthesizing on the
+// GPU is exactly the abandoned synthesis that kills voxcpm2 on the next request.
+test('stop while paused aborts the engine as well', async () => {
+  fakeAudioContext(true);
+  const session = fakeDom();
+  const posts = fakeFetch(() => new Response(new ReadableStream({
+    start(c) { c.enqueue(new Uint8Array([0, 1, 0, 1])); },
+  }), { status: 200, headers: { 'x-sample-rate': '24000' } }));
+  const done = remoteSpeaker({ url: 'http://e' }).speak('olá', { who: 'Ana' });
+  await new Promise((r) => setTimeout(r, 10));
+  session.handlers.pause();
+  session.handlers.stop();
+  await done;
+  assert.ok(posts[0].signal.aborted);
+  assert.equal(session.playbackState, 'none', 'and the lock screen player goes away');
+});
+
+// A paused message must not survive the one that replaces it: the captain hears
+// the new message, never a resumed middle of the old one.
+test('a new message while paused supersedes it and speaks', async () => {
+  const audio = fakeAudioContext(true);
+  const session = fakeDom();
+  const posts = fakeFetch((body) => (body.input === 'first'
+    ? new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([0, 1, 0, 1])); } }),
+      { status: 200, headers: { 'x-sample-rate': '24000' } })
+    : pcmResponse([0, 100, -100, 0], 4, 24000)));
+  const s = remoteSpeaker({ url: 'http://e' });
+  const first = s.speak('first', { who: 'Ana' });
+  await new Promise((r) => setTimeout(r, 10));
+  session.handlers.pause();
+  const before = audio.scheduled.length;
+
+  await s.speak('second', { who: 'Bea' });
+  await first;
+  assert.ok(posts[0].signal.aborted, 'the paused one was cut at the engine');
+  assert.ok(audio.scheduled.length > before, 'and the new one actually played');
+  assert.notEqual(audio.ctxs[1], audio.ctxs[0], 'on its own context — never resumed into the frozen one');
+  assert.ok(!audio.ctxs[1].suspends, 'and that one was never frozen');
+  assert.deepEqual(session.titles, ['Ana', 'Bea']);
 });
 
 // Everything is scheduled onto a bus rather than onto a node picked per chunk,
