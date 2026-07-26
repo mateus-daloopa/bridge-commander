@@ -44,8 +44,11 @@ function primeSink() {
 // is over. Dropping srcObject is what ends it — pause alone leaves the sheet up.
 function closeSink() {
   if (el) { el.pause(); el.srcObject = null; }
-  const s = typeof navigator !== 'undefined' && navigator.mediaSession;
+  const s = session();
   if (s) { s.playbackState = 'none'; s.metadata = null; }
+}
+function session() {
+  return (typeof navigator !== 'undefined' && navigator.mediaSession) || null;
 }
 
 export function remoteSpeaker(cfg) {
@@ -71,16 +74,40 @@ export function remoteSpeaker(cfg) {
     if (done) done();                           // a cancelled message is finished, not failed
   }
   function cancel() { gen++; stop(); }
-  // The lock screen: WHO is speaking, and a stop that IS the stop button — the
-  // same path, so the abort reaches the ENGINE. A stop that only mutes the page
-  // leaves the GPU synthesizing an abandoned message into the next one, which is
-  // the exact overlap that kills voxcpm2.
+  // BOTH halves stop, element first. Suspending the context alone freezes the
+  // buffers but leaves the element pulling on a MediaStream with nothing new in
+  // it, and it chews the last fragment over and over — a syllable repeating
+  // mid-word on the lock screen. Chunks still arriving queue against a stopped
+  // clock, so nothing is lost and nothing plays.
+  function pauseLive() {
+    if (el) el.pause();
+    if (ctx) { try { ctx.suspend(); } catch (e) {} }
+    playbackState('paused');
+  }
+  // Back in the opposite order, inside out: the clock first, then the element.
+  function resumeLive() {
+    if (ctx) { try { ctx.resume(); } catch (e) {} }
+    if (el) { const p = el.play(); if (p && p.catch) p.catch(() => {}); }
+    playbackState('playing');
+  }
+  function playbackState(v) {
+    const s = session();
+    if (s) s.playbackState = v;
+  }
+  // The lock screen: WHO is speaking, and three different verbs for it. pause
+  // and play are reversible; stop is the only destructive one and IS the stop
+  // button — the same path, so the abort reaches the ENGINE. A stop that only
+  // mutes the page leaves the GPU synthesizing an abandoned message into the
+  // next one, which is the exact overlap that kills voxcpm2.
   function announce(who) {
-    const s = typeof navigator !== 'undefined' && navigator.mediaSession;
+    const s = session();
     if (!s) return;
     if (window.MediaMetadata) s.metadata = new window.MediaMetadata({ title: who || 'Bridge Commander', artist: 'Bridge Commander' });
     s.playbackState = 'playing';
-    for (const a of ['stop', 'pause']) { try { s.setActionHandler(a, cancel); } catch (e) {} }
+    const on = (a, fn) => { try { s.setActionHandler(a, fn); } catch (e) {} };
+    on('pause', pauseLive);
+    on('play', resumeLive);
+    on('stop', cancel);
   }
   // The workspace defaults fill in here now. voice implies lang for the engine, so
   // only send lang when there is no voice — sending both is a 400 when they disagree.
