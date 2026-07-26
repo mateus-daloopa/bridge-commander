@@ -81,3 +81,38 @@ test('speakerFor: a configured engine is the remote speaker, with the browser un
   assert.equal(s.id, 'remote');
   assert.equal(s.key, 'bc-tts-voice');
 });
+
+// ---------- pickVoice: whose voice speaks ----------
+// A lieutenant may own a voice; one that owns none inherits the board's. That
+// inheritance IS the default, so it gets pinned down here.
+const CATALOGUE = [
+  { id: 'pt_BR-faber-medium', name: 'faber', lang: 'pt_BR' },
+  { id: 'pt_BR-edresson-low', name: 'edresson', lang: 'pt_BR' },
+];
+let pickVoice;
+test.before(async () => {
+  ({ pickVoice } = await import(pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'tts', 'index.js')).href));
+});
+
+test('pickVoice: the author\'s own voice wins over the board\'s', () => {
+  assert.equal(pickVoice('pt_BR-faber-medium', 'pt_BR-edresson-low', CATALOGUE), 'pt_BR-faber-medium');
+});
+
+test('pickVoice: no voice of its own falls back to the board\'s', () => {
+  for (const own of [undefined, null, '']) {
+    assert.equal(pickVoice(own, 'pt_BR-edresson-low', CATALOGUE), 'pt_BR-edresson-low', 'own=' + JSON.stringify(own));
+  }
+});
+
+test('pickVoice: nothing chosen anywhere is the speaker\'s own default', () => {
+  assert.equal(pickVoice('', '', CATALOGUE), '');
+});
+
+test('pickVoice: an id the engine does not offer is no voice at all', () => {
+  // a pick made against another engine, or a voice since removed — speaking with
+  // an unknown id fails, speaking with none does not
+  assert.equal(pickVoice('gone-voice', 'pt_BR-faber-medium', CATALOGUE), 'pt_BR-faber-medium',
+    'a stale pick still falls through to the board voice');
+  assert.equal(pickVoice('', 'gone-voice', CATALOGUE), '');
+  assert.equal(pickVoice('pt_BR-faber-medium', '', []), '', 'catalogue not loaded yet');
+});

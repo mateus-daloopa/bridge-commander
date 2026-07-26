@@ -10,7 +10,7 @@ import { renderTable } from './table.js';
 import { renderArchive } from './archtable.js';
 import { renderFilterUI, filterPanelOpen, closeFilterPanel } from './filterpop.js';
 import { renderChat, onOpenCard as chatOnOpenCard, openCardConversation, openLieutenantChat } from './chat.js';
-import { renderLtSwitcher, ltSwitcherOpen, closeLtSwitcher, appearancePopoverOpen, closeAppearancePopover } from './ltswitcher.js';
+import { renderLtSwitcher, ltSwitcherOpen, closeLtSwitcher, ltSettingsOpen, closeLtSettings } from './ltswitcher.js';
 import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, onArtifactClose, closeOwnerMenu, ownerMenuOpen } from './detail.js';
 import { closePane, paneOpen } from './pane.js';
 import { openMonitor, closeMonitor, monitorOpen } from './monitor.js';
@@ -169,8 +169,8 @@ document.addEventListener('keydown', (e) => {
     else if (monitorOpen()) closeMonitor();
     else if (newCardOpen()) closeNewCard();
     else if (newLieutenantOpen()) closeNewLieutenant();
+    else if (ltSettingsOpen()) closeLtSettings();
     else if (pickerIsOpen()) closeLabelPicker();
-    else if (appearancePopoverOpen()) closeAppearancePopover();
     else if (modeMenuIsOpen()) closeModeMenu();
     else if (filterPanelOpen()) closeFilterPanel();
     else if (ltSwitcherOpen()) closeLtSwitcher();

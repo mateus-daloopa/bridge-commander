@@ -274,3 +274,74 @@ test('cli: lieutenant create (charter via stdin file) and list', async () => {
     await s.stop();
   }
 });
+
+// Everything about a lieutenant is configurable after birth — the settings modal
+// edits the charter through this same route, and the charter has to still be
+// there after a reload (board is truth, so: after a server restart).
+test('lieutenant patch: charter is editable after creation and survives a restart', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-charter-'));
+  let s = await startServer({ dir });
+  try {
+    await s.api('POST', '/api/lieutenants', { name: 'Ada', id: 'ada', charter: 'first mission' });
+    let r = await s.api('PATCH', '/api/lieutenants/ada', { charter: 'own the API surface\nescalate breaking changes' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.lieutenant.charter, 'own the API surface\nescalate breaking changes');
+
+    await s.stop();
+    s = await startServer({ dir });
+    const lt = (await s.api('GET', '/api/lieutenants')).body.lieutenants.find((l) => l.id === 'ada');
+    assert.strictEqual(lt.charter, 'own the API surface\nescalate breaking changes', 'the charter is board state, not a form value');
+  } finally {
+    await s.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// lieutenant.voice: the engine's opaque voice id. ABSENT is the default and it
+// means "the board's voice speaks for me" — so clearing must really remove it,
+// not store an empty string that some later reader mistakes for a choice.
+test('lieutenant voice: set on create, patched, cleared back to the board voice, and on the board payload', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-voice-'));
+  let s = await startServer({ dir });
+  try {
+    // no voice chosen: the field is simply not there
+    await s.api('POST', '/api/lieutenants', { name: 'Ada', id: 'ada' });
+    let lt = (await s.api('GET', '/api/lieutenants')).body.lieutenants.find((l) => l.id === 'ada');
+    assert.strictEqual(lt.voice, undefined, 'no pick = inherit the board voice');
+
+    // create with one, and patch the other's
+    let r = await s.api('POST', '/api/lieutenants', { name: 'Grace', id: 'grace', voice: 'pt_BR-faber-medium' });
+    assert.strictEqual(r.body.lieutenant.voice, 'pt_BR-faber-medium');
+    r = await s.api('PATCH', '/api/lieutenants/ada', { voice: '  pt_BR-edresson-low  ' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.lieutenant.voice, 'pt_BR-edresson-low', 'trimmed, stored as given');
+
+    // the board payload carries it — that is what the speaking UI reads
+    const lts = (await s.api('GET', '/api/board')).body.lieutenants;
+    assert.strictEqual(lts.find((l) => l.id === 'ada').voice, 'pt_BR-edresson-low');
+    assert.strictEqual(lts.find((l) => l.id === 'grace').voice, 'pt_BR-faber-medium');
+
+    // survives a restart
+    await s.stop();
+    s = await startServer({ dir });
+    lt = (await s.api('GET', '/api/lieutenants')).body.lieutenants.find((l) => l.id === 'grace');
+    assert.strictEqual(lt.voice, 'pt_BR-faber-medium');
+
+    // "" and null clear the pick back to the board's voice
+    for (const clear of ['', null]) {
+      await s.api('PATCH', '/api/lieutenants/grace', { voice: 'pt_BR-faber-medium' });
+      r = await s.api('PATCH', '/api/lieutenants/grace', { voice: clear });
+      assert.strictEqual(r.status, 200);
+      assert.strictEqual(r.body.lieutenant.voice, undefined, 'cleared with ' + JSON.stringify(clear));
+      assert.ok(!('voice' in r.body.lieutenant), 'the key is gone, not empty');
+    }
+
+    // an untouched voice is left alone by an unrelated patch
+    await s.api('PATCH', '/api/lieutenants/ada', { color: '#ff00ff' });
+    lt = (await s.api('GET', '/api/lieutenants')).body.lieutenants.find((l) => l.id === 'ada');
+    assert.strictEqual(lt.voice, 'pt_BR-edresson-low');
+  } finally {
+    await s.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

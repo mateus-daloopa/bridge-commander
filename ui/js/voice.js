@@ -3,7 +3,8 @@
 // engine, with the browser as the fallback under it — is decided once in
 // ./tts/index.js. Everything below holds a single `speaker` and never asks.
 import { api } from './api.js';
-import { speakerFor } from './tts/index.js';
+import { speakerFor, pickVoice } from './tts/index.js';
+import { lieutenantByActor } from './state.js';
 
 const VOICE_ON_KEY = 'bc-voice-on';
 const voiceSelect = document.getElementById('voice-select');
@@ -14,17 +15,16 @@ let speaker = speakerFor(null);   // browser-only until /api/config answers
 let voiceList = [];               // [{id, name, lang}] from speaker.voices()
 let voiceFilter = null;           // lowercase substrings from /api/config, or null
 
-api.config().then((cfg) => {
+// One load, settled once: the lieutenant-settings picker awaits the SAME work
+// instead of racing it, so opening settings early still gets the full catalogue.
+const voicesReady = api.config().then((cfg) => {
   if (cfg && Array.isArray(cfg.voices) && cfg.voices.length) {
     voiceFilter = cfg.voices.map((s) => String(s).toLowerCase());
   }
   speaker = speakerFor(cfg);
-  loadVoices();
-}).catch(() => loadVoices());
-
-function loadVoices() {
-  speaker.voices().then((list) => { voiceList = list; populatePicker(); }).catch(() => {});
-}
+}, () => {})
+  .then(() => speaker.voices())
+  .then((list) => { voiceList = list; populatePicker(); }, () => {});
 // The picker's saved choice is keyed per speaker (speaker.key), so a browser
 // voice name can never come back as an engine voice id. The legacy {name,lang}
 // shape is still read, so an existing selection survives the upgrade.
@@ -41,14 +41,23 @@ function voiceRank(v) {
   if (/^en/i.test(v.lang)) return 2;
   return 3;
 }
-function populatePicker() {
+// The offered voices, best-language first. `keep` is an id to never filter out —
+// whatever is currently chosen stays visible even when the workspace narrows the
+// list to a few names.
+function sortedVoices(keep) {
   let sorted = voiceList.slice().sort((a, b) =>
     voiceRank(a) - voiceRank(b) || a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name));
-  const saved = savedVoiceId();
   if (voiceFilter) {
     const matches = (v) => voiceFilter.some((f) => v.name.toLowerCase().includes(f));
-    if (sorted.some(matches)) sorted = sorted.filter((v) => matches(v) || v.id === saved);
+    if (sorted.some(matches)) sorted = sorted.filter((v) => matches(v) || v.id === keep);
   }
+  return sorted;
+}
+// The same catalogue the settings panel shows, for the per-lieutenant picker.
+export function voiceOptions(keep) { return voicesReady.then(() => sortedVoices(keep)); }
+function populatePicker() {
+  const saved = savedVoiceId();
+  const sorted = sortedVoices(saved);
   voiceSelect.textContent = '';
   const def = document.createElement('option');
   def.value = '';
@@ -66,11 +75,12 @@ voiceSelect.onchange = () => {
   const id = voiceSelect.value;
   try { if (id) localStorage.setItem(speaker.key, id); else localStorage.removeItem(speaker.key); } catch (e) {}
 };
-// Only ever hand over a voice that is actually in the loaded list, so a stale or
-// not-yet-loaded selection falls back to the speaker's default instead of failing.
-function pickedVoice() {
-  const id = voiceSelect.value;
-  return id && voiceList.some((v) => v.id === id) ? id : '';
+// The voice for what `who` said: their own if they have one, else the board's.
+// pickVoice owns the rule (and the "must be in the catalogue" guard); this only
+// looks the author up. A `who` that is nobody — the voice test, a worker — is
+// simply the board's voice.
+function voiceForAuthor(who) {
+  return pickVoice((lieutenantByActor(who) || {}).voice, voiceSelect.value, voiceList);
 }
 function stripEmoji(s) { // spoken text only
   return s
@@ -102,10 +112,11 @@ function speakPlain(plain, who) {
   speaker.cancel();
   speaking = true;
   speakingBubble.show();
-  // `who` is the author, and it is not decoration: the remote speaker puts it on
-  // the phone's lock screen, which is where the captain sees WHO is talking to
-  // him while the screen is off. Nothing here knows that — it just carries it.
-  speaker.speak(plain, { voice: pickedVoice(), who })
+  // `who` is the author, and it is not decoration: it picks the voice that
+  // speaks (each lieutenant may own one), and the remote speaker puts it on the
+  // phone's lock screen, which is where the captain sees WHO is talking to him
+  // while the screen is off. Nothing here knows that — it just carries it.
+  speaker.speak(plain, { voice: voiceForAuthor(who), who })
     .catch(() => {})
     .then(() => { if (my !== session) return; speaking = false; speakingBubble.hide(); });
 }
