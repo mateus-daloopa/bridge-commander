@@ -133,8 +133,22 @@ const ARTIFACT_MIME = {
 
 const DEFAULT_PORT = 4780;
 // External TTS proxy timeouts — a hanging engine must never hang the board.
+// Speech has two deadlines, both on SILENCE rather than on the whole request:
+//  - the first byte, which an engine that does not stream only sends once the
+//    WHOLE message is synthesized (voxcpm2 measured 31 s for the 1200 characters
+//    the UI sends), so this one is budgeted per character with a floor and a cap;
+//  - every byte after it, which on a streaming engine arrives continuously — a
+//    flat cut there would truncate every long message mid-sentence.
 const TTS_VOICES_MS = 3000;
-const TTS_SPEECH_MS = 20000;
+const TTS_SPEECH_MS = parseInt(process.env.BC_TTS_SPEECH_MS, 10) > 0
+  ? parseInt(process.env.BC_TTS_SPEECH_MS, 10) : 20000;      // floor, and the gap between chunks
+const TTS_SPEECH_MS_PER_CHAR = 60;
+const TTS_SPEECH_MS_MAX = parseInt(process.env.BC_TTS_SPEECH_MAX_MS, 10) > 0
+  ? parseInt(process.env.BC_TTS_SPEECH_MAX_MS, 10) : 180000;
+function firstByteMs(input) {
+  const n = typeof input === 'string' ? input.length : 0;
+  return Math.min(TTS_SPEECH_MS_MAX, Math.max(TTS_SPEECH_MS, n * TTS_SPEECH_MS_PER_CHAR));
+}
 
 // ---------- workspace config (.bridge-commander/config.json) ----------
 function readConfig() {
@@ -2188,23 +2202,38 @@ const server = http.createServer(async (req, res) => {
       if (!payload.voice && t.voice) payload.voice = t.voice;
       if (!payload.voice && !payload.lang && t.lang) payload.lang = t.lang;
       if (!payload.params && Object.keys(t.params).length) payload.params = t.params;
+      const ac = new AbortController();
+      let timer = null;
+      let over = false;
+      const armFor = (ms) => { clearTimeout(timer); timer = setTimeout(() => ac.abort(), ms); };
+      armFor(firstByteMs(payload.input));       // nothing at all yet: the engine may be synthesizing
+      // The listener hung up (stop button, or a newer message superseding this
+      // one): stop the engine too. Synthesis nobody is waiting for is a GPU busy
+      // for half a minute, and voxcpm2 dies outright when an abandoned message
+      // overlaps the next one — which is exactly what cancel-then-speak does.
+      res.on('close', () => { if (!over) ac.abort(); });
       let r;
       try {
         r = await fetch(t.url + '/v1/audio/speech', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(TTS_SPEECH_MS),
+          signal: ac.signal,
         });
       } catch (e) {
+        clearTimeout(timer);
         return sendJson(res, 502, { error: String((e && e.message) || e) });
       }
       const head = { 'Content-Type': r.headers.get('content-type') || 'application/octet-stream', 'Cache-Control': 'no-store' };
       const rate = r.headers.get('x-sample-rate');
       if (rate) head['x-sample-rate'] = rate;
       res.writeHead(r.status, head);
-      if (!r.body) return res.end();
-      try { for await (const chunk of r.body) res.write(chunk); } catch (e) {}
+      if (!r.body) { over = true; clearTimeout(timer); return res.end(); }
+      // Audio is flowing: from here the deadline is the gap between chunks, so a
+      // stream may run as long as synthesis does and still be cut off if it dies.
+      try { for await (const chunk of r.body) { armFor(TTS_SPEECH_MS); res.write(chunk); } } catch (e) {}
+      over = true;
+      clearTimeout(timer);
       return res.end();
     }
     if (route === 'GET /api/status') {

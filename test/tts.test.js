@@ -147,3 +147,99 @@ test('an explicit voice wins and suppresses the default lang (they must agree)',
     assert.ok(!('lang' in seen), 'no lang alongside an explicit voice');
   } finally { await s.stop(); engine.close(); }
 });
+
+// ---------- the two speech deadlines ----------
+// Both are deadlines on SILENCE, not on the whole request. They are set low here
+// (BC_TTS_SPEECH_MS) so the tests take seconds instead of the real half-minute.
+
+// A non-streaming engine sends nothing until the entire message is synthesized,
+// and synthesis scales with the text: voxcpm2 measured ~31 s for the 1200
+// characters the UI sends. A flat first-byte deadline cut every long message off
+// mid-synthesis and dropped the board to the browser voice.
+test('the first-byte deadline scales with the text: long input survives, short input does not', async () => {
+  const port = await freePort();
+  // Answers after 1.6 s — longer than the 1 s floor, shorter than 40 chars' budget.
+  const engine = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => setTimeout(() => {
+      res.writeHead(200, { 'Content-Type': 'audio/wav' });
+      res.end(Buffer.from('RIFFfake'));
+    }, 1600));
+  });
+  await new Promise((r) => engine.listen(port, '127.0.0.1', r));
+  const s = await startServer({
+    seed: seedConfig({ tts: { url: 'http://127.0.0.1:' + port, lang: 'pt' } }),
+    env: { BC_TTS_SPEECH_MS: '1000' },          // floor 1 s, + 60 ms per character
+  });
+  try {
+    const long = await s.api('POST', '/api/tts/speech', { input: 'x'.repeat(40) });  // 2.4 s budget
+    assert.equal(long.status, 200, 'a long message must outlive its own synthesis');
+    const short = await s.api('POST', '/api/tts/speech', { input: 'oi' });           // 1 s budget
+    assert.equal(short.status, 502, 'two characters taking 1.6 s is a sick engine');
+  } finally { await s.stop(); engine.close(); }
+});
+
+// A streaming engine emits for as long as it synthesizes — 34 s of chunks for
+// those same 1200 characters. The deadline there is the gap between chunks.
+test('a stream may run past the deadline while chunks keep arriving, and is cut when they stop', async () => {
+  const port = await freePort();
+  const engine = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      const n = JSON.parse(body).input === 'stall' ? 1 : 8;   // 8 chunks, 400 ms apart = 3.2 s
+      res.writeHead(200, { 'Content-Type': 'audio/pcm', 'x-sample-rate': '24000' });
+      let i = 0;
+      const t = setInterval(() => {
+        res.write(Buffer.alloc(100, 7));
+        if (++i >= n) { clearInterval(t); if (n > 1) res.end(); }   // 'stall': never ends
+      }, 400);
+    });
+  });
+  await new Promise((r) => engine.listen(port, '127.0.0.1', r));
+  const s = await startServer({
+    seed: seedConfig({ tts: { url: 'http://127.0.0.1:' + port, lang: 'pt' } }),
+    env: { BC_TTS_SPEECH_MS: '1000' },          // 1 s of silence is the limit, per chunk
+  });
+  try {
+    const ok = await s.api('POST', '/api/tts/speech', { input: 'oi', stream: true });
+    assert.equal(ok.body.length, 800, '3.2 s of chunks under a 1 s per-chunk deadline: all of it');
+    const cut = await s.api('POST', '/api/tts/speech', { input: 'stall', stream: true });
+    assert.equal(cut.body.length, 100, 'a stream that goes silent is still cut off');
+  } finally { await s.stop(); engine.close(); }
+});
+
+// Cancel has to reach the GPU. A listener who hits stop (or a newer message that
+// supersedes this one) leaves the engine synthesizing for another half-minute
+// otherwise — and voxcpm2 dies outright when that abandoned message overlaps the
+// next request, which is exactly the shape of cancel-then-speak.
+test('the listener hangs up: the engine request is aborted, not left running', async () => {
+  const port = await freePort();
+  let closed = null;
+  const engine = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'audio/pcm', 'x-sample-rate': '24000' });
+      let sent = 0;
+      const t = setInterval(() => { res.write(Buffer.alloc(100, 7)); sent++; }, 100);
+      res.on('close', () => { clearInterval(t); if (closed === null) closed = sent; });
+    });
+  });
+  await new Promise((r) => engine.listen(port, '127.0.0.1', r));
+  const s = await startServer({ seed: seedConfig({ tts: { url: 'http://127.0.0.1:' + port, lang: 'pt' } }) });
+  try {
+    const ac = new AbortController();
+    const req = fetch(s.base + '/api/tts/speech', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: 'olá', stream: true }), signal: ac.signal,
+    }).then((r) => r.arrayBuffer());
+    await new Promise((r) => setTimeout(r, 500));
+    ac.abort();                                 // the browser stops listening
+    await req.catch(() => {});
+    await new Promise((r) => setTimeout(r, 500));
+    assert.ok(closed !== null, 'the engine kept synthesizing for nobody');
+    assert.ok(closed < 12, 'it was cut where the listener left, not at the end (' + closed + ' chunks)');
+  } finally { await s.stop(); engine.close(); }
+});
