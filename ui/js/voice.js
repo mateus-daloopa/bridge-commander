@@ -2,6 +2,8 @@
 import { api } from './api.js';
 
 const VOICE_KEY = 'bc-voice';
+const TTS_VOICE_KEY = 'bc-tts-voice'; // engine voice *id* — deliberately NOT VOICE_KEY,
+                                      // so a stale browser voice name is never sent as one
 const VOICE_ON_KEY = 'bc-voice-on';
 const voiceSelect = document.getElementById('voice-select');
 const voiceBtn = document.getElementById('voice-btn');
@@ -10,12 +12,53 @@ let voiceOn = false;
 let voices = [];
 let voiceFilter = null; // lowercase substrings from /api/config, or null
 
+// ---------- external TTS engine (optional) ----------
+// When the workspace configures one, the picker lists the engine's voices and
+// messages are synthesized through /api/tts/*. Any failure at all — engine down,
+// 400, timeout, empty body — falls back to speechSynthesis; the board never
+// loses its voice because a container is down.
+let ttsCfg = null;     // {enabled, lang, voice} from /api/config, or null
+let ttsVoices = [];    // the engine catalogue, empty until (and unless) it answers
+let audio = null;      // the <audio> currently playing engine speech
+
+function ttsOn() { return !!(ttsCfg && ttsCfg.enabled); }
+function ttsPicker() { return ttsOn() && ttsVoices.length > 0; }
+
 api.config().then((cfg) => {
   if (cfg && Array.isArray(cfg.voices) && cfg.voices.length) {
     voiceFilter = cfg.voices.map((s) => String(s).toLowerCase());
   }
+  if (cfg && cfg.tts && cfg.tts.enabled) { ttsCfg = cfg.tts; loadTtsVoices(); }
   if (voices.length) populatePicker();
 }).catch(() => {});
+
+function loadTtsVoices() {
+  fetch('/api/tts/voices').then((r) => r.json()).then((j) => {
+    const list = (j && j.voices) || [];
+    if (!list.length) return;              // engine down at load: keep the browser picker
+    ttsVoices = list;
+    populateTtsPicker();
+  }).catch(() => {});
+}
+function populateTtsPicker() {
+  const lang = ttsCfg && ttsCfg.lang;
+  const speaks = (v) => !lang || !Array.isArray(v.langs) || v.langs.includes(lang);
+  const list = ttsVoices.filter(speaks).length ? ttsVoices.filter(speaks) : ttsVoices;
+  voiceSelect.textContent = '';
+  const def = document.createElement('option');
+  def.value = '';
+  def.textContent = 'default voice';
+  voiceSelect.appendChild(def);
+  for (const v of list) {
+    const o = document.createElement('option');
+    o.value = v.id;
+    o.textContent = v.name + (Array.isArray(v.langs) && v.langs.length ? ' (' + v.langs.join(',') + ')' : '');
+    voiceSelect.appendChild(o);
+  }
+  let saved = null;
+  try { saved = localStorage.getItem(TTS_VOICE_KEY); } catch (e) {}
+  if (saved && list.some((v) => v.id === saved)) voiceSelect.value = saved;
+}
 
 function savedVoice() {
   try { return JSON.parse(localStorage.getItem(VOICE_KEY)); } catch (e) { return null; }
@@ -27,6 +70,7 @@ function voiceRank(v) {
   return 3;
 }
 function populatePicker() {
+  if (ttsPicker()) return;                 // engine voices own the picker
   let sorted = voices.slice().sort((a, b) =>
     voiceRank(a) - voiceRank(b) || a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name));
   if (voiceFilter) {
@@ -73,6 +117,11 @@ function selectedVoice() {
   return voices.find((v) => v.name === name && v.lang === lang) || null;
 }
 voiceSelect.onchange = () => {
+  if (ttsPicker()) {
+    const id = voiceSelect.value;
+    try { if (id) localStorage.setItem(TTS_VOICE_KEY, id); else localStorage.removeItem(TTS_VOICE_KEY); } catch (e) {}
+    return;
+  }
   const v = selectedVoice();
   if (v) localStorage.setItem(VOICE_KEY, JSON.stringify({ name: v.name, lang: v.lang }));
   else localStorage.removeItem(VOICE_KEY);
@@ -153,16 +202,27 @@ function playNext(gen) {
   catch (e) { speakQueue.shift(); playNext(gen); }
 }
 export function speak(text) {
-  if (!voiceOn || !window.speechSynthesis) return;
+  if (!voiceOn || !(window.speechSynthesis || ttsOn())) return;
   const plain = stripForSpeech(text);
   if (!plain) return;
   manualSpeakingKey = null;                  // an auto-speak supersedes any manual toggle state
   speakPlain(plain);
 }
 export function stopSpeaking() {
-  speakGen++; speakQueue = []; stopKeepalive();
+  speakGen++; speakQueue = []; stopKeepalive(); stopAudio();
   try { if (window.speechSynthesis) speechSynthesis.cancel(); } catch (e) {}
   speakingBubble.hide();
+}
+function stopAudio() {
+  if (!audio) return;
+  const a = audio; audio = null;
+  try { a.pause(); a.src = ''; } catch (e) {}
+}
+// True while ANY speech path is producing sound — the engine's <audio> or the
+// browser's own synthesizer.
+function isSpeaking() {
+  if (audio && !audio.paused && !audio.ended) return true;
+  return !!(window.speechSynthesis && (speechSynthesis.speaking || speechSynthesis.pending));
 }
 
 // ---------- floating "speaking" indicator ----------
@@ -192,13 +252,12 @@ const speakingBubble = (() => {
   function stopPoll() { if (poll) { clearInterval(poll); poll = null; } }
   function hide() { stopPoll(); sawSpeech = false; misses = 0; if (el) el.hidden = true; }
   function show() {
-    if (!window.speechSynthesis) return;
+    if (!window.speechSynthesis && !ttsOn()) return;
     ensureEl().hidden = false;
     sawSpeech = false; misses = 0; giveUp = Date.now() + 3500;
     if (poll) return; // already watching this speak session
     poll = setInterval(() => {
-      const active = !!(window.speechSynthesis && (speechSynthesis.speaking || speechSynthesis.pending));
-      if (active) { sawSpeech = true; misses = 0; return; }
+      if (isSpeaking()) { sawSpeech = true; misses = 0; return; }
       if (sawSpeech) { if (++misses >= 2) hide(); }   // spoke, now idle for two ticks -> done
       else if (Date.now() > giveUp) hide();           // never started within the grace window
     }, 250);
@@ -211,12 +270,53 @@ function stripForSpeech(text) {
 // speak the queued chunks of `plain` as the newest message (shared by speak() and manual)
 function speakPlain(plain) {
   const gen = ++speakGen;                    // newest message wins
+  stopAudio();
+  if (ttsOn()) { speakingBubble.show(); ttsSpeak(plain, gen); return; }
+  browserSpeak(plain, gen);
+}
+function browserSpeak(plain, gen) {
   speakQueue = chunkText(plain.slice(0, 1200));
   retriedChunk = false;
   try { speechSynthesis.cancel(); } catch (e) {} // clear anything in flight / a wedged queue
   startKeepalive();
   speakingBubble.show();                      // floating indicator up for this speak session
   setTimeout(() => playNext(gen), 60);       // let cancel() settle before speak() (Chrome quirk)
+}
+// Synthesize through the configured engine and play the returned audio. EVERY
+// failure — network, non-200, empty body, a blocked/failed play() — falls back
+// to the browser voice for the same message. Silence is not an outcome.
+async function ttsSpeak(plain, gen) {
+  const input = plain.slice(0, 1200);
+  try {
+    const voice = ttsPicker() ? voiceSelect.value : '';
+    const post = (v) => fetch('/api/tts/speech', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(v ? { input, voice: v } : { input }),
+    });
+    let r = await post(voice);
+    // A voice the engine lists but cannot actually use is a 400 (a catalogue is
+    // shared across engines). Retry once on the engine's own default rather than
+    // dropping all the way back to the browser voice.
+    if (r.status === 400 && voice) r = await post('');
+    if (!r.ok) throw new Error('http ' + r.status);
+    const blob = await r.blob();
+    if (!blob.size) throw new Error('empty audio');
+    if (gen !== speakGen) return;            // superseded while synthesizing
+    const url = URL.createObjectURL(blob);
+    const a = new Audio(url);
+    audio = a;
+    const done = () => { URL.revokeObjectURL(url); if (audio === a) audio = null; };
+    a.onended = done;
+    a.onerror = done;
+    await a.play();
+    speakingBubble.show();                   // re-arm the indicator's grace window
+  } catch (e) {
+    if (gen !== speakGen) return;            // superseded: the newer message owns the voice
+    stopAudio();
+    if (window.speechSynthesis) browserSpeak(plain, gen);
+    else speakingBubble.hide();
+  }
 }
 // Manual, on-demand speak for a single message. Independent of the auto-speak
 // toggle: this call happens inside a real user gesture (the speak-button click),
@@ -226,8 +326,8 @@ function speakPlain(plain) {
 // toggle).
 let manualSpeakingKey = null;
 export function speakMessage(text, key) {
-  if (!window.speechSynthesis) return false;
-  if (key != null && manualSpeakingKey === key && (speechSynthesis.speaking || speechSynthesis.pending)) {
+  if (!window.speechSynthesis && !ttsOn()) return false;
+  if (key != null && manualSpeakingKey === key && isSpeaking()) {
     manualSpeakingKey = null; stopSpeaking(); return false; // toggle off
   }
   const plain = stripForSpeech(text);
@@ -261,7 +361,11 @@ function realUnlock(text) {
 
 voiceBtn.onclick = () => setVoiceOn(!voiceOn);
 try { if (localStorage.getItem(VOICE_ON_KEY) === '1') setVoiceOn(true); } catch (e) {} // restore toggle
-document.getElementById('voice-test').onclick = () => realUnlock('Hello, this is my voice.');
+document.getElementById('voice-test').onclick = () => {
+  // Both paths ride this real click, which is the gesture that unlocks audio.
+  if (ttsOn()) speakPlain('Hello, this is my voice.');
+  else realUnlock('Hello, this is my voice.');
+};
 
 // ---------- speak only NEW lieutenant messages ----------
 let firstLoad = true;

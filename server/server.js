@@ -4,7 +4,7 @@
 // One workspace = one board. All state lives in <workspace>/.bridge-commander/:
 //   board.json     the board (canonical state of the world)
 //   archive.jsonl  append-only frozen card snapshots (reason: merged|killed)
-//   config.json    { port, host?, voices? } — port default 4780, written on first boot
+//   config.json    { port, host?, voices?, tts? } — port default 4780, written on first boot
 //   queue/<lieutenant>.jsonl  durable per-lieutenant delivery queue (global seq)
 //   queue/<lieutenant>.ack    committed ack cursor (at-least-once; only ack removes)
 //   server.pid     single server instance per workspace
@@ -132,6 +132,9 @@ const ARTIFACT_MIME = {
 };
 
 const DEFAULT_PORT = 4780;
+// External TTS proxy timeouts — a hanging engine must never hang the board.
+const TTS_VOICES_MS = 3000;
+const TTS_SPEECH_MS = 20000;
 
 // ---------- workspace config (.bridge-commander/config.json) ----------
 function readConfig() {
@@ -143,11 +146,33 @@ function readConfig() {
 }
 function userConfig() {
   const c = readConfig();
+  const out = { voices: null };
   if (Array.isArray(c.voices)) {
     const voices = c.voices.filter((v) => typeof v === 'string' && v.trim()).map((v) => v.trim());
-    if (voices.length) return { voices };
+    if (voices.length) out.voices = voices;
   }
-  return { voices: null };
+  // The engine URL is server-side only — the browser talks to /api/tts/* and
+  // never needs to reach the engine itself. No tts config => no tts key => the
+  // UI is byte-for-byte what it was before this feature existed.
+  const t = ttsConfig();
+  if (t) out.tts = { enabled: true, lang: t.lang, voice: t.voice };
+  return out;
+}
+// External TTS engine (voxbench API), optional: config.json
+//   "tts": { "url": "http://127.0.0.1:8883", "voice": null, "lang": "pt", "params": {} }
+// Anything malformed (or a missing url) reads as "not configured".
+function ttsConfig() {
+  const t = readConfig().tts;
+  if (!t || typeof t !== 'object' || Array.isArray(t)) return null;
+  const url = typeof t.url === 'string' ? t.url.trim().replace(/\/+$/, '') : '';
+  if (!/^https?:\/\/\S+$/.test(url)) return null;
+  const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  return {
+    url,
+    lang: str(t.lang),
+    voice: str(t.voice),
+    params: t.params && typeof t.params === 'object' && !Array.isArray(t.params) ? t.params : {},
+  };
 }
 // Port: --port flag > config.json "port" > 4780. The resolved port is written
 // back into config.json when absent, so the CLI and UI can always find it.
@@ -2134,6 +2159,54 @@ const server = http.createServer(async (req, res) => {
     // ----- reads -----
     if (route === 'GET /api/board') return sendJson(res, 200, publicBoard(url.searchParams.get('user') || 'user'));
     if (route === 'GET /api/config') return sendJson(res, 200, userConfig());
+    // ----- external TTS proxy (the engines send no CORS headers) -----
+    // Both routes are short-timeout and never let a sick engine wedge the board:
+    // voices degrades to an empty list with a reason, speech answers an error the
+    // UI turns into a fallback to the browser's own voice.
+    if (route === 'GET /api/tts/voices') {
+      const t = ttsConfig();
+      if (!t) return sendJson(res, 200, { voices: [], error: 'tts not configured' });
+      try {
+        const r = await fetch(t.url + '/v1/voices', { signal: AbortSignal.timeout(TTS_VOICES_MS) });
+        if (!r.ok) return sendJson(res, 200, { voices: [], error: 'engine http ' + r.status });
+        const j = await r.json();
+        return sendJson(res, 200, { voices: Array.isArray(j && j.voices) ? j.voices : [] });
+      } catch (e) {
+        return sendJson(res, 200, { voices: [], error: String((e && e.message) || e) });
+      }
+    }
+    if (route === 'POST /api/tts/speech') {
+      const t = ttsConfig();
+      if (!t) return sendJson(res, 503, { error: 'tts not configured' });
+      let body;
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch (e) { return sendJson(res, 400, { error: 'bad json' }); }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { error: 'bad body' });
+      // Body through, with the workspace defaults filled in where the caller said
+      // nothing. voice implies lang for the engine, so only send lang when there
+      // is no voice — sending both is a 400 when they disagree.
+      const payload = Object.assign({}, body);
+      if (!payload.voice && t.voice) payload.voice = t.voice;
+      if (!payload.voice && !payload.lang && t.lang) payload.lang = t.lang;
+      if (!payload.params && Object.keys(t.params).length) payload.params = t.params;
+      let r;
+      try {
+        r = await fetch(t.url + '/v1/audio/speech', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(TTS_SPEECH_MS),
+        });
+      } catch (e) {
+        return sendJson(res, 502, { error: String((e && e.message) || e) });
+      }
+      const head = { 'Content-Type': r.headers.get('content-type') || 'application/octet-stream', 'Cache-Control': 'no-store' };
+      const rate = r.headers.get('x-sample-rate');
+      if (rate) head['x-sample-rate'] = rate;
+      res.writeHead(r.status, head);
+      if (!r.body) return res.end();
+      try { for await (const chunk of r.body) res.write(chunk); } catch (e) {}
+      return res.end();
+    }
     if (route === 'GET /api/status') {
       let pending = 0;
       for (const lt of queueIds()) pending += pendingItems(lt).length;
