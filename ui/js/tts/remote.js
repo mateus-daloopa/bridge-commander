@@ -1,36 +1,36 @@
 // Speaker over an external TTS engine, reached through the server's proxy
 // (/api/tts/voices, /api/tts/speech — the engines send no CORS headers).
 //
-// Speech is asked for STREAMING: the body is then raw signed 16-bit little-endian
-// mono PCM (no header, no framing) at the rate in `x-sample-rate`, and it plays as
-// it arrives instead of after the whole synthesis. An engine that cannot stream
-// says so with a 400 — that is an answer, so we ask the same engine again without
-// streaming before giving up on it.
+// Speech is always STREAMING: the body is raw signed 16-bit little-endian mono
+// PCM (no header, no framing) at the rate in `x-sample-rate`, and it plays as it
+// arrives instead of after the whole synthesis.
 //
-// Every failure rejects: network, non-200, empty body, a blocked or failed
-// play(). Nothing here knows what happens next — that is withFallback's job.
+// An engine that cannot stream is not handled here. It answers 400, speak()
+// rejects, and the browser voice takes the message — a worse voice, never
+// silence. Carrying a second playback path for an engine the board does not talk
+// to costs more than that trade.
+//
+// Every failure rejects: network, non-200, no stream, empty body, blocked audio.
+// Nothing here knows what happens next — that is withFallback's job.
 
 const LEAD = 0.05;                              // schedule this far ahead of "now"
 
 export function remoteSpeaker(cfg) {
   const lang = (cfg && cfg.lang) || '';
-  let audio = null;                             // <audio>, the non-streaming path
-  let ctx = null;                               // AudioContext, the streaming path
+  let ctx = null;                               // the AudioContext playing right now
   let reader = null;                            // the body being read right now
   let endStream = null;                         // resolves the stream awaiting its last buffer
   let gen = 0;                                  // bumped by cancel(); stale work stops quietly
 
   function stop() {
-    if (audio) { const a = audio; audio = null; try { a.pause(); a.src = ''; } catch (e) {} }
     if (reader) { const rd = reader; reader = null; try { rd.cancel(); } catch (e) {} }
     if (ctx) { const c = ctx; ctx = null; try { c.close(); } catch (e) {} }
     const done = endStream; endStream = null;
     if (done) done();                           // a cancelled message is finished, not failed
   }
-  function post(input, voice, stream) {
-    const body = { input };
+  function post(input, voice) {
+    const body = { input, stream: true };
     if (voice) body.voice = voice;
-    if (stream) body.stream = true;
     return fetch('/api/tts/speech', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -86,26 +86,6 @@ export function remoteSpeaker(cfg) {
     }
   }
 
-  async function playBlob(res, my) {
-    const blob = await res.blob();
-    if (!blob.size) throw new Error('tts empty audio');
-    if (my !== gen) return;                     // superseded while synthesizing
-    const url = URL.createObjectURL(blob);
-    const a = new Audio(url);
-    audio = a;
-    try {
-      await a.play();
-      await new Promise((resolve, reject) => {
-        a.onended = resolve;
-        a.onpause = resolve;                    // cancel(): finished, not failed
-        a.onerror = () => reject(new Error('tts playback failed'));
-      });
-    } finally {
-      URL.revokeObjectURL(url);
-      if (audio === a) audio = null;
-    }
-  }
-
   return {
     id: 'remote',
     key: 'bc-tts-voice',                        // deliberately NOT the browser key: a
@@ -122,18 +102,14 @@ export function remoteSpeaker(cfg) {
       const my = ++gen;
       stop();                                   // a new message supersedes the old one, sound and all
       const voice = (opts && opts.voice) || '';
-      // A 400 is the engine answering, not failing, and there are two answers worth
-      // retrying: a voice it lists but cannot use (the catalogue is shared across
-      // engines), and "I do not stream". Streaming first, this engine to the end.
-      let r;
-      for (const stream of [true, false]) {
-        r = await post(text, voice, stream);
-        if (r.status === 400 && voice) r = await post(text, '', stream);
-        if (r.status !== 400) break;
-      }
+      // A voice the engine lists but cannot use is a 400 (the catalogue is shared
+      // across engines): retry once on the engine's own default before giving up.
+      let r = await post(text, voice);
+      if (r.status === 400 && voice) r = await post(text, '');
       if (!r.ok) throw new Error('tts http ' + r.status);
       const rate = Number(r.headers.get('x-sample-rate'));
-      return rate ? playStream(r, rate, my) : playBlob(r, my);
+      if (!rate) throw new Error('tts did not stream');
+      return playStream(r, rate, my);
     },
     cancel() { gen++; stop(); },
   };

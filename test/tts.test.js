@@ -148,40 +148,12 @@ test('an explicit voice wins and suppresses the default lang (they must agree)',
   } finally { await s.stop(); engine.close(); }
 });
 
-// ---------- the two speech deadlines ----------
-// Both are deadlines on SILENCE, not on the whole request. They are set low here
+// ---------- the speech deadline ----------
+// It is a deadline on SILENCE, not on the whole request, and it is set low here
 // (BC_TTS_SPEECH_MS) so the tests take seconds instead of the real half-minute.
-
-// A non-streaming engine sends nothing until the entire message is synthesized,
-// and synthesis scales with the text: voxcpm2 measured ~31 s for the 1200
-// characters the UI sends. A flat first-byte deadline cut every long message off
-// mid-synthesis and dropped the board to the browser voice.
-test('the first-byte deadline scales with the text: long input survives, short input does not', async () => {
-  const port = await freePort();
-  // Answers after 1.6 s — longer than the 1 s floor, shorter than 40 chars' budget.
-  const engine = http.createServer((req, res) => {
-    let body = '';
-    req.on('data', (c) => (body += c));
-    req.on('end', () => setTimeout(() => {
-      res.writeHead(200, { 'Content-Type': 'audio/wav' });
-      res.end(Buffer.from('RIFFfake'));
-    }, 1600));
-  });
-  await new Promise((r) => engine.listen(port, '127.0.0.1', r));
-  const s = await startServer({
-    seed: seedConfig({ tts: { url: 'http://127.0.0.1:' + port, lang: 'pt' } }),
-    env: { BC_TTS_SPEECH_MS: '1000' },          // floor 1 s, + 60 ms per character
-  });
-  try {
-    const long = await s.api('POST', '/api/tts/speech', { input: 'x'.repeat(40) });  // 2.4 s budget
-    assert.equal(long.status, 200, 'a long message must outlive its own synthesis');
-    const short = await s.api('POST', '/api/tts/speech', { input: 'oi' });           // 1 s budget
-    assert.equal(short.status, 502, 'two characters taking 1.6 s is a sick engine');
-  } finally { await s.stop(); engine.close(); }
-});
-
-// A streaming engine emits for as long as it synthesizes — 34 s of chunks for
-// those same 1200 characters. The deadline there is the gap between chunks.
+//
+// A streaming engine emits for as long as it synthesizes — 34 s of chunks for the
+// 1200 characters the UI sends. Only a gap between chunks is a broken engine.
 test('a stream may run past the deadline while chunks keep arriving, and is cut when they stop', async () => {
   const port = await freePort();
   const engine = http.createServer((req, res) => {
