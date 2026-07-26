@@ -92,12 +92,17 @@ function stripForSpeech(text) {
 let session = 0;
 let speaking = false;
 
+// The message is spoken whole. It used to be cut at 1200 characters, from when a
+// long message meant half a minute of silence before any sound — the cap bought
+// a shorter wait by throwing the rest of the answer away. Streaming removed the
+// wait, so the cap only truncated: a 2664-character reply stopped mid-sentence,
+// at 45% of itself. Stopping early is the bubble's job, not a slice().
 function speakPlain(plain) {
   const my = ++session;
   speaker.cancel();
   speaking = true;
   speakingBubble.show();
-  speaker.speak(plain.slice(0, 1200), { voice: pickedVoice() })
+  speaker.speak(plain, { voice: pickedVoice() })
     .catch(() => {})
     .then(() => { if (my !== session) return; speaking = false; speakingBubble.hide(); });
 }
