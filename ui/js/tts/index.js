@@ -30,6 +30,16 @@ export function withFallback(primary, secondary) {
   };
 }
 
+// WHICH voice speaks: the author's own, else the board's. A lieutenant with no
+// voice of its own inherits the board's — that inheritance is the whole rule.
+// An id absent from the engine's catalogue (stale pick, or a pick made for a
+// different engine) is no voice at all, so the speaker falls back to its own
+// default instead of failing on an id it has never heard of.
+export function pickVoice(ownVoice, boardVoice, voices) {
+  const has = (id) => !!id && (voices || []).some((v) => v.id === id);
+  return has(ownVoice) ? ownVoice : has(boardVoice) ? boardVoice : '';
+}
+
 // Build the speaker for a workspace config (/api/config). No external engine
 // configured => the browser speaker alone, exactly as it always was.
 export function speakerFor(cfg) {

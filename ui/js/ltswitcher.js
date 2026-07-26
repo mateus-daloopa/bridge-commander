@@ -3,7 +3,7 @@
 // avatar, name, model, context bar, unread/owed — so the captain switches
 // conversations in place, without leaving the chat. The rows also carry the
 // per-lieutenant controls that used to live on the lane chips: 👁 watch
-// terminal, ⋯ actions (appearance / retire), and the ＋ lieutenant row.
+// terminal, ⋯ actions (settings / retire), and the ＋ lieutenant row.
 import { S, cards, lieutenants, lieutenant, lieutenantColor, lieutenantAvatar, lieutenantUnread, targetOwedState, targetOwedStale } from './state.js';
 import { api } from './api.js';
 import { esc, setHtmlIfChanged, ctxBarHtml, owedIndHtml } from './util.js';
@@ -11,6 +11,7 @@ import { avatarHtml, avatarGridHtml, wireAvatarGrid } from './avatars.js';
 import { openLieutenantChat } from './chat.js';
 import { openLieutenantPane } from './pane.js';
 import { openNewLieutenant, closeMoveMenu } from './board.js';
+import { voiceOptions } from './voice.js';
 
 const trigEl = document.getElementById('chat-lt');
 const panelEl = document.getElementById('lt-switcher');
@@ -121,10 +122,10 @@ function openLtMenu(ltId, x, y) {
   head.className = 'mm-head';
   head.textContent = l.name || ltId;
   menuEl.appendChild(head);
-  const appearance = document.createElement('button');
-  appearance.textContent = '🖼 appearance';
-  appearance.onclick = (e) => { e.stopPropagation(); closeMoveMenu(); openAppearancePopover(ltId, x, y); };
-  menuEl.appendChild(appearance);
+  const settings = document.createElement('button');
+  settings.textContent = '⚙ settings';
+  settings.onclick = (e) => { e.stopPropagation(); closeMoveMenu(); openLtSettings(ltId); };
+  menuEl.appendChild(settings);
   const owned = cards().filter((c) => c.owner === ltId).length;
   const retire = document.createElement('button');
   retire.className = 'danger';
@@ -141,32 +142,67 @@ function openLtMenu(ltId, x, y) {
   menuEl.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
 }
 
-// ---------- appearance popover (⋯ → appearance): avatar + color, each pick
-// PATCHes immediately (mirrors the label manager's recolor-on-change) ----------
-const apEl = document.getElementById('ap-popover');
-const apColor = document.getElementById('ap-color');
-const apGrid = document.getElementById('ap-grid');
-let apLtId = null;
-function openAppearancePopover(ltId, x, y) {
+// ---------- lieutenant settings modal (⋯ → settings) ----------
+// Everything about a lieutenant lives here. Color, avatar and voice are picks —
+// each PATCHes immediately, exactly as the old appearance popover did (mirrors
+// the label manager's recolor-on-change). The charter is prose, so it is saved
+// deliberately with the button; nothing about it goes over the wire per
+// keystroke. A modal, not a popover: a charter needs the room.
+const lsEl = document.getElementById('ls-overlay');
+const lsWho = document.getElementById('ls-who');
+const lsColor = document.getElementById('ls-color');
+const lsVoice = document.getElementById('ls-voice');
+const lsGrid = document.getElementById('ls-grid');
+const lsCharter = document.getElementById('ls-charter');
+const lsSave = document.getElementById('ls-save');
+let lsLtId = null;
+function openLtSettings(ltId) {
   const l = lieutenant(ltId);
   if (!l) return;
-  apLtId = ltId;
-  apColor.value = lieutenantColor(ltId);
-  apGrid.innerHTML = avatarGridHtml(lieutenantAvatar(ltId));
-  wireAvatarGrid(apGrid, async (idx) => {
-    try { await api.updateLieutenant(ltId, { avatar: idx }); } catch (e) { alert(e.message); }
-  });
-  apEl.hidden = false;
-  const r = apEl.getBoundingClientRect();
-  apEl.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
-  apEl.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+  lsLtId = ltId;
+  lsWho.textContent = l.name || ltId;
+  lsColor.value = lieutenantColor(ltId);
+  lsCharter.value = l.charter || '';
+  lsGrid.innerHTML = avatarGridHtml(lieutenantAvatar(ltId));
+  wireAvatarGrid(lsGrid, (idx) => patch({ avatar: idx }));
+  fillVoices(l.voice || '');
+  lsEl.hidden = false;
+  lsCharter.focus();
 }
-export function closeAppearancePopover() { apLtId = null; apEl.hidden = true; }
-export function appearancePopoverOpen() { return !apEl.hidden; }
-apColor.onchange = async () => {
-  if (!apLtId) return;
-  try { await api.updateLieutenant(apLtId, { color: apColor.value }); } catch (e) { alert(e.message); }
+export function closeLtSettings() { lsLtId = null; lsEl.hidden = true; }
+export function ltSettingsOpen() { return !lsEl.hidden; }
+async function patch(body) {
+  if (!lsLtId) return false;
+  try { await api.updateLieutenant(lsLtId, body); return true; } catch (e) { alert(e.message); return false; }
+}
+// "board's voice" is the default entry AND the empty value the server reads as
+// "clear the pick" — a lieutenant with nothing chosen inherits the board's.
+function fillVoices(chosen) {
+  lsVoice.textContent = '';
+  const def = document.createElement('option');
+  def.value = '';
+  def.textContent = "board's voice";
+  lsVoice.appendChild(def);
+  lsVoice.value = '';
+  voiceOptions(chosen).then((list) => {
+    for (const v of list) {
+      const o = document.createElement('option');
+      o.value = v.id;
+      o.textContent = v.name + (v.lang ? ' (' + v.lang + ')' : '');
+      lsVoice.appendChild(o);
+    }
+    if (chosen && list.some((v) => v.id === chosen)) lsVoice.value = chosen;
+  });
+}
+lsColor.onchange = () => patch({ color: lsColor.value });
+lsVoice.onchange = () => patch({ voice: lsVoice.value });
+document.getElementById('ls-cancel').onclick = closeLtSettings;
+lsEl.onclick = (e) => { if (e.target === lsEl) closeLtSettings(); };
+document.getElementById('ls-modal').onsubmit = async (e) => {
+  e.preventDefault();
+  const label = lsSave.textContent;
+  lsSave.disabled = true; lsSave.textContent = 'saving…';
+  const ok = await patch({ charter: lsCharter.value });
+  lsSave.disabled = false; lsSave.textContent = label;
+  if (ok) closeLtSettings();
 };
-document.addEventListener('click', (e) => {
-  if (!apEl.hidden && !apEl.contains(e.target) && !e.target.closest('.lts-menu')) closeAppearancePopover();
-});

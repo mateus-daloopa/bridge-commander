@@ -12,7 +12,7 @@
 // Data model (docs/api/overview.md is the DNA):
 //   board = { title, subtitle, updated, seq,
 //             columns: fixed frame (backlog | working | review | peer),
-//             lieutenants: [{id, name, color, avatar?: 0-63, charter, chat: [{author,text,ts}], created,
+//             lieutenants: [{id, name, color, avatar?: 0-63, voice?, charter, chat: [{author,text,ts}], created,
 //                            ref: null|HarnessRef {harness, session, cwd, resumeId?},
 //                            lastTurnEnd?, turns?}],
 //             projects: [{name, path, mode, source?, added}],   // registered repos (F6)
@@ -375,6 +375,9 @@ function validColor(c) { return typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.tes
 // 8x8, row-major). Absent = colored-dot fallback everywhere (every existing
 // lieutenant has no avatar).
 function validAvatar(a) { return Number.isInteger(a) && a >= 0 && a <= 63; }
+// lieutenant voice: an opaque TTS-engine voice id, whatever the engine calls its
+// own. Absent = the board's voice speaks for this lieutenant (the default).
+function validVoice(v) { return typeof v === 'string' && v.trim() ? v.trim().slice(0, 200) : null; }
 function labelIndex(name) { return board.labels.findIndex((l) => l && l.name === name); }
 function registerCardLabels() {
   for (const c of board.cards) {
@@ -405,6 +408,7 @@ function createLieutenant(body) {
     chat: [], created: now(),
   };
   if (validAvatar(body.avatar)) lt.avatar = body.avatar;
+  if (validVoice(body.voice)) lt.voice = validVoice(body.voice);
   if (isHarnessRef(body.ref)) lt.ref = body.ref; // the live-session address, persisted with the board
   board.lieutenants.push(lt);
   const ev = mkEvent({ text: 'lieutenant ' + lt.name + ' joined the bridge', actor: body.actor || 'user', level: 2 }, {});
@@ -2324,7 +2328,7 @@ const server = http.createServer(async (req, res) => {
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true, event: r.event });
     }
-    if (ltRoute && req.method === 'PATCH') { // update name/color/avatar/charter/ref (init idempotency)
+    if (ltRoute && req.method === 'PATCH') { // update name/color/avatar/voice/charter/ref (init idempotency)
       const lt = findLieutenant(decodeURIComponent(ltRoute[1]));
       if (!lt) return sendJson(res, 404, { error: 'unknown lieutenant: ' + decodeURIComponent(ltRoute[1]) });
       const body = JSON.parse(await readBody(req) || '{}');
@@ -2342,6 +2346,11 @@ const server = http.createServer(async (req, res) => {
         else return sendJson(res, 400, { error: 'avatar must be an integer 0-63 or null' });
       }
       if (body.charter !== undefined) lt.charter = String(body.charter).slice(0, 8000);
+      // "" / null clears the pick — the lieutenant is back to the board's voice.
+      if (body.voice !== undefined) {
+        const v = validVoice(body.voice);
+        if (v) lt.voice = v; else delete lt.voice;
+      }
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true, lieutenant: lt });
     }
