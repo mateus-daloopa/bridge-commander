@@ -110,11 +110,15 @@ export function remoteSpeaker(cfg) {
     id: 'remote',
     key: 'bc-tts-voice',                        // deliberately NOT the browser key: a
                                                 // browser voice name is never an engine id
+    // The whole catalogue, in the engine's own order. It used to be filtered to
+    // the workspace language, which hid 145 of 221 voices for one assumption that
+    // is not true of a cloning engine: a reference clip tagged `en` speaks
+    // Portuguese fine, it just brings an accent. Picking a voice is the captain's
+    // ear, not ours — the language is on the label so he can see what he is picking.
     voices() {
       return fetch('/api/tts/voices')
         .then((r) => r.json())
         .then((j) => ((j && j.voices) || [])
-          .filter((v) => !lang || !Array.isArray(v.langs) || v.langs.includes(lang))
           .map((v) => ({ id: v.id, name: v.name, lang: (v.langs || []).join(',') || lang })))
         .catch(() => []);
     },

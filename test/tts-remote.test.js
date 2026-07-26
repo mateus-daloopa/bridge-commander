@@ -126,3 +126,22 @@ test('cancel() mid-stream settles speak() instead of hanging on a dead context',
   await done;                                       // cancelled is finished, not failed
   assert.ok(stall, 'the body was still open when cancel() cut it');
 });
+
+// The catalogue is not filtered by the workspace language: voxcpm2 clones from
+// any reference clip, so an `en` voice speaking Portuguese is a choice with an
+// accent, not an error. Hiding two thirds of the catalogue was the bug.
+test('voices(): the whole catalogue comes back, whatever the workspace language', async () => {
+  global.fetch = () => Promise.resolve(new Response(JSON.stringify({ voices: [
+    { id: 'a', name: 'Ana', langs: ['pt'] },
+    { id: 'b', name: 'Bell', langs: ['en'] },
+    { id: 'c', name: 'Chen', langs: ['zh'] },
+    { id: 'd', name: 'Dee' },
+  ] }), { status: 200 }));
+  const list = await remoteSpeaker({ lang: 'pt' }).voices();
+  assert.deepEqual(list, [
+    { id: 'a', name: 'Ana', lang: 'pt' },
+    { id: 'b', name: 'Bell', lang: 'en' },
+    { id: 'c', name: 'Chen', lang: 'zh' },
+    { id: 'd', name: 'Dee', lang: 'pt' },     // no langs at all: labelled with the default
+  ]);
+});
