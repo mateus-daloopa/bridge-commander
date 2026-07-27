@@ -4,7 +4,8 @@
 // the engine request, the streaming playback, the <audio> the OS can see, the
 // lock screen and the visible transport — and it is the module that was proven
 // on the captain's phone. This file is the board's policy on top of it: WHICH
-// messages get spoken, WHOSE voice speaks them, and the on/off toggle.
+// messages get spoken, WHOSE voice speaks them, WHEN — one at a time, in a
+// queue — and the on/off toggle.
 //
 // There is no second way to speak. When the engine refuses, or no voice is
 // chosen, the board is silent AND says so on screen. It used to fall through to
@@ -47,7 +48,7 @@ export function voiceOptions(keep) {
 }
 function populatePicker() {
   // The workspace may name a voice; that is the board's until the captain picks
-  // another. Nothing at all is a real state, and a loud one — see speakPlain.
+  // another. Nothing at all is a real state, and a loud one — see enqueue.
   const saved = savedVoiceId() || (engine && engine.voice) || '';
   const sorted = sortedVoices(voiceList, voiceFilter, saved);
   voiceSelect.textContent = '';
@@ -86,17 +87,25 @@ function stripForSpeech(text) {
   return stripEmoji(text.replace(/```[\s\S]*?```/g, ' code ').replace(/[`*#\[\]()]/g, ' ').replace(/https?:\S+/g, ' link '));
 }
 
-// ---------- speech sessions ----------
-// One session at a time: a new message supersedes the old (speech.js stops the
-// previous one itself), so the newest is always what you hear. `speaking` is
-// what the per-message speak button toggles against.
-let session = 0;
-let speaking = false;
+// ---------- the speech queue ----------
+// One message at a time, in the order they arrived: the one speaking finishes,
+// the next starts. Asking speech.js to speak while it is speaking does not
+// queue — it stops what it was saying — so a burst of three used to play only
+// the third, with the first two cut mid-sentence. It cost the engine too: an
+// aborted request keeps synthesizing until the disconnect lands, so the overlap
+// was two generations on one GPU, which is what killed voxcpm2 on 27/07.
+//
+// The board never asks for a second speech while one is in flight. Stopping —
+// and turning the voice off, which stops — empties the queue as well: silence
+// means silence, not a pause before the backlog resumes.
+const QUEUE_MAX = 3;      // waiting messages, NOT counting the one being spoken
+const queue = [];         // [{plain, who, voice}], oldest first
+let draining = false;     // a message is being spoken, or is about to be
+let session = 0;          // bumped by stopSpeaking: a drain past its session is stale
 
 // A silence the captain can see. Every way this board can fail to speak comes
 // through here — no path ends in nothing happening.
 function mute(text) {
-  speaking = false;
   toast({ emoji: '🔇', text });
 }
 
@@ -105,37 +114,76 @@ function mute(text) {
 // a shorter wait by throwing the rest of the answer away. Streaming removed the
 // wait, so the cap only truncated: a 2664-character reply stopped mid-sentence,
 // at 45% of itself. Stopping early is the transport's job, not a slice().
-function speakPlain(plain, who) {
-  const my = ++session;
+function enqueue(plain, who) {
   if (!engine) return mute('no speech engine configured — the board cannot speak');
-  const voice = voiceForAuthor(who);
-  if (!voice) return mute('no voice chosen — pick one in settings; the board will not guess');
-  speaking = true;
   // `who` is the author, and it is not decoration: it picks the voice that
   // speaks (each lieutenant may own one) and it is what the phone's lock screen
   // shows, which is where the captain sees WHO is talking while the screen is off.
-  engineSpeak({
-    url: engine.url + '/v1/audio/speech',
-    voice,
-    input: plain,
-    params: engine.params && Object.keys(engine.params).length ? engine.params : undefined,
-    title: who || 'Bridge Commander',
-    artist: 'Bridge Commander',
-  }).then(
-    () => { if (my === session) speaking = false; },
-    (err) => { if (my === session) mute('speech failed: ' + (err && err.message ? err.message : err)); },
-  );
+  const voice = voiceForAuthor(who);
+  if (!voice) return mute('no voice chosen — pick one in settings; the board will not guess');
+  queue.push({ plain, who, voice });
+  // Over the top, the MIDDLE goes and the newest stays. A burst of ten cannot
+  // become ten minutes of backlog, and by the time the board is that far behind
+  // the newest message is the one worth hearing — the ones it skips over are
+  // already answered by the one it keeps.
+  if (queue.length > QUEUE_MAX) {
+    const n = queue.splice(QUEUE_MAX - 1, queue.length - QUEUE_MAX).length;
+    toast({ emoji: '⏭️', text: n + (n > 1 ? ' messages' : ' message') + ' skipped — too many waiting to be spoken' });
+  }
+  // Straight into drain(), not through a promise: on the paths that ride a real
+  // user gesture (the speak button, the voice test) speech.js needs its play()
+  // inside the tap, and drain() reaches engineSpeak() before its first await.
+  if (!draining) drain();
+}
+
+// What is still coming out of the speakers after the engine's last byte. speak()
+// resolves when the STREAM ends, not when the sound does: the buffers are
+// scheduled ahead, so an engine faster than realtime finishes the request while
+// most of the message is still unheard. Starting the next one then would stop
+// those buffers — exactly the cut this queue exists to prevent. bytes/rate IS
+// the length of the audio, and speech.js hands both back.
+function tailMs(said, heardAt) {
+  if (!said || said.stopped || !said.bytes || !heardAt) return 0;
+  return Math.max(0, (said.bytes / 2 / (said.rate || 24000)) * 1000 - (performance.now() - heardAt));
+}
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function drain() {
+  draining = true;
+  try {
+    while (queue.length) {
+      const { plain, who, voice } = queue.shift();
+      const my = session;
+      let heardAt = 0;
+      try {
+        const said = await engineSpeak({
+          url: engine.url + '/v1/audio/speech',
+          voice,
+          input: plain,
+          params: engine.params && Object.keys(engine.params).length ? engine.params : undefined,
+          title: who || 'Bridge Commander',
+          artist: 'Bridge Commander',
+          onFirstSound: () => { heardAt = performance.now(); },
+        });
+        if (my === session) await wait(tailMs(said, heardAt));
+      } catch (err) {
+        // One message lost, said out loud — and the queue moves on. A refusal in
+        // the middle of a burst cannot take the rest of the burst with it.
+        if (my === session) mute('speech failed: ' + (err && err.message ? err.message : err));
+      }
+    }
+  } finally { draining = false; }
 }
 export function speak(text, who) {
   if (!voiceOn) return;
   const plain = stripForSpeech(text);
   if (!plain) return;
   manualSpeakingKey = null;                  // an auto-speak supersedes any manual toggle state
-  speakPlain(plain, who);
+  enqueue(plain, who);
 }
 export function stopSpeaking() {
-  session++;
-  speaking = false;
+  session++;              // whatever the engine still owes us is stale
+  queue.length = 0;       // stop stops what is waiting too, not just what is heard
   engineStop();
 }
 
@@ -143,16 +191,18 @@ export function stopSpeaking() {
 // toggle: this call happens inside a real user gesture (the speak-button click),
 // so the speak() it fires is itself the gesture that unlocks audio — no separate
 // primer needed. Returns true if it spoke, false if there was nothing to say.
-// Clicking again while this message is speaking stops it (cheap toggle).
+// Clicking again while this message is speaking — or while it waits its turn —
+// stops it (cheap toggle), and with it everything else in the queue: stop means
+// stop, and there is one stop.
 let manualSpeakingKey = null;
 export function speakMessage(text, key, who) {
-  if (key != null && manualSpeakingKey === key && speaking) {
+  if (key != null && manualSpeakingKey === key && draining) {
     manualSpeakingKey = null; stopSpeaking(); return false; // toggle off
   }
   const plain = stripForSpeech(text);
   if (!plain) return false;
   manualSpeakingKey = key != null ? key : null;
-  speakPlain(plain, who);
+  enqueue(plain, who);
   return true;
 }
 function setVoiceOn(on) {
@@ -170,7 +220,7 @@ function setVoiceOn(on) {
 // real in-gesture utterance is itself the unlock.
 voiceBtn.onclick = () => setVoiceOn(!voiceOn);
 try { if (localStorage.getItem(VOICE_ON_KEY) === '1') setVoiceOn(true); } catch (e) {} // restore toggle
-document.getElementById('voice-test').onclick = () => speakPlain('Hello, this is my voice.');
+document.getElementById('voice-test').onclick = () => enqueue('Hello, this is my voice.');
 
 // ---------- speak only NEW lieutenant messages ----------
 let firstLoad = true;
