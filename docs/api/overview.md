@@ -44,10 +44,10 @@ and its cards carry that color stripe.
 |---|---|
 | Workspace | The deployment unit: board state, config (port), shared memory, project clones. Independent of every other workspace |
 | Project | A repo registered in the workspace, with a delivery mode: `no-mistakes` (default) \| `direct-PR` \| `local-only` |
-| Lieutenant | Durable orchestrator: `name` (display, emoji welcome), `color`, `avatar` (optional index 0-63 into the sprite sheet; absent = colored-dot fallback), `voice` (optional TTS-engine voice id; absent = the board's voice speaks for it), `charter` (mission). Its `id` and any derived session name come from the ASCII slug of the name — emoji never reach tmux. Its tmux session is an incarnation, not the entity. Converses with the captain; proactive inside its mission (creates cards, starts them); never writes to projects |
+| Lieutenant | Durable orchestrator: `name` (display, emoji welcome), `color`, `avatar` (optional index 0-63 into the sprite sheet; absent = colored-dot fallback), `voice` (optional TTS-engine voice id; absent = the board's voice speaks for it), `charter` (mission). Its `id` and any derived session name come from the ASCII slug of the name — emoji never reach tmux. It lives in the `lt` **window** of that session — the worker windows it starts cohabit the session with it — and that session is an incarnation, not the entity. Converses with the captain; proactive inside its mission (creates cards, starts them); never writes to projects |
 | Card | Unit of work, owned by one lieutenant. `type`: `plan` 🧠 \| `implementation` 🔥 \| `investigation` 🕵️. `body` = the deliverable, always rewritten to current state. `labels` (tags from the board registry). Work attributes live in an open `attributes{}` map, keys by convention: `repo`, `branch`, `worktree`, `session`, `prs {url, state}`, `artifacts {uri, label}`, plus `harness` and `model` (new-card hints consumed by `card.start`) |
 | CardStatus | Live status hung on a card, UI's real-time signal. Worker lease: `absent \| idle \| working \| needs-you`, written ONLY by `card.status` (worker-side), decayed server-side by TTL; plus server-derived `owed` (latest DELIVERED captain message not yet acked — queue truth, not thread order) with `owedState` `queued \| seen` (boundary: the drained cursor), and `unread` |
-| Worker | Implementation agent bound 1:1 to a Working card: tmux **window** (`w-<card-id>`) inside its lieutenant's session + isolated worktree (+ delivery pipeline per project mode). Ephemeral — dies with the card's Working state; the lieutenant-session coupling (lieutenant dies → its worker windows die) is accepted design |
+| Worker | Implementation agent bound 1:1 to a Working card: tmux **window** (`w-<card-id>`) inside its lieutenant's session + isolated worktree (+ delivery pipeline per project mode). Ephemeral — dies with the card's Working state; the session coupling (the lieutenant's SESSION dying takes its worker windows with it — its own `lt` window dying does not) is accepted design |
 | Event | Card timeline entry: `text`, `level` (1 = bell, 2 = timeline only), `actor`, `kind` (open token; the board's kinds registry maps kind → emoji + default level) |
 | Message | Chat utterance. `target`: a lieutenant's main chat or a card thread. May carry `attachments [{id, name, mime, path}]` (captain uploads); attachments ride the QueueItem to the lieutenant with absolute paths. A card thread is a **context folder**: the interlocutor is always the owning lieutenant, never the worker |
 | QueueItem | One durable delivery to a lieutenant. Kinds: captain `message`, `start-order`, `rework-order`, `card-created` / `card-moved` (captain acts echoed to the owner), `worker-signal`, `worker-said` (a non-owner posted on the card thread), `worker-stopped`, `worker-died`, `worker-stalled`, `worker done`, `pr-merged`, `pr-closed`. `seq`-ordered, at-least-once. (`worker-paused` is an event kind only — pausing is the lieutenant's own act, it never queues) |
@@ -123,7 +123,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 
 | Verb | Signature | Called by | Purpose |
 |---|---|---|---|
-| `harness.spawn` | `cwd, prompt, opts → HarnessRef` | ⚙️ | birth a lieutenant session or a worker WINDOW inside its lieutenant's session (`opts`: session name, window name — non-numeric, `w-<card-id>` —, state dir, turn-end callback URL, hook install mode) |
+| `harness.spawn` | `cwd, prompt, opts → HarnessRef` | ⚙️ | birth an agent in a named WINDOW of a session (`opts`: session name, window name — non-numeric: `lt` for the lieutenant, `w-<card-id>` for its workers, which share that session —, state dir, turn-end callback URL, hook install mode); no window name = the agent owns the whole session |
 | `harness.send` | `ref, text` | ⚙️ | type into a session (the wake half of delivery) |
 | `harness.alive` | `ref → bool` | ⚙️ | liveness check for supervision |
 | `harness.resumable` | `ref → bool` | ⚙️ | introspection: would `resume` restore memory? The server picks resume vs relaunch-with-charter on it |
@@ -141,7 +141,7 @@ verbs for features not every harness can honor. The port never validates them (r
 one would force every harness, `fake` included, to implement it); the server
 capability-checks at the call site (`typeof impl.openPane === 'function'`) and degrades
 gracefully when the verb is absent. Current optional verbs (pane viewing, slash commands,
-session status):
+session status, window adoption):
 
 | Verb | Signature | Called by | Purpose |
 |---|---|---|---|
@@ -150,6 +150,7 @@ session status):
 | `harness.commands` | `ref → [{name, description}]` | ⚙️ | list the slash commands this session honors (drives the UI's command palette) |
 | `harness.runCommand` | `ref, line → string` | ⚙️ | run one slash-command line in the session (pass-through or emulated per harness) and return the reply text |
 | `harness.status` | `ref → {model, contextUsed, contextWindow, rateLimits?}` | ⚙️ | session vitals; the server caches the result at each turn-end and serves it on the board payload (the lane/card context bars) |
+| `harness.adoptWindow` | `ref, window, taken? → HarnessRef\|null` | ⚙️ supervision | migrate a session-granular ref to window granularity without restarting the agent (the lieutenants registered before their ref carried a window) — `taken` names windows that belong to someone else and must never be adopted; `null` = the agent's window cannot be identified, keep the old ref |
 
 ## Invariants
 

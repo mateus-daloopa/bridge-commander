@@ -464,6 +464,7 @@ async function spawnLieutenant(body) {
   try {
     ref = await impl.spawn(WORKSPACE, lieutenantPrompt(name, id, body.charter), {
       session,
+      window: names.LIEUTENANT_WINDOW, // its own window in its own session — see names.js
       stateDir: HARNESS_STATE_DIR,
       callbackUrl: TURNEND_URL,
       installHooks: false,
@@ -867,7 +868,8 @@ function sysloadTargets() {
   }
   for (const lt of board.lieutenants) {
     if (!isHarnessRef(lt.ref)) continue;
-    out.push({ kind: 'lieutenant', id: lt.id, label: lt.name, session: lt.ref.session, window: null });
+    out.push({ kind: 'lieutenant', id: lt.id, label: lt.name,
+      session: lt.ref.session, window: lt.ref.window || null });
   }
   return out;
 }
@@ -1949,8 +1951,25 @@ async function superviseTick() {
     let changed = false;
     for (const lt of board.lieutenants) {
       if (!isHarnessRef(lt.ref)) continue;
+      let impl = null;
+      try { impl = harnessFor(lt.ref); } catch (e) { impl = null; }
+      // A lieutenant's session is shared with its worker windows, so its ref
+      // must name its own window (names.LIEUTENANT_WINDOW) — a session-granular
+      // one would kill every worker on revive and read liveness off whichever
+      // window has focus. Refs registered before that (founders, older boards)
+      // are migrated here, in place: the running lieutenant is renamed into its
+      // window, never restarted. Best-effort — a tick on the old ref is fine.
+      if (impl && !lt.ref.window && typeof impl.adoptWindow === 'function') {
+        try {
+          const taken = board.workers
+            .filter((w) => w.ref.session === lt.ref.session && w.ref.window)
+            .map((w) => w.ref.window);
+          const ref = await impl.adoptWindow(lt.ref, names.LIEUTENANT_WINDOW, taken);
+          if (ref) { lt.ref = ref; changed = true; }
+        } catch (e) { /* keep the old ref; the next tick tries again */ }
+      }
       let up = false;
-      try { up = await harnessFor(lt.ref).alive(lt.ref); } catch (e) { up = false; }
+      try { up = impl ? await impl.alive(lt.ref) : false; } catch (e) { up = false; }
       if (up) {
         respawnAttempts.delete(lt.id);
         // Alive but possibly deaf: a wake that landed in a busy pane never
@@ -1967,18 +1986,21 @@ async function superviseTick() {
         // Resume when memory is recoverable; else relaunch a fresh session with
         // charter + owned cards + pending queue as the prompt (the DNA's
         // auto-respawn side effect) — a bare agent with no context helps nobody.
-        const impl = harnessFor(lt.ref);
         const opts = { stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL, installHooks: false };
         let ref;
         if (await impl.resumable(lt.ref, opts)) {
           ref = await impl.resume(lt.ref, opts);
         } else {
-          await impl.kill(lt.ref); // clear any dead pane still holding the name
           // Keep the session name (an incarnation, not a new entity) when it is
           // spawnable; a founder's foreign name gets a workspace-scoped one.
           const session = /^bc-[A-Za-z0-9_-]+$/.test(lt.ref.session)
             ? lt.ref.session : names.lieutenantSession(WORKSPACE, lt.id);
-          ref = await impl.spawn(lt.ref.cwd, respawnPrompt(lt), Object.assign({ session }, opts));
+          const window = lt.ref.window || names.LIEUTENANT_WINDOW;
+          // Clear any dead pane still holding the name — the lieutenant's
+          // WINDOW, never its session: the worker windows cohabiting it are
+          // alive and did not ask to die (an unmigrated ref would take them all).
+          await impl.kill({ ...lt.ref, window });
+          ref = await impl.spawn(lt.ref.cwd, respawnPrompt(lt), Object.assign({ session, window }, opts));
         }
         lt.ref = ref;
         respawnAttempts.delete(lt.id);
@@ -2336,7 +2358,14 @@ const server = http.createServer(async (req, res) => {
         if (body.ref !== null && !isHarnessRef(body.ref)) {
           return sendJson(res, 400, { error: 'bad ref (want {harness, session, cwd, resumeId?} or null)' });
         }
-        lt.ref = body.ref;
+        // A re-run of `bc-axi init` re-sends the founder's session-granular ref
+        // (the caller's tmux session is all it can see). Keep the window this
+        // lieutenant was already pinned to — losing it would put the ref back
+        // to killing its whole session, worker windows included, on revive.
+        lt.ref = body.ref && !body.ref.window && lt.ref && lt.ref.window
+          && lt.ref.session === body.ref.session
+          ? { ...body.ref, window: lt.ref.window }
+          : body.ref;
       }
       if (body.name !== undefined && String(body.name).trim()) lt.name = String(body.name).trim().slice(0, 60);
       if (body.color !== undefined && validColor(body.color)) lt.color = body.color;

@@ -41,4 +41,12 @@ function workerWindow(cardId) {
   return 'w-' + safe(cardId);
 }
 
-module.exports = { workspaceDisc, lieutenantSession, workerWindow };
+// LIEUTENANT_WINDOW — the window a lieutenant lives in inside its OWN session.
+// A lieutenant cohabits that session with its worker windows, so its ref must
+// be window-granular too: a session-granular ref kills the whole session on
+// revive (every worker with it) and reads liveness off whichever window has
+// focus (a busy worker masks a dead lieutenant). Same name for every
+// lieutenant — the session name already identifies which one.
+const LIEUTENANT_WINDOW = 'lt';
+
+module.exports = { workspaceDisc, lieutenantSession, workerWindow, LIEUTENANT_WINDOW };

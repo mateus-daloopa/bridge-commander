@@ -173,9 +173,13 @@ test('lieutenant.create with spawn: real harness.spawn in the workspace root, re
     assert.match(lt.ref.session, /^bc-[A-Za-z0-9-]+-lt-spawn-bot$/);
     assert.strictEqual(lt.ref.cwd, path.resolve(s.dir)); // spawned in the workspace root
     assert.ok(lt.ref.resumeId, 'resumeId known at birth');
+    // a lieutenant lives in its OWN window of that session — the worker windows
+    // it will host cohabit the session with it (server/names.js)
+    assert.strictEqual(lt.ref.window, 'lt');
+    const key = lt.ref.session + ':' + lt.ref.window;
 
     // launch prompt = doctrine + charter + situating line (recorded by the fake's spawn marker)
-    const rec = JSON.parse(fs.readFileSync(path.join(fdir, lt.ref.session + '.json'), 'utf8'));
+    const rec = JSON.parse(fs.readFileSync(path.join(fdir, key + '.json'), 'utf8'));
     // harness state plumbed through the port is the WORKSPACE's, never global
     assert.strictEqual(rec.stateDir, path.join(s.dir, '.bridge-commander', 'harness'));
     assert.match(rec.prompt, /Lieutenant doctrine/);
@@ -185,7 +189,7 @@ test('lieutenant.create with spawn: real harness.spawn in the workspace root, re
 
     // the ref survives a restart (board is truth) and receives wakes
     await s.api('POST', '/api/feedback', { target: 'lieutenant:spawn-bot', text: 'welcome aboard' });
-    const sends = await waitSends(fdir, lt.ref.session, 1);
+    const sends = await waitSends(fdir, key, 1);
     assert.strictEqual(sends.length, 1);
     assert.match(sends[0].text, /\[bridge-commander\] 1 pending item\(s\)/);
 

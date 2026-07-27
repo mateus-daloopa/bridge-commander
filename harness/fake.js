@@ -76,6 +76,34 @@ function get(ref) {
   return s;
 }
 
+// live(key) — known to THIS process, else the file-backed marker.
+function live(key) {
+  const s = sessions.get(key);
+  if (s) return s.alive;
+  const marker = markerFile(key);
+  return !!(marker && fs.existsSync(marker));
+}
+
+// siblings(session) — every key living in that tmux session: the session
+// itself plus its `session:window` windows (in-process and marker-backed).
+// The two verbs below need it because a SESSION-granular ref addresses a whole
+// tmux session, windows and all — the fidelity that makes the lieutenant's
+// window-granular ref testable without tmux.
+function siblings(session) {
+  const keys = new Set();
+  const mine = (k) => k === session || k.startsWith(session + ':');
+  for (const k of sessions.keys()) if (mine(k)) keys.add(k);
+  const dir = fakeStateDir();
+  if (dir) {
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith('.json')) continue;
+      const k = f.slice(0, -5);
+      if (mine(k)) keys.add(k);
+    }
+  }
+  return [...keys];
+}
+
 function emitTurnEnd(name) {
   const s = sessions.get(name);
   if (!s || !s.alive) return;
@@ -148,11 +176,13 @@ async function send(ref, text) {
   emitTurnEnd(key);
 }
 
+// alive(ref) — window-granular refs answer for their own window only.
+// A session-granular ref is read the way tmux reads `=session:`: off whichever
+// window has FOCUS, so ANY live window in the session makes it read alive —
+// including a busy worker masking a dead lieutenant beside it.
 async function alive(ref) {
-  const s = sessions.get(refKey(ref));
-  if (s) return s.alive;
-  const marker = markerFile(refKey(ref));
-  return !!(marker && fs.existsSync(marker));
+  if (ref.window) return live(refKey(ref));
+  return siblings(ref.session).some(live);
 }
 
 // resumable — introspection only: memory survives a resume iff this process
@@ -198,11 +228,34 @@ function onTurnEnd(ref, hook) {
 // kill(ref) — port verb: end the session for good. Idempotent (unknown or
 // already-dead sessions are a no-op). File-backed mode also removes the
 // marker so a WATCHING process sees alive() flip false.
+// tmux semantics: a window-granular ref takes ONLY its window; a
+// session-granular one takes the whole session — every sibling window with it.
 function kill(ref) {
-  const s = sessions.get(refKey(ref));
-  if (s) s.alive = false;
-  const marker = markerFile(refKey(ref));
-  if (marker) { try { fs.unlinkSync(marker); } catch { /* already gone */ } }
+  for (const key of (ref.window ? [refKey(ref)] : siblings(ref.session))) {
+    const s = sessions.get(key);
+    if (s) s.alive = false;
+    const marker = markerFile(key);
+    if (marker) { try { fs.unlinkSync(marker); } catch { /* already gone */ } }
+  }
+}
+
+// adoptWindow(ref, window, taken?) -> ref — OPTIONAL capability verb; the real
+// contract is in tmux-session.js. The fake has one pane per key, so there is
+// no window to mis-adopt (`taken` never applies): the live session is simply
+// re-keyed, and the SAME agent (transcript, hooks, marker) answers to
+// `session:window` from now on.
+async function adoptWindow(ref, window) {
+  if (ref.window) return ref;
+  const key = keyOf(ref.session, window);
+  const s = sessions.get(ref.session);
+  if (s) {
+    sessions.delete(ref.session);
+    sessions.set(key, s);
+  }
+  const from = markerFile(ref.session);
+  const to = markerFile(key);
+  if (from && to && fs.existsSync(from)) fs.renameSync(from, to);
+  return { ...ref, window };
 }
 
 // ---------- pane viewing (OPTIONAL capability verbs — see port.js) ----------
@@ -297,7 +350,7 @@ function reset() {
   sessions.clear();
 }
 
-const impl = { spawn, send, alive, resumable, resume, onTurnEnd, kill, transcript, reset };
+const impl = { spawn, send, alive, resumable, resume, onTurnEnd, kill, adoptWindow, transcript, reset };
 // Pane verbs are OPTIONAL by contract; BC_FAKE_NO_PANE simulates a harness
 // that never implemented them (capability-absent degradation under test).
 if (!process.env.BC_FAKE_NO_PANE) {

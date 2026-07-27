@@ -16,7 +16,7 @@ Seven verbs, nothing else:
 All verbs may be async. Zero dependencies — plain Node (>= 18; uses `node:test`, `fetch`).
 Beyond the seven, a harness MAY expose **optional capability verbs** — see below.
 
-## Optional capability verbs (pane viewing)
+## Optional capability verbs (pane viewing, window adoption)
 
 Optional verbs are features not every harness can honor, so `port.js` never
 validates them — adding one to the required list would force every harness
@@ -29,6 +29,7 @@ and degrades gracefully when the verb is absent (the pane endpoints answer
 |---|---|---|
 | `openPane` | `(ref, {onFrame, intervalMs?, lines?}) → {close()}` | deliver the pane's CURRENT RENDERED SCREEN as successive frames: `onFrame(frameString)` fires whenever the content changes (identical frames are skipped); `close()` stops delivery and releases resources |
 | `paneSnapshot` | `(ref, {lines?}) → Promise<string>` | one-shot capture — the initial paint / non-streaming fallback |
+| `adoptWindow` | `(ref, window, taken?) → Promise<HarnessRef\|null>` | migrate a SESSION-granular ref to window granularity **without restarting the agent** — the tmux adapters rename the session's first window; `taken` names windows that belong to someone else and must never be adopted; `null` = the agent's window cannot be identified, keep the old ref |
 
 `intervalMs` defaults to ~1000, `lines` (scrollback depth) to ~200. A frame is
 a string that MAY carry ANSI SGR escapes (colors/bold).
@@ -55,6 +56,12 @@ survive a server restart:
 
 `session` is the tmux session name (`bc-*` — predictable, so `tmux attach -t bc-a1b2c3`
 is the captain's escape hatch). `resumeId` is the harness-native conversation id.
+
+An optional `window` pins the ref to one named WINDOW of that session, for
+agents that cohabit it: a lieutenant in `lt` and its workers in `w-<card-id>`.
+Granularity is not cosmetic — a session-granular ref kills the whole session
+(every sibling window with it) and reads its liveness off whichever window has
+focus, so an agent with siblings must always carry its window.
 
 ## Files
 
