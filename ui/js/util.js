@@ -93,6 +93,26 @@ export function uriBasename(uri) {
   return i >= 0 ? s.slice(i + 1) : s;
 }
 
+// Which lines of `next` the other hand touched, as 0-BASED line numbers: trim
+// the identical head and the identical tail, and what is left in the middle is
+// the change. Deliberately not a real diff — nothing here needs to know which
+// old line a new line came from, and marking a couple of extra lines when a
+// paragraph moves is a fine price for eight lines instead of an LCS. A pure
+// deletion leaves no new lines to mark, so the seam gets the mark instead.
+export function changedLines(prev, next) {
+  const a = String(prev == null ? '' : prev).split('\n');
+  const b = String(next == null ? '' : next).split('\n');
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head &&
+         a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const out = [];
+  for (let i = head; i < b.length - tail; i++) out.push(i);
+  if (!out.length && prev !== next) out.push(Math.min(head, b.length - 1));
+  return out;
+}
+
 // human token count for the context bar tooltip (185709 → "186k", 1e6 → "1M")
 export function fmtTokens(n) {
   if (!Number.isFinite(n)) return '?';

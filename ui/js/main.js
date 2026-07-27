@@ -12,7 +12,7 @@ import { renderFilterUI, filterPanelOpen, closeFilterPanel } from './filterpop.j
 import { renderChat, onOpenCard as chatOnOpenCard, openCardConversation, openLieutenantChat, onQuoteSource } from './chat.js';
 import { onModeSwitch, forgetFile, fileOpen, fileName, fileQuote } from './filepane.js';
 import { renderLtSwitcher, ltSwitcherOpen, closeLtSwitcher, ltSettingsOpen, closeLtSettings } from './ltswitcher.js';
-import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, onArtifactClose, closeOwnerMenu, ownerMenuOpen } from './detail.js';
+import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, onArtifactClose, closeOwnerMenu, ownerMenuOpen, artifactWritten } from './detail.js';
 import { closePane, paneOpen } from './pane.js';
 import { openMonitor, closeMonitor, monitorOpen } from './monitor.js';
 import { renderNotifications, onOpenCard as notifOnOpenCard } from './notify.js';
@@ -263,6 +263,12 @@ function connect() {
     const restarted = serverBoot && doc.boot && doc.boot !== serverBoot;
     applyBoard(doc);
     if (restarted) refetchBoard(); // new server instance — make sure we hold its current state
+  });
+  // An artifact was written through the board — a file screen open on it follows
+  // along by itself. Not a board payload: no re-render, nothing else reacts.
+  es.addEventListener('artifact', (e) => {
+    lastEventAt = Date.now();
+    try { artifactWritten(JSON.parse(e.data)); } catch (err) {}
   });
   es.addEventListener('ping', () => { lastEventAt = Date.now(); });
   es.onopen = () => {

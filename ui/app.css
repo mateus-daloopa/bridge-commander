@@ -1067,6 +1067,17 @@ a.a-uri { color: var(--accent); }
 }
 .fs-note-ok { color: var(--ok); background: rgba(62, 207, 142, .07); }
 .fs-note-err { color: var(--warn); background: rgba(230, 192, 74, .09); border-left: 3px solid var(--warn); }
+/* the other hand wrote the file: taken in place (live) or waiting on his call (warn) */
+.fs-note-live { color: var(--accent); background: var(--accent-soft); border-left: 3px solid var(--accent2); }
+.fs-note-warn { color: var(--warn); background: rgba(230, 192, 74, .09); border-left: 3px solid var(--warn); }
+.fs-note-act {
+  margin-left: 8px; padding: 2px 8px; border-radius: 7px; font-size: 12px;
+  background: var(--panel); border: 1px solid var(--line); color: var(--dim); white-space: nowrap;
+}
+.fs-note-act:hover { color: var(--text); border-color: var(--line2); }
+/* lines the other hand touched, in the editor gutter-to-edge — the point of
+   updating in place is that he SEES what moved */
+.cm-s-bc .fe-chg { background: rgba(88, 182, 255, .13); box-shadow: inset 2px 0 0 var(--accent2); }
 .fe-bar { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .fe-bar .fe-gap { flex: 1; }
 .fe-bar button {

@@ -15,6 +15,7 @@
 import { S } from './state.js';
 import { mountFileEditor } from './fileedit.js';
 import { refreshQuote } from './chat.js';
+import { changedLines } from './util.js';
 
 const el = document.getElementById('filepane');
 
@@ -25,6 +26,27 @@ export function onModeSwitch(fn) { modeSwitch = fn; }
 
 export function fileOpen() { return !!open; }
 export function fileName() { return open ? open.name : ''; }
+// Which file is up (the host's own key — a uri, for today's host), and whether
+// there is typing in it that is not on disk yet. `open.saved` is the text this
+// screen believes is on disk: what the host handed it as `saved`, moved forward
+// by every save that landed and every outside update it took. It is NOT the
+// text the editor mounted with — a restored draft is unsaved typing from an
+// earlier visit, and it has to keep counting as unsaved.
+export function fileKey() { return open ? open.key : ''; }
+export function fileDirty() { return !!(open && handle && handle.getValue() !== open.saved); }
+// The file changed underneath us and the host decided we follow: swap the text
+// in place, mark the lines that moved, and say so in the note. No reload, no
+// button — the captain keeps his cursor and sees what the other hand did.
+export function fileUpdate(text, note) {
+  if (!open) return;
+  const changed = changedLines(open.saved, text);
+  open.saved = text;
+  if (handle) handle.replace(text, changed);
+  say((note || 'updated on disk') + ' — ' + changed.length + (changed.length === 1 ? ' line' : ' lines') + ' marked', 'live');
+}
+// Say something on the note line, optionally with the choices it demands:
+// actions = [{ label, onClick }]. Clicking one clears the note.
+export function fileNotice(text, kind, actions) { say(text, kind, actions); }
 // What rides along with the next chat message: the file always, plus the
 // highlighted lines when there is a selection.
 export function fileQuote() {
@@ -35,12 +57,15 @@ export function fileQuote() {
     : { name: open.name };
 }
 
-// spec: { key, name, content, markdown, crumb: { label, title, onClick },
+// spec: { key, name, content, saved, markdown, crumb: { label, title, onClick },
 //         onChange(text), onSave(text) -> Promise<string> (the line to show) }
+// `content` is what the editor mounts with (a restored draft, when there is
+// one); `saved` is what is on disk (defaults to content).
 export function openFile(spec) {
   const back = S.boardMode === 'file' ? (open && open.backMode) || 'board' : S.boardMode;
   drop();
   open = Object.assign({}, spec, { backMode: back });
+  if (open.saved == null) open.saved = open.content;
   build();
   S.view = 'board'; // mobile: the file screen lives in the board tab (renamed to it)
   modeSwitch('file'); // renders
@@ -122,20 +147,34 @@ function build() {
 // knows nothing about what it is saving to — it prints the line it is handed.
 let saving = false;
 let noteEl = null;
-function say(text, kind) {
+function say(text, kind, actions) {
   if (!noteEl) return;
   noteEl.hidden = !text;
-  noteEl.textContent = text || '';
+  noteEl.textContent = '';
   noteEl.className = 'fs-note' + (kind ? ' fs-note-' + kind : '');
+  if (!text) return;
+  const line = document.createElement('span');
+  line.textContent = text;
+  noteEl.appendChild(line);
+  for (const a of actions || []) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'fs-note-act';
+    b.textContent = a.label;
+    if (a.title) b.title = a.title;
+    b.onclick = () => { say(''); a.onClick(); };
+    noteEl.appendChild(b);
+  }
 }
 function save(h, btn) {
   if (saving || !open || !open.onSave) return;
   saving = true;
+  const text = h.getValue();
   const was = btn.textContent;
   btn.textContent = '💾 saving…';
   btn.disabled = true;
-  Promise.resolve(open.onSave(h.getValue())).then(
-    (msg) => { say(msg || 'saved', 'ok'); },
+  Promise.resolve(open.onSave(text)).then(
+    (msg) => { if (open) open.saved = text; say(msg || 'saved', 'ok'); },
     (e) => { say('⚠ ' + (e && e.message ? e.message : 'save failed'), 'err'); },
   ).then(() => {
     saving = false;
