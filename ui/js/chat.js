@@ -10,6 +10,7 @@ import { speakMessage, trackMessages } from './voice.js';
 import { openAttachment } from './detail.js';
 import { avatarHtml } from './avatars.js';
 import { isEchoOf, addPending, pendingFor } from './pending.js';
+import { fileLang } from './fileedit.js';
 
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
@@ -628,6 +629,46 @@ inputEl.addEventListener('paste', (e) => {
 
 function autoGrow(t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 132) + 'px'; }
 
+// ---------- quoted selection (four-handed editing) ----------
+// The whole point of the co-edit surface: what the captain highlighted in a
+// file travels WITH the next message, so the lieutenant knows which file, which
+// lines, and what text is being talked about. Set by whoever owns an editor
+// (detail.js today), shown as a chip over the composer, folded into the message
+// on send and cleared once it is delivered.
+let quote = null; // { name, uri, lines, text }
+const quoteEl = document.getElementById('chat-quote');
+export function setQuote(q) { quote = q && q.text ? q : null; renderQuote(); }
+function renderQuote() {
+  if (!quote) { quoteEl.hidden = true; quoteEl.textContent = ''; return; }
+  quoteEl.hidden = false;
+  quoteEl.textContent = '';
+  const where = document.createElement('span');
+  where.className = 'q-where';
+  where.textContent = '📎 ' + quote.name + ' L' + quote.lines;
+  const snip = document.createElement('span');
+  snip.className = 'q-snip';
+  const first = quote.text.split('\n')[0];
+  snip.textContent = first.slice(0, 120) + (first.length > 120 || quote.text.includes('\n') ? ' …' : '');
+  snip.title = quote.text.slice(0, 2000);
+  const x = document.createElement('button');
+  x.type = 'button';
+  x.className = 'q-x';
+  x.textContent = '✕';
+  x.title = 'drop the selection';
+  x.onclick = () => setQuote(null);
+  quoteEl.append(where, snip, x);
+}
+// The selection becomes a quoted block ahead of the captain's own words. The
+// fence is longer than any backtick run inside it, so a snippet of markdown
+// can't break out.
+function quoteBlock(q) {
+  const runs = (q.text.match(/`+/g) || []).map((s) => s.length + 1);
+  const fence = '`'.repeat(Math.max(3, ...runs, 3));
+  return '📎 `' + q.name + '` L' + q.lines + '\n' +
+    fence + fileLang(q.name) + '\n' + q.text + '\n' + fence + '\n\n';
+}
+export function focusComposer() { inputEl.focus(); }
+
 // ---------- slash-command autocomplete ----------
 // A composer holding a single leading-"/" token opens the picker, fed by
 // /api/commands for the CURRENT target (lieutenant chat → its own session;
@@ -744,9 +785,11 @@ async function send() {
   if (sending) return;
   const target = currentTarget();
   if (!target) return;
-  const text = inputEl.value.trim();
+  const typed = inputEl.value.trim();
   const atts = pendingAtts.slice();
-  if (!text && !atts.length) return; // nothing to send
+  const q = quote; // the highlighted snippet rides along with this one message
+  if (!typed && !atts.length && !q) return; // nothing to send
+  const text = q ? quoteBlock(q) + typed : typed;
   sending = true;
   clearSendError();
   sendBtn.disabled = true;
@@ -764,6 +807,7 @@ async function send() {
     // flags a stalled echo.
     addPending(target, text, metas);
     inputEl.value = '';
+    if (q) setQuote(null); // delivered — the next message starts clean
     closeSlash();
     pendingAtts = [];
     renderPendingAtts();

@@ -4,7 +4,8 @@ import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, 
 import { md, mdEnhance, copyText } from './md.js';
 import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
-import { openCardThread, syncChatToMain } from './chat.js';
+import { openCardThread, syncChatToMain, setQuote, focusComposer } from './chat.js';
+import { mountFileEditor } from './fileedit.js';
 import { openMoveMenu } from './board.js';
 import { archivedCard, unarchive } from './archive.js';
 
@@ -67,6 +68,12 @@ document.getElementById('dt-close').onclick = closeDetail;
 document.addEventListener('click', (e) => {
   if (!S.openCardId || !isDesktop()) return;
   const t = e.target;
+  // A click on a control that removed itself (the editor's "talk about this"
+  // closes the viewer, taking its own toolbar with it) reaches document with a
+  // DETACHED target: every closest() below then misses and the detail would
+  // close as collateral. A node that is no longer in the page can't tell us
+  // anything about where the click landed — ignore it.
+  if (!t.isConnected) return;
   if (el.contains(t)) return;                 // inside the panel — stays open
   if (t.closest && (
     t.closest('#chat') ||                     // left chat = the selected card's thread; part of its context
@@ -197,6 +204,8 @@ const avExpand = document.getElementById('av-expand');
 const avDownload = document.getElementById('av-download');
 const avSrcBtn = document.getElementById('av-src');
 const avCopyBtn = document.getElementById('av-copy');
+const avEditBtn = document.getElementById('av-edit');
+const avEditWrap = document.getElementById('av-edit-wrap');
 const MD_EXT = /\.(md|markdown)$/i;
 const HTML_EXT = /\.html?$/i;
 // Reset the shared overlay to a clean text-mode state (used by both openers).
@@ -226,6 +235,9 @@ function avReset(name, uri) {
   avCopyBtn.hidden = true;
   avCopyBtn.textContent = '⧉';
   avCopyBtn.classList.remove('ok');
+  stopEdit();
+  avEditBtn.hidden = true;
+  avEditable = null;
   avModal.classList.remove('expanded'); // each open starts at the default size
   avOverlay.hidden = false;
 }
@@ -256,6 +268,79 @@ function renderAvMd() {
   else { avBody.className = 'md'; avBody.innerHTML = md(avMd); mdEnhance(avBody); }
 }
 avSrcBtn.onclick = () => { avShowSrc = !avShowSrc; renderAvMd(); };
+
+// ---------- co-editing a text artifact (prototype) ----------
+// The viewer is the host: it knows this text is a card artifact, hands the
+// generic editor (fileedit.js) the content and the filename, and takes back
+// two things — the edited text and whatever the captain has highlighted. The
+// selection goes straight to the chat composer as a quote, which is what turns
+// "two programs on one screen" into four hands on one file.
+//
+// PROTOTYPE: saving is local. Drafts live in this Map for the session (so
+// closing and reopening the viewer never loses typing) and go no further —
+// writing back through the API is the next card.
+const drafts = new Map(); // uri -> edited text
+let avEditable = null;    // { uri, name, markdown, content } while a text artifact is up
+let feHandle = null;      // the mounted editor, or null
+
+function stopEdit() {
+  if (feHandle) { feHandle.destroy(); feHandle = null; }
+  avEditWrap.hidden = true;
+  avEditBtn.classList.remove('on');
+}
+// Offer ✎ for the text we just put in the viewer (markdown or plain source).
+function avEditableText(uri, name, markdown, content) {
+  avEditable = { uri, name, markdown, content };
+  avEditBtn.hidden = false;
+}
+function startEdit() {
+  if (!avEditable || feHandle) return;
+  const { uri, name, markdown } = avEditable;
+  avBody.hidden = true;
+  avEditWrap.hidden = false;
+  avEditBtn.classList.add('on');
+  avModal.classList.add('expanded'); // editing wants the room
+  feHandle = mountFileEditor(avEditWrap, {
+    name,
+    markdown,
+    content: drafts.has(uri) ? drafts.get(uri) : avEditable.content,
+    onChange: () => { drafts.set(uri, feHandle.getValue()); },
+    onSelection: (s) => setQuote(s ? { name, uri, lines: s.lines, text: s.text } : null),
+    actions: [
+      {
+        label: '💬 talk about this',
+        title: 'take the highlighted lines to the chat',
+        onClick: (h) => {
+          const s = h.selection();
+          if (s) setQuote({ name, uri, lines: s.lines, text: s.text });
+          talkAboutSelection();
+        },
+      },
+      {
+        label: '💾 save',
+        title: 'prototype: the draft is kept in this browser only',
+        onClick: (h, btn) => {
+          drafts.set(uri, h.getValue());
+          btn.textContent = '✓ saved (fake)';
+          setTimeout(() => { btn.textContent = '💾 save'; }, 1600);
+        },
+      },
+    ],
+  });
+}
+// Leave the editor for the conversation: the viewer covers the chat, so talking
+// means closing it. Mobile has no side-by-side at all — there the detail closes
+// too and the chat tab comes forward, exactly like the detail's 💬 button does.
+function talkAboutSelection() {
+  const id = S.openCardId;
+  closeArtifact();
+  if (!isDesktop() && id) { closeDetail(); openCardThread(id); }
+  focusComposer();
+}
+avEditBtn.onclick = () => {
+  if (feHandle) { stopEdit(); avBody.hidden = false; return; } // back to the read view
+  startEdit();
+};
 // An artifact entry may carry a content-type hint ({uri, label, type}) — e.g.
 // the auto-attached worker brief is markdown in a `.prompt` file. The hint
 // wins; the extension regex is the fallback.
@@ -317,13 +402,18 @@ async function openArtifact(uri) {
   // download offer, carrying the server's message.
   try {
     const r = await api.artifact(uri);
-    if (isMdArtifact(at, name)) {
-      showMarkdown(r.content); // rendered via md.js, with the ⇄ source toggle
+    const markdown = isMdArtifact(at, name);
+    // An unsaved draft is what the captain last typed — show that, not the
+    // stale copy on disk (prototype: drafts never leave the browser).
+    const text = drafts.has(uri) ? drafts.get(uri) : r.content;
+    if (markdown) {
+      showMarkdown(text); // rendered via md.js, with the ⇄ source toggle
     } else {
       avBody.className = '';
-      avBody.textContent = r.content; // non-markdown: plain preformatted text
-      avCopyable(r.content);
+      avBody.textContent = text; // non-markdown: plain preformatted text
+      avCopyable(text);
     }
+    avEditableText(uri, name, markdown, r.content); // ✎ turns the preview into an editor
   } catch (e) {
     offerDownload('⚠ no preview — ' + e.message + ' (use ⬇ to download)'); // binary / too large / unreadable
   }
@@ -390,7 +480,7 @@ export async function openAttachment(att) {
 // state.js onRender: a setter avoids a circular import back into main.js.
 let onCloseFn = () => {};
 export function onArtifactClose(fn) { onCloseFn = fn; }
-export function closeArtifact() { avOverlay.hidden = true; avVideo.pause(); avAudio.pause(); onCloseFn(); }
+export function closeArtifact() { avOverlay.hidden = true; avVideo.pause(); avAudio.pause(); stopEdit(); onCloseFn(); }
 export function artifactOpen() { return !avOverlay.hidden; }
 document.getElementById('av-close').onclick = closeArtifact;
 // Maximize / restore the viewer (pure CSS class toggle — see #av-modal.expanded).

@@ -119,6 +119,9 @@
     <div id="chat-feed"></div>
     <div id="chat-send-err" hidden></div>
     <div id="chat-atts" hidden></div>
+    <!-- quoted selection: the snippet picked in the file editor rides along
+         with the next message (see chat.js setQuote) -->
+    <div id="chat-quote" hidden></div>
     <form id="chat-form" class="composer">
       <!-- slash-command autocomplete: opens when the composer holds a single
            leading-"/" token; fed by /api/commands for the current chat target -->
@@ -291,8 +294,10 @@
 <!-- artifact viewer -->
 <div id="av-overlay" hidden>
   <div id="av-modal">
-    <div class="av-head"><span class="av-name" id="av-name"></span><a id="av-download" title="download" hidden>⬇</a><button id="av-copy" title="copy full source" aria-label="copy full source to clipboard" hidden>⧉</button><button id="av-src" title="toggle rendered / source" hidden>&lt;/&gt;</button><button id="av-expand" title="expand">⛶</button><button id="av-close" title="close">✕</button></div>
+    <div class="av-head"><span class="av-name" id="av-name"></span><a id="av-download" title="download" hidden>⬇</a><button id="av-copy" title="copy full source" aria-label="copy full source to clipboard" hidden>⧉</button><button id="av-src" title="toggle rendered / source" hidden>&lt;/&gt;</button><button id="av-edit" title="edit this file" hidden>✎</button><button id="av-expand" title="expand">⛶</button><button id="av-close" title="close">✕</button></div>
     <pre id="av-body"></pre>
+    <!-- co-edit surface (fileedit.js mounts here when ✎ is pressed) -->
+    <div id="av-edit-wrap" hidden></div>
     <div id="av-img-wrap" hidden><img id="av-img" alt=""></div>
     <div id="av-video-wrap" hidden><video id="av-video" controls playsinline preload="metadata"></video></div>
     <div id="av-audio-wrap" hidden><audio id="av-audio" controls preload="metadata"></audio></div>
