@@ -4,7 +4,7 @@
 // conversations in place, without leaving the chat. The rows also carry the
 // per-lieutenant controls that used to live on the lane chips: 👁 watch
 // terminal, ⋯ actions (settings / retire), and the ＋ lieutenant row.
-import { S, cards, lieutenants, lieutenant, lieutenantColor, lieutenantAvatar, lieutenantUnread, targetOwedState, targetOwedStale } from './state.js';
+import { S, cards, lieutenants, lieutenantsByRecent, lieutenant, lieutenantColor, lieutenantAvatar, lieutenantUnread, targetOwedState, targetOwedStale } from './state.js';
 import { api } from './api.js';
 import { esc, setHtmlIfChanged, ctxBarHtml, owedIndHtml } from './util.js';
 import { avatarHtml, avatarGridHtml, wireAvatarGrid } from './avatars.js';
@@ -18,6 +18,11 @@ const panelEl = document.getElementById('lt-switcher');
 const menuEl = document.getElementById('move-menu'); // shared with the board's move menu
 
 let open = false;
+// The row order, in ids, captured when the panel opens and FROZEN while it
+// stays open. The panel re-renders on every board push, so a message landing
+// mid-tap would otherwise re-sort the rows under the captain's finger and he
+// taps the wrong lieutenant. Row content stays live; only the order is pinned.
+let frozenOrder = [];
 export function ltSwitcherOpen() { return open; }
 export function closeLtSwitcher() { if (open) { open = false; renderLtSwitcher(); } }
 
@@ -26,6 +31,7 @@ export function closeLtSwitcher() { if (open) { open = false; renderLtSwitcher()
 trigEl.onclick = () => {
   if (!lieutenants().length) { openNewLieutenant(); return; }
   open = !open;
+  if (open) frozenOrder = lieutenantsByRecent().map((l) => l.id);
   renderLtSwitcher();
 };
 // tap-out closes (the trigger's own click toggled already — exclude it)
@@ -82,12 +88,20 @@ function rowHtml(l) {
     '</div>';
 }
 
+// The frozen order, resolved against the live doc: retired lieutenants drop
+// out, and any that appeared since the panel opened land at the end.
+function panelLieutenants() {
+  const frozen = new Set(frozenOrder);
+  return frozenOrder.map(lieutenant).filter(Boolean)
+    .concat(lieutenants().filter((l) => !frozen.has(l.id)));
+}
+
 // Rendered on every board push while open, so unread/owed/context stay live.
 export function renderLtSwitcher() {
   trigEl.setAttribute('aria-expanded', open ? 'true' : 'false');
   panelEl.hidden = !open;
   if (!open) return;
-  setHtmlIfChanged(panelEl, lieutenants().map(rowHtml).join('') +
+  setHtmlIfChanged(panelEl, panelLieutenants().map(rowHtml).join('') +
     '<button class="lts-add" type="button">＋ lieutenant</button>');
 }
 

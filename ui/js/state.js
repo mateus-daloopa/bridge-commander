@@ -33,6 +33,23 @@ export function card(id) { return cards().find((c) => c.id === id); }
 export function columns() { return (S.doc && S.doc.columns) || []; }
 export function lieutenants() { return (S.doc && S.doc.lieutenants) || []; }
 export function lieutenant(id) { return lieutenants().find((l) => l.id === id); }
+// Lieutenants by most recent conversation — the chat's last message first, and
+// whoever never spoke at the end, ordered by name so equals never swap places.
+// The switcher freezes this at open (ltswitcher.js): rows must not slide under
+// a finger mid-tap.
+export function lieutenantsByRecent() {
+  return lieutenants().slice().sort((a, b) => {
+    const ta = lieutenantChatTs(a), tb = lieutenantChatTs(b);
+    if (ta !== tb) return ta < tb ? 1 : -1;
+    return (a.name || a.id).localeCompare(b.name || b.id);
+  });
+}
+function lieutenantChatTs(l) {
+  const chat = (l && l.chat) || [];
+  let ts = '';
+  for (const m of chat) if (m.ts > ts) ts = m.ts;
+  return ts;
+}
 // The lieutenant behind an event's `actor`, if any. The server stamps chat-say
 // events with the author NAME (not the id — server.js's msg.author), so match
 // both; 'user'/'server'/'worker' actors resolve to nothing.
