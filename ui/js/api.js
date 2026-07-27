@@ -18,7 +18,13 @@ async function j(method, url, body) {
   return r.json();
 }
 
+// Who this tab is, for one purpose only: recognizing the echo of its own
+// artifact write on the shared SSE stream, so the screen doesn't flash at itself.
+// Per page load, thrown away with it — never persisted, never an identity.
+const CLIENT_ID = 'c' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+
 export const api = {
+  clientId: CLIENT_ID,
   createLieutenant: (lt) => j('POST', '/api/lieutenants', Object.assign({ actor: 'user' }, lt)),
   updateLieutenant: (id, patch) => j('PATCH', '/api/lieutenants/' + encodeURIComponent(id), patch),
   retireLieutenant: (id) => j('DELETE', '/api/lieutenants/' + encodeURIComponent(id), { actor: 'user' }),
@@ -55,8 +61,10 @@ export const api = {
   labels: (body) => j('POST', '/api/labels', body),
   artifact: (uri) => j('GET', '/api/artifact?uri=' + encodeURIComponent(uri)),
   // Write an artifact back. `version` is what the GET handed out (sha256 of the
-  // content read); a stale one comes back 409 and nothing is written.
-  saveArtifact: (uri, content, version) => j('PUT', '/api/artifact', { uri, content, version }),
+  // content read); a stale one comes back 409 and nothing is written. `client`
+  // comes back on the SSE `artifact` event as `by`, so this tab can tell its own
+  // write from someone else's.
+  saveArtifact: (uri, content, version) => j('PUT', '/api/artifact', { uri, content, version, client: CLIENT_ID }),
   board: () => j('GET', '/api/board'),
   // archived (frozen) card snapshots, newest first, paged over the append-only
   // log: {archive: [...], total}; restore resurrects one

@@ -75,10 +75,30 @@ export function mountFileEditor(host, opts) {
   prevWrap.hidden = true;
   host.append(bar, edWrap, prevWrap);
 
-  let cm = null, sel = null;
+  let cm = null, sel = null, external = false;
+  // Replace the buffer from OUTSIDE — the file changed under us and the host
+  // decided we should follow. `changed` (0-based line numbers) get a marked
+  // background, because "it was updated" is not information; "these lines" is.
+  // The cursor and the scroll position stay where the reader left them: the
+  // point of updating in place is that he does not lose his spot.
+  function replace(text, changed) {
+    if (!cm) { o.content = text; return; } // vendor still loading — it mounts with this
+    const scroll = cm.getScrollInfo();
+    const cur = cm.getCursor();
+    cm.eachLine((h) => cm.removeLineClass(h, 'background', 'fe-chg')); // the previous round's marks
+    external = true; // this is not the captain typing — onChange must not read it as an edit
+    try { cm.setValue(text); } finally { external = false; }
+    for (const n of changed || []) {
+      if (n >= 0 && n < cm.lineCount()) cm.addLineClass(n, 'background', 'fe-chg');
+    }
+    cm.setCursor({ line: Math.min(cur.line, cm.lastLine()), ch: cur.ch });
+    cm.scrollTo(scroll.left, scroll.top);
+    if (!prevWrap.hidden) showPreview(true); // the preview is showing — re-render it
+  }
   const handle = {
     getValue: () => (cm ? cm.getValue() : o.content || ''),
     selection: () => sel,
+    replace,
     destroy: () => { cm = null; sel = null; host.textContent = ''; },
   };
 
@@ -146,7 +166,7 @@ export function mountFileEditor(host, opts) {
       CM.autoLoadMode(cm, info.mode); // fetches ui/vendor/codemirror/mode/<mode>/<mode>.js
     }
     cm.on('cursorActivity', emitSel);
-    cm.on('change', () => { if (o.onChange) o.onChange(); });
+    cm.on('change', () => { if (o.onChange && !external) o.onChange(); });
     cm.focus();
   }).catch((e) => { edWrap.textContent = '⚠ editor failed to load — ' + e.message; });
 

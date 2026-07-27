@@ -5,7 +5,7 @@ import { md, mdEnhance, copyText } from './md.js';
 import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
 import { openCardThread, syncChatToMain } from './chat.js';
-import { openFile, closeFile } from './filepane.js';
+import { openFile, closeFile, fileKey, fileDirty, fileUpdate, fileNotice } from './filepane.js';
 import { openMoveMenu } from './board.js';
 import { archivedCard, unarchive } from './archive.js';
 
@@ -304,6 +304,7 @@ avEditBtn.onclick = () => {
     name,
     markdown,
     content: drafts.has(uri) ? drafts.get(uri) : content,
+    saved: content, // what is on disk — a restored draft is still unsaved typing
     crumb: c && {
       label: cardEmoji(c) + ' ' + (c.title || c.id),
       title: 'back to this card',
@@ -335,6 +336,39 @@ async function saveArtifactText(uri, text) {
     throw e;
   }
 }
+// The other hand wrote a file (SSE `artifact` from a landed PUT: {uri, version,
+// by}). Four hands means the screen follows by itself — a reload button here
+// would make this two hands taking turns.
+//   buffer clean → take the new text in place, changed lines marked. No asking:
+//                  there is nothing of his to lose, so there is no decision.
+//   buffer dirty → say it and let HIM choose. The one case that earns a click.
+// The write's own client hears its echo and does nothing (`by`), and the version
+// check covers the case where two clients already agree on the text.
+export async function artifactWritten(ev) {
+  const uri = ev && ev.uri;
+  if (!uri || (ev.by && ev.by === api.clientId)) return; // our own save coming back
+  if (fileKey() !== uri) return; // nothing of ours is open on it; a later open re-reads anyway
+  if (versions.get(uri) === ev.version) return;
+  let r;
+  try { r = await api.artifact(uri); } catch (e) { return; } // gone or unreadable — the save will say so
+  if (fileKey() !== uri) return; // he left the screen while we were fetching
+  const take = (note) => {
+    versions.set(uri, r.version);
+    drafts.delete(uri);
+    if (avEditable && avEditable.uri === uri) avEditable.content = r.content;
+    fileUpdate(r.content, note);
+  };
+  if (!fileDirty()) return take('↻ the other hand wrote this file');
+  // Dirty: his text is NOT touched and the version stays pinned to what his
+  // draft started from, so saving it is still a 409 — the last line of defense
+  // holds even if he ignores this line entirely.
+  fileNotice('⚠ the other hand wrote this file while you have unsaved text here — nothing of yours was touched.',
+    'warn', [
+      { label: '↻ show me theirs', title: 'load the version on disk, changed lines marked — your unsaved text goes', onClick: () => take('↻ loaded the version on disk') },
+      { label: '✋ keep mine', title: 'leave your text alone (saving it will ask you to confirm the overwrite)', onClick: () => {} },
+    ]);
+}
+
 // An artifact entry may carry a content-type hint ({uri, label, type}) — e.g.
 // the auto-attached worker brief is markdown in a `.prompt` file. The hint
 // wins; the extension regex is the fallback.

@@ -40,6 +40,32 @@ handoff so the captain reads the result, not the history. Progress belongs in ev
 Questions on a card go through its thread (`bc-axi say card:<id>`); you are the interlocutor
 for your cards' threads, always.
 
+## A co-edited artifact is written through the board, never straight to disk
+
+A card artifact can have the captain's **editor open on it right now** — the board's file
+screen is a real editor and he saves from it. So an artifact under joint editing is not an
+ordinary file. Read and write it through the board:
+
+```
+bc-axi artifact read <uri> > /tmp/a.md            # content on stdout, "version: <sha256>" on stderr
+# ...edit /tmp/a.md...
+bc-axi artifact write <uri> --file /tmp/a.md --version <that version>
+```
+
+The version is the whole point. If he saved while you were thinking, the write is **refused**
+(409, nothing written, exit 1) and you redo your change on top of his text. Writing the file
+directly checks nothing and destroys his edit silently. A write that lands also updates his
+open editor live, with the changed lines marked — that is why the door is worth using even
+when nobody is racing you. Hand a worker an artifact to edit and this goes in its brief.
+
+**Scope: only files under joint editing** — card artifacts. Worktree code, reports, notes,
+anything nobody has open on the board: ordinary files, ordinary tools. There is no general
+rule here and there should not be one.
+
+This is **discipline, not mechanism**. Your file-writing tool still exists and still reaches
+those paths; nothing makes the wrong door impossible. That is exactly why the rule is written
+down.
+
 ## Conversation etiquette
 
 The captain talks to you through your chats — main chat and card threads — and expects

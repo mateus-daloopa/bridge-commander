@@ -766,10 +766,18 @@ function setStatus(card, body) {
 
 // ---------- SSE clients ----------
 const sseClients = new Set();
-function broadcast() {
-  const payload = 'event: board\ndata: ' + JSON.stringify(publicBoard('user')) + '\n\n';
+function sseSend(event, data) {
+  const payload = 'event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n';
   for (const res of sseClients) res.write(payload);
 }
+function broadcast() { sseSend('board', publicBoard('user')); }
+// A file an editor may have open changed on disk (through PUT /api/artifact —
+// the one door). Tiny event on the SAME stream, not a channel of its own: which
+// uri, which version now, and `by` = the writer's own client tag (a random
+// per-page string the browser sends, absent for a CLI write) so the tab that
+// just saved recognizes its echo instead of flashing at itself. The screen
+// fetches the content itself if it cares.
+function broadcastArtifact(uri, version, by) { sseSend('artifact', { uri, version, by: by || '' }); }
 
 // ---------- pane hub (👁 peek: live pane frames over a per-target SSE) ----------
 // The harness port's OPTIONAL openPane capability, ref-counted per pane key:
@@ -2306,7 +2314,11 @@ const server = http.createServer(async (req, res) => {
     //   - attachment:// is immutable: an upload is the record of what was sent.
     // Lost-update guard: the client sends the version it read. If disk has
     // moved since, nothing is written and the answer is 409 carrying what is
-    // there now — the captain's text stays on his screen either way.
+    // there now — the captain's text stays on his screen either way. It applies
+    // to EVERY writer, agent included (`bc-axi artifact write`): the door is
+    // locked on both sides or it is not locked.
+    // A write that lands also announces itself on the board SSE (event
+    // `artifact`), so an editor already open on the file follows along.
     if (route === 'PUT /api/artifact') {
       let raw;
       try { raw = await readBodyUpto(req, ARTIFACT_MAX_BYTES + 65536); }
@@ -2352,7 +2364,12 @@ const server = http.createServer(async (req, res) => {
         try { fs.unlinkSync(tmp); } catch (e2) {}
         return sendJson(res, 500, { error: 'write failed: ' + e.message });
       }
-      return sendJson(res, 200, { ok: true, version: sha256(next), bytes: next.length });
+      const newVersion = sha256(next);
+      // Whoever has this file open hears about it right away — that is what
+      // makes four hands four hands instead of two taking turns around a
+      // reload button. The writer's own client recognizes the echo.
+      broadcastArtifact(uri, newVersion, String(body.client || ''));
+      return sendJson(res, 200, { ok: true, version: newVersion, bytes: next.length });
     }
 
     // ----- chat attachments (uploads) -----

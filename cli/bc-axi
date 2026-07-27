@@ -50,7 +50,7 @@ const opts = {
   level: null, kind: null, actor: null, reason: null, note: null, attrs: [], labels: [], json: false,
   worker: null, ttl: null, spawn: false, harness: null,
   mode: null, briefFile: null, resume: false, outcome: null, model: null, effort: null, park: false,
-  uri: null,
+  uri: null, file: null, version: null,
 };
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -90,11 +90,13 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--park') opts.park = true;
   else if (a === '--outcome') opts.outcome = argv[++i];
   else if (a === '--uri') opts.uri = argv[++i];
+  else if (a === '--file') opts.file = argv[++i];
+  else if (a === '--version') opts.version = argv[++i];
   else positional.push(a);
 }
 let cmd = positional.shift();
 // Two-word verbs mirror the DNA operation names: `card create`, `lieutenant list`, …
-if ((cmd === 'card' || cmd === 'lieutenant' || cmd === 'project' || cmd === 'worker') && positional.length) cmd = cmd + ' ' + positional.shift();
+if ((cmd === 'card' || cmd === 'lieutenant' || cmd === 'project' || cmd === 'worker' || cmd === 'artifact') && positional.length) cmd = cmd + ' ' + positional.shift();
 // Three-word verb: `card artifact add|rm`.
 if (cmd === 'card artifact' && positional.length) cmd = cmd + ' ' + positional.shift();
 
@@ -161,8 +163,15 @@ function request(method, urlPath, body, timeoutMs) {
       res.on('data', (c) => (out += c));
       res.on('end', () => {
         let parsed; try { parsed = JSON.parse(out); } catch (e) { parsed = out; }
-        if (res.statusCode >= 400) reject(new Error('HTTP ' + res.statusCode + ': ' + out));
-        else resolve(parsed);
+        if (res.statusCode >= 400) {
+          // The status and the parsed body ride on the error: a caller that has
+          // something specific to say about one status (the artifact write's
+          // 409) can, and everything else still prints the raw line.
+          const err = new Error('HTTP ' + res.statusCode + ': ' + out);
+          err.status = res.statusCode;
+          err.body = parsed;
+          reject(err);
+        } else resolve(parsed);
       });
     });
     req.on('timeout', () => { req.destroy(new Error('timeout')); });
@@ -647,6 +656,55 @@ async function cmdArtifactRemove() {
   console.log((r.removed ? 'removed' : 'not present') + ' artifact -> ' + id + ': ' + opts.uri);
 }
 
+// ---------- artifact read / write (the one door for a co-edited artifact) ----------
+// A card artifact can have the captain's editor open on it RIGHT NOW. Writing it
+// with a plain file write is a lost update waiting to happen: it checks nothing,
+// tells nobody. These two go through the server, which means the same version
+// check the captain's save gets — and the same 409 when the file moved.
+//
+// The honest cycle is three steps and the middle one is yours:
+//   bc-axi artifact read <uri> > /tmp/a.md      # prints the version on stderr
+//   ...edit /tmp/a.md...
+//   bc-axi artifact write <uri> --file /tmp/a.md --version <that version>
+async function cmdArtifactRead() {
+  const uri = positional[0];
+  if (!uri) {
+    die('usage: bc-axi artifact read <uri> [--json]\n' +
+      '  Read a card artifact THROUGH the board (uri exactly as the card lists it).\n' +
+      '  Content on stdout, "version: <sha256>" on stderr — hand that version back to\n' +
+      '  artifact write. --json prints {name, version, content} on stdout instead.');
+  }
+  const r = await request('GET', '/api/artifact?uri=' + encodeURIComponent(uri));
+  if (opts.json) return console.log(JSON.stringify({ name: r.name, version: r.version, content: r.content }, null, 2));
+  process.stdout.write(r.content);
+  console.error('version: ' + r.version);
+}
+async function cmdArtifactWrite() {
+  const uri = positional[0];
+  if (!uri || !opts.file || !opts.version) {
+    die('usage: bc-axi artifact write <uri> --file <f|-> --version <sha256>\n' +
+      '  Write a card artifact THROUGH the board — the ONLY way to write one that\n' +
+      '  someone may have open in the editor. --version is the one artifact read\n' +
+      '  handed you: if the file moved since, NOTHING is written and this exits 1.\n' +
+      '  (No --version on purpose: a write that re-reads the version itself would\n' +
+      '  silently overwrite whatever landed while you were thinking.)');
+  }
+  const content = readInput(opts.file);
+  let r;
+  try {
+    r = await request('PUT', '/api/artifact', { uri, content, version: opts.version });
+  } catch (e) {
+    if (e.status !== 409) throw e;
+    // NEVER swallowed: the whole point of the door is that the writer finds out.
+    const now = (e.body && e.body.version) || '?';
+    die('NOT WRITTEN — ' + uri + ' changed on disk since version ' + opts.version + '.\n' +
+      '  it is now at version ' + now + ' (someone else, probably the captain, wrote it).\n' +
+      '  Re-read it, redo your change on top of THAT text, and write with the new version:\n' +
+      '    bc-axi artifact read ' + uri);
+  }
+  console.log('wrote ' + uri + '\n  ' + r.bytes + ' bytes, version ' + r.version);
+}
+
 // ---------- card.start / workers (F5) ----------
 async function cmdStart() {
   const id = positional[0];
@@ -954,6 +1012,7 @@ const commands = {
   'card archive': cmdArchive, 'card restore': cmdRestore, 'card show': cmdShow,
   'card start': cmdStart, 'card park': cmdCardPark,
   'card artifact add': cmdArtifactAdd, 'card artifact rm': cmdArtifactRemove,
+  'artifact read': cmdArtifactRead, 'artifact write': cmdArtifactWrite,
   'worker signal': cmdWorkerSignal, 'worker done': cmdWorkerDone, 'worker send': cmdWorkerSend,
   'worker pause': cmdWorkerPause,
   show: cmdShow, // alias for card show
@@ -1029,6 +1088,16 @@ if (!commands[cmd]) {
     '                                         promote a file to the card\'s curated artifacts list\n' +
     '                                         (deliberate — a chat upload alone never does this). Idempotent\n' +
     '  card artifact rm <card-id> --uri <...>  remove an artifact entry by uri\n' +
+    '\nartifact (co-edited files — the captain may have one open RIGHT NOW):\n' +
+    '  artifact read <uri> [--json]           read a card artifact through the board: content on\n' +
+    '                                         stdout, "version: <sha256>" on stderr\n' +
+    '  artifact write <uri> --file <f|-> --version <sha256>\n' +
+    '                                         write it back through the board — the ONLY way to\n' +
+    '                                         write an artifact someone may be editing. A stale\n' +
+    '                                         --version writes NOTHING and exits 1 (never silent);\n' +
+    '                                         a write that lands updates the captain\'s open editor\n' +
+    '                                         live. Writing the file directly on disk instead skips\n' +
+    '                                         both — see DOCTRINE.md\n' +
     '  worker send <card-id> "<instructions>" [--text-file f|-]\n' +
     '                                         hand a LIVE worker new instructions: typed into its\n' +
     '                                         session with verified submission (run by the lieutenant)\n' +
