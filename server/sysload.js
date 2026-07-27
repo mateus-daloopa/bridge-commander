@@ -194,9 +194,10 @@ function createSampler(opts) {
     } catch (e) { return null; } // docker absent/broken -> the row hides
   }
 
-  // Attribute each session's panes to its entities: a window-granular worker
-  // claims its own window's panes; every unclaimed pane falls to the session's
-  // window-less target (the lieutenant — or a legacy whole-session worker).
+  // Attribute each session's panes to its entities: a window-granular target
+  // (the lieutenant in its own window, its workers in theirs) claims its own
+  // window's panes; every unclaimed pane falls to the session's window-less
+  // target — a lieutenant or worker still carrying a session-granular ref.
   async function entitySamples(table, elapsedSec) {
     const list = targets();
     const bySession = new Map();

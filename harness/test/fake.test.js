@@ -144,3 +144,37 @@ test('kill ends a session for good; idempotent; file-backed marker removed', asy
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The fake models tmux's session/window granularity, because that is what the
+// lieutenant/worker cohabitation actually rides on (server supervision tests
+// depend on this fidelity — see test/supervise.test.js).
+test('session-granular kill takes the whole session; window-granular kill takes one window', async () => {
+  const lt = await fake.spawn('/tmp/x', 'lt', { session: 'bc-s' });
+  const w1 = await fake.spawn('/tmp/x', 'w1', { session: 'bc-s', window: 'w-1' });
+  const w2 = await fake.spawn('/tmp/x', 'w2', { session: 'bc-s', window: 'w-2' });
+  fake.kill(w1);
+  assert.strictEqual(await fake.alive(w1), false);
+  assert.strictEqual(await fake.alive(w2), true, 'a sibling window is untouched');
+  fake.kill(lt); // no window: the whole tmux session, every window with it
+  assert.strictEqual(await fake.alive(w2), false);
+});
+
+test('a session-granular ref reads alive while ANY window of its session lives', async () => {
+  const lt = await fake.spawn('/tmp/x', 'lt', { session: 'bc-s' });
+  const w = await fake.spawn('/tmp/x', 'w', { session: 'bc-s', window: 'w-1' });
+  fake.kill(lt); // session-granular: kills everything…
+  assert.strictEqual(await fake.alive(lt), false);
+  await fake.resume(w); // …one window back up
+  assert.strictEqual(await fake.alive(w), true);
+  assert.strictEqual(await fake.alive(lt), true,
+    'the session-granular ref answers for whichever window has focus — the corpse-masking bug');
+});
+
+test('adoptWindow re-keys the SAME live agent to session:window, and is idempotent', async () => {
+  const ref = await fake.spawn('/tmp/x', 'charter', { session: 'bc-s' });
+  const moved = await fake.adoptWindow(ref, 'lt');
+  assert.deepStrictEqual(moved, { ...ref, window: 'lt' });
+  assert.strictEqual(await fake.alive(moved), true);
+  assert.deepStrictEqual(fake.transcript(moved), ['charter'], 'memory follows the agent — never restarted');
+  assert.deepStrictEqual(await fake.adoptWindow(moved, 'lt'), moved, 'idempotent');
+});

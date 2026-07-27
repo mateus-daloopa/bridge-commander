@@ -99,3 +99,63 @@ test('slash commands: the shared trio plus claude-only /autocompact; /help lists
   // unknown commands throw without ever touching tmux
   await assert.rejects(() => claude.runCommand(ref, '/nope'), /unknown command \/nope/);
 });
+
+// adoptWindow — the migration that pins an already-running, session-granular
+// agent (a lieutenant registered before its ref carried a window) to its own
+// window. Pure tmux plumbing, so tryTmux is stubbed and every call inspected;
+// the whole point is that the agent is RENAMED, never killed or relaunched.
+function stubTryTmux(answer) {
+  const tmuxMod = require('../tmux.js');
+  const original = tmuxMod.tryTmux;
+  const calls = [];
+  tmuxMod.tryTmux = async (...args) => { calls.push(args); return answer(args); };
+  return { calls, restore() { tmuxMod.tryTmux = original; } };
+}
+// A session whose windows are `windows` ([[index, name], …]); null session = gone.
+function tmuxWith(windows) {
+  return (args) => {
+    if (args[0] === 'has-session') return windows ? '' : null;
+    if (args[0] === 'list-windows') {
+      if (!windows) return null;
+      const idx = args.indexOf('-F');
+      return windows.map(([i, n]) => (args[idx + 1].includes('window_index') ? i + '\t' + n : n)).join('\n');
+    }
+    if (args[0] === 'rename-window') return '';
+    return null;
+  };
+}
+
+test('adoptWindow renames the session FIRST window and returns a window-granular ref', async () => {
+  const stub = stubTryTmux(tmuxWith([['0', 'node'], ['1', 'w-card-7']]));
+  try {
+    const ref = { harness: 'claude', session: 'bc-lt-ada', cwd: '/tmp', resumeId: 'u1' };
+    assert.deepStrictEqual(await claude.adoptWindow(ref, 'lt', ['w-card-7']), { ...ref, window: 'lt' });
+    const rename = stub.calls.find((c) => c[0] === 'rename-window');
+    assert.deepStrictEqual(rename, ['rename-window', '-t', '=bc-lt-ada:0', 'lt']);
+    assert.ok(!stub.calls.some((c) => c[0] === 'kill-window' || c[0] === 'kill-session'),
+      'the running lieutenant is renamed, never killed');
+  } finally { stub.restore(); }
+});
+
+test('adoptWindow refuses when the first window belongs to a worker', async () => {
+  // the lieutenant's own window is gone; window 1 is a live worker — renaming
+  // THAT would hand a worker's pane to the lieutenant's ref
+  const stub = stubTryTmux(tmuxWith([['1', 'w-card-7']]));
+  try {
+    const ref = { harness: 'claude', session: 'bc-lt-ada', cwd: '/tmp' };
+    assert.strictEqual(await claude.adoptWindow(ref, 'lt', ['w-card-7']), null);
+    assert.ok(!stub.calls.some((c) => c[0] === 'rename-window'), 'nothing renamed');
+  } finally { stub.restore(); }
+});
+
+test('adoptWindow with no live session hands back the window-granular ref (nothing to rename)', async () => {
+  const stub = stubTryTmux(tmuxWith(null));
+  try {
+    const ref = { harness: 'claude', session: 'bc-lt-ada', cwd: '/tmp' };
+    assert.deepStrictEqual(await claude.adoptWindow(ref, 'lt', []), { ...ref, window: 'lt' });
+    assert.ok(!stub.calls.some((c) => c[0] === 'rename-window'));
+    // already window-granular: no tmux call at all
+    const done = { ...ref, window: 'lt' };
+    assert.strictEqual(await claude.adoptWindow(done, 'lt', []), done);
+  } finally { stub.restore(); }
+});

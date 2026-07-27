@@ -36,6 +36,14 @@
 //       stops delivery and releases resources. All async-safe.
 //   paneSnapshot(ref, { lines? }) -> Promise<string>
 //       one-shot capture — the initial paint / non-streaming fallback.
+// — migration of a session-granular ref to window granularity (the lieutenant
+// whose session it turned out to cohabit with its worker windows):
+//   adoptWindow(ref, window, taken?) -> Promise<HarnessRef|null>
+//       make the SAME running agent addressable as `session:window` without
+//       restarting it. `taken` names windows that belong to someone else and
+//       must never be adopted. null = the agent's window cannot be identified;
+//       the caller keeps the old ref. Idempotent: a ref that already carries a
+//       window comes back unchanged.
 // — and slash commands + session status (the UI composer's "/" and the
 // context bars; agent-status.js holds the shared machinery):
 //   commands(ref?) -> [{ name, description }]

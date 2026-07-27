@@ -124,6 +124,35 @@ async function killPane(session, window) {
   }
 }
 
+// adoptWindow(ref, window, taken?) -> ref | null — migrate a SESSION-granular
+// ref to window granularity without restarting the agent it addresses. Born
+// session-granular, an agent that cohabits its session (a lieutenant with its
+// worker windows) is addressed as `=session:`, which resolves to whatever
+// window has FOCUS: killPane takes the whole session and paneCommand reads a
+// sibling's pane. Pinning the ref to the agent's own window fixes both.
+//
+// The agent's window is the session's FIRST (lowest-index) one — it was born
+// with the session, every sibling was appended after it. `taken` names windows
+// that provably belong to someone else (the caller's worker windows), so a
+// session whose original window is gone is never mis-adopted.
+//
+// rename-window also turns tmux's automatic-rename off for that window, so the
+// name sticks. Nothing live to rename (session gone) still returns the
+// window-granular ref — the next spawn/resume creates the window. null means
+// "cannot tell which window is the agent's": the ref is left alone.
+async function adoptWindow(ref, window, taken = []) {
+  if (ref.window) return ref;
+  if (!(await hasSession(ref.session))) return { ...ref, window };
+  if (await hasWindow(ref.session, window)) return { ...ref, window };
+  const out = await t.tryTmux('list-windows', '-t', `=${ref.session}:`, '-F', '#{window_index}\t#{window_name}');
+  const first = out === null ? null : out.split('\n').find((l) => l.trim());
+  if (!first) return null;
+  const [index, name] = first.trim().split('\t');
+  if (!index || taken.includes(name)) return null;
+  if (await t.tryTmux('rename-window', '-t', `=${ref.session}:${index}`, window) === null) return null;
+  return { ...ref, window };
+}
+
 // launchAndSettle — send the launch command into the pane, wait for the agent
 // process and its main UI, auto-accepting the harness's trust dialog if it
 // appears (a fresh cwd shows one even in bypass mode; the accept option is
@@ -306,6 +335,7 @@ module.exports = {
   claimPaneNames,
   createPane,
   killPane,
+  adoptWindow,
   launchAndSettle,
   onTurnEnd,
   openPane,

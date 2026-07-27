@@ -60,17 +60,18 @@ test('dead lieutenant is respawned: ref updated, level-1 respawned event, drain 
     });
     const lt = (await s.api('GET', '/api/lieutenants')).body.lieutenants[0];
     assert.strictEqual(lt.ref.session, 'bc-lt-ada'); // same session name — an incarnation, not a new entity
+    assert.strictEqual(lt.ref.window, 'lt'); // the seeded session-only ref migrated to its own window
     assert.notStrictEqual(lt.ref.resumeId, 'uuid-old'); // fake had no matching memory: fresh id
     // exactly ONE respawn (alive afterwards — attempts reset, no churn) + the drain nudge landed
     await sleep(500);
     const b = (await s.api('GET', '/api/board')).body;
     assert.strictEqual(b.events.filter((e) => e.kind === 'respawned').length, 1);
-    const sends = readSends(fdir, 'bc-lt-ada');
+    const sends = readSends(fdir, 'bc-lt-ada:lt');
     assert.strictEqual(sends.length, 1);
     assert.match(sends[0].text, /respawned — run: bc-axi drain/);
     // no recoverable memory (fake resumable=false) → relaunched with the
     // rebuilt doctrine+charter prompt instead of a bare session
-    const rec = JSON.parse(fs.readFileSync(path.join(fdir, 'bc-lt-ada.json'), 'utf8'));
+    const rec = JSON.parse(fs.readFileSync(path.join(fdir, 'bc-lt-ada:lt.json'), 'utf8'));
     assert.match(rec.prompt, /Respawned without memory/);
     assert.match(rec.prompt, /bc-axi drain/);
   } finally {
@@ -112,7 +113,7 @@ test('non-resumable respawn relaunches with charter + owned cards + pending queu
       const b = (await s.api('GET', '/api/board')).body;
       return b.events.some((e) => e.kind === 'respawned');
     });
-    const rec = JSON.parse(fs.readFileSync(path.join(fdir, 'bc-lt-ada.json'), 'utf8'));
+    const rec = JSON.parse(fs.readFileSync(path.join(fdir, 'bc-lt-ada:lt.json'), 'utf8'));
     assert.match(rec.prompt, /guard the port domain/, 'charter carried');
     assert.match(rec.prompt, /Your cards \(2\)/);
     assert.match(rec.prompt, /- fix-1 \[backlog\] Fix one/);
@@ -159,6 +160,9 @@ test('wake heartbeat: a live lieutenant with pending items is woken by the sweep
   const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-'));
   const nowIso = new Date().toISOString();
   fakeSession(fdir, 'bc-lt-ada'); // ALIVE before the server boots — never enters the respawn branch
+  // ... and session-granular, like every lieutenant registered before the ref
+  // was pinned to a window: the sweep migrates it in place, so the wake lands
+  // on 'bc-lt-ada:lt' without the lieutenant ever being restarted.
   const s = await startServer({
     env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: TICK, BC_PRWATCH_INTERVAL_MS: '0', BC_WAKE_TTL_MS: '60000' },
     seed: (dir) => {
@@ -179,13 +183,13 @@ test('wake heartbeat: a live lieutenant with pending items is woken by the sweep
   try {
     // the sweep notices the live-but-never-nudged lieutenant and wakes it
     const sends = await until('heartbeat wake', () => {
-      const got = readSends(fdir, 'bc-lt-ada');
+      const got = readSends(fdir, 'bc-lt-ada:lt');
       return got.length ? got : null;
     });
     assert.match(sends[0].text, /1 pending item\(s\) — run: bc-axi drain/);
     // fresh nudge within TTL: further ticks stay coalesced, no wake spam
     await sleep(600);
-    assert.strictEqual(readSends(fdir, 'bc-lt-ada').length, 1, 'coalesced while the nudge is fresh');
+    assert.strictEqual(readSends(fdir, 'bc-lt-ada:lt').length, 1, 'coalesced while the nudge is fresh');
     assert.strictEqual((await s.api('GET', '/api/board')).body.events.filter((e) => e.kind === 'respawned').length, 0);
     // acked -> nothing pending -> the sweep goes quiet. Ack the seeded item by
     // its global seq (1) directly rather than draining first: a GET /api/feed
@@ -195,7 +199,7 @@ test('wake heartbeat: a live lieutenant with pending items is woken by the sweep
     // Acking closes the queue atomically, leaving no pending-but-un-nudged window.
     await s.api('POST', '/api/feed/ack', { seq: 1 });
     await sleep(600);
-    assert.strictEqual(readSends(fdir, 'bc-lt-ada').length, 1, 'no re-nudge after the queue is handled');
+    assert.strictEqual(readSends(fdir, 'bc-lt-ada:lt').length, 1, 'no re-nudge after the queue is handled');
   } finally {
     await s.stop();
     fs.rmSync(fdir, { recursive: true, force: true });
@@ -225,7 +229,7 @@ test('wake heartbeat: a stale nudge lapses after BC_WAKE_TTL_MS and the sweep re
     // never drained: the first wake's nudge outlives its TTL and the next
     // sweep tick fires again — a send-keys that never became a turn self-heals
     const sends = await until('re-fired wake after TTL', () => {
-      const got = readSends(fdir, 'bc-lt-ada');
+      const got = readSends(fdir, 'bc-lt-ada:lt');
       return got.length >= 2 ? got : null;
     });
     for (const snd of sends.slice(0, 2)) assert.match(snd.text, /1 pending item\(s\) — run: bc-axi drain/);
@@ -288,6 +292,92 @@ test('dead worker without done: worker-died QueueItem + card event, card stays W
     assert.strictEqual(items.filter((i) => i.kind === 'worker-died').length, 1);
     assert.ok(!items.some((i) => i.card === 'fine'), 'live worker untouched');
     assert.ok(!items.some((i) => i.card === 'finished'), 'done worker never nagged about');
+  } finally {
+    await s.stop();
+    fs.rmSync(fdir, { recursive: true, force: true });
+  }
+});
+
+// A lieutenant is a WINDOW, not a session: its worker windows cohabit that
+// session, so a session-granular ref would take every one of them down on
+// revive (and read its own liveness off whichever window has focus). The fake
+// models both tmux behaviors — a session-granular kill takes the siblings, a
+// session-granular alive answers for any live window — so these two pin the
+// real thing without tmux.
+test('reviving a lieutenant kills only its own window: sibling worker windows survive', async () => {
+  const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-'));
+  const nowIso = new Date().toISOString();
+  fakeSession(fdir, 'bc-lt-ada:w-live'); // a live worker window, alive before boot
+  const s = await startServer({
+    env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: TICK, BC_PRWATCH_INTERVAL_MS: '0' },
+    seed: (dir) => seedBoard(dir, {
+      lieutenants: [{
+        id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [], created: nowIso,
+        // registered BEFORE lieutenant refs carried a window (a founder, an
+        // older board): the sweep migrates it in place
+        ref: { harness: 'fake', session: 'bc-lt-ada', cwd: '/tmp', resumeId: 'uuid-gone' },
+      }],
+      cards: [{
+        id: 'live', title: 'Live', type: 'implementation', owner: 'ada', column: 'working',
+        labels: [], attributes: { repo: 'proj', session: 'bc-lt-ada:w-live' }, body: '',
+        created: nowIso, updated: nowIso, threadStart: null, pendingOrder: null, events: [], thread: [],
+      }],
+      workers: [
+        { card: 'live', ref: { harness: 'fake', session: 'bc-lt-ada', window: 'w-live', cwd: '/tmp', resumeId: 'w1' },
+          worktree: { path: '/tmp/none', tool: 'git' }, branch: 'bc/live', project: 'proj', spawnedAt: nowIso, done: false },
+      ],
+    }),
+  });
+  try {
+    // dead lieutenant, live worker beside it: the sweep must still see a corpse
+    // (session-granular, the worker's pane would mask it) and revive it
+    await until('respawned event', async () => {
+      const b = (await s.api('GET', '/api/board')).body;
+      return b.events.some((e) => e.kind === 'respawned' && /Ada/.test(e.text));
+    });
+    const lt = (await s.api('GET', '/api/lieutenants')).body.lieutenants[0];
+    assert.strictEqual(lt.ref.window, 'lt', 'the ref migrated to the lieutenant window');
+    await sleep(600); // several more ticks — a worker-died would have landed by now
+    assert.ok(fs.existsSync(path.join(fdir, 'bc-lt-ada:w-live.json')), 'the worker window survived the revive');
+    const card = (await s.api('GET', '/api/cards/live')).body;
+    assert.ok(!card.events.some((e) => e.kind === 'worker-died'), 'no false worker-died');
+    const items = (await s.api('GET', '/api/feed?lieutenant=ada')).body.items;
+    assert.ok(!items.some((i) => i.kind === 'worker-died'), 'no worker-died item for the owner');
+  } finally {
+    await s.stop();
+    fs.rmSync(fdir, { recursive: true, force: true });
+  }
+});
+
+test('a dead lieutenant reads dead even while a sibling worker window is alive', async () => {
+  const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-'));
+  const nowIso = new Date().toISOString();
+  fakeSession(fdir, 'bc-lt-ada:w-busy'); // the busy worker that used to mask the corpse
+  const s = await startServer({
+    env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: TICK, BC_PRWATCH_INTERVAL_MS: '0' },
+    seed: (dir) => seedBoard(dir, {
+      lieutenants: [{
+        id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [], created: nowIso,
+        // already window-granular, and its window is NOT up
+        ref: { harness: 'fake', session: 'bc-lt-ada', window: 'lt', cwd: '/tmp', resumeId: 'uuid-gone' },
+      }],
+      cards: [{
+        id: 'busy', title: 'Busy', type: 'implementation', owner: 'ada', column: 'working',
+        labels: [], attributes: { repo: 'proj', session: 'bc-lt-ada:w-busy' }, body: '',
+        created: nowIso, updated: nowIso, threadStart: null, pendingOrder: null, events: [], thread: [],
+      }],
+      workers: [
+        { card: 'busy', ref: { harness: 'fake', session: 'bc-lt-ada', window: 'w-busy', cwd: '/tmp', resumeId: 'w1' },
+          worktree: { path: '/tmp/none', tool: 'git' }, branch: 'bc/busy', project: 'proj', spawnedAt: nowIso, done: false },
+      ],
+    }),
+  });
+  try {
+    await until('respawned event', async () => {
+      const b = (await s.api('GET', '/api/board')).body;
+      return b.events.some((e) => e.kind === 'respawned' && /Ada/.test(e.text));
+    });
+    assert.ok(fs.existsSync(path.join(fdir, 'bc-lt-ada:w-busy.json')), 'the worker window survived');
   } finally {
     await s.stop();
     fs.rmSync(fdir, { recursive: true, force: true });
