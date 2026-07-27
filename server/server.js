@@ -905,6 +905,9 @@ function sendBytes(req, res, data, headers) {
   res.writeHead(200, { ...base, 'Content-Length': data.length });
   res.end(data);
 }
+// Content-derived version for a file the UI may edit: the GET hands it out,
+// the PUT demands it back, and a mismatch is a 409 instead of a lost edit.
+const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(code, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
@@ -2283,7 +2286,73 @@ const server = http.createServer(async (req, res) => {
       catch (e) { return sendJson(res, 404, { error: 'unreadable: ' + e.message }); }
       if (data.length > 2e6) return sendJson(res, 413, { error: 'file too large to preview' });
       if (data.includes(0)) return sendJson(res, 415, { error: 'binary file' });
-      return sendJson(res, 200, { name, content: data.toString('utf8') });
+      // The version travels with the content so an editor can hand it back on
+      // save: sha256 of the exact bytes on disk. Content-derived on purpose —
+      // mtime+size misses two writes in the same second at the same length.
+      return sendJson(res, 200, { name, content: data.toString('utf8'), version: sha256(data) });
+    }
+
+    // Artifact WRITE — what the file editor's save actually does. Deliberately
+    // narrow: this is an artifact editor, not remote arbitrary-file write on
+    // this machine. The board has no auth of its own (the network boundary is
+    // the auth boundary), so every guard below is load-bearing:
+    //   - the uri must ALREADY be listed on a live card — the same allowlist
+    //     the GET uses. Anything else is 403, and there is no flag to turn it
+    //     off;
+    //   - file:// only, absolute, no `..` (path.resolve is idempotent on a
+    //     clean absolute path), and no symlink anywhere along it (realpath must
+    //     come back unchanged), so a listed artifact can never be a door to
+    //     somewhere else;
+    //   - attachment:// is immutable: an upload is the record of what was sent.
+    // Lost-update guard: the client sends the version it read. If disk has
+    // moved since, nothing is written and the answer is 409 carrying what is
+    // there now — the captain's text stays on his screen either way.
+    if (route === 'PUT /api/artifact') {
+      let raw;
+      try { raw = await readBodyUpto(req, ARTIFACT_MAX_BYTES + 65536); }
+      catch (e) {
+        if (e.code === 413) return sendJson(res, 413, { error: 'content too large (max ' + ARTIFACT_MAX_BYTES + ' bytes)' });
+        throw e;
+      }
+      const body = JSON.parse(raw || '{}');
+      const uri = String(body.uri || '');
+      if (typeof body.content !== 'string') return sendJson(res, 400, { error: 'content required' });
+      const listed = board.cards.some((c) => Array.isArray(c.attributes && c.attributes.artifacts) &&
+        c.attributes.artifacts.some((a) => a && a.uri === uri));
+      if (!listed) return sendJson(res, 403, { error: 'not an artifact of any card — refusing to write' });
+      if (!uri.startsWith('file://')) return sendJson(res, 403, { error: 'only file:// artifacts are writable' });
+      const file = uri.slice('file://'.length);
+      if (path.resolve(file) !== file) return sendJson(res, 403, { error: 'unsafe artifact path' });
+      let st, real;
+      try { st = fs.statSync(file); real = fs.realpathSync(file); }
+      catch (e) { return sendJson(res, 404, { error: 'unreadable: ' + e.message }); }
+      if (!st.isFile()) return sendJson(res, 403, { error: 'not a regular file' });
+      if (real !== file) return sendJson(res, 403, { error: 'artifact path resolves elsewhere (symlink) — refusing to write' });
+      let cur;
+      try { cur = fs.readFileSync(file); }
+      catch (e) { return sendJson(res, 404, { error: 'unreadable: ' + e.message }); }
+      if (cur.includes(0)) return sendJson(res, 415, { error: 'binary file' });
+      const version = sha256(cur);
+      if (String(body.version || '') !== version) {
+        return sendJson(res, 409, {
+          error: 'the file changed on disk since you opened it — nothing was written',
+          version, content: cur.toString('utf8'),
+        });
+      }
+      const next = Buffer.from(body.content, 'utf8');
+      if (next.length > ARTIFACT_MAX_BYTES) return sendJson(res, 413, { error: 'content too large (max ' + ARTIFACT_MAX_BYTES + ' bytes)' });
+      // Atomic swap: write a sibling temp file, then rename over the original.
+      // Truncating the artifact and writing into it would leave it half-written
+      // if the process died mid-write; a rename either happened or it didn't.
+      const tmp = path.join(path.dirname(file), '.' + path.basename(file) + '.bc-' + process.pid + '-' + Date.now() + '.tmp');
+      try {
+        fs.writeFileSync(tmp, next, { mode: st.mode & 0o777 });
+        fs.renameSync(tmp, file);
+      } catch (e) {
+        try { fs.unlinkSync(tmp); } catch (e2) {}
+        return sendJson(res, 500, { error: 'write failed: ' + e.message });
+      }
+      return sendJson(res, 200, { ok: true, version: sha256(next), bytes: next.length });
     }
 
     // ----- chat attachments (uploads) -----

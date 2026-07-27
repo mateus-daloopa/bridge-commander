@@ -119,6 +119,10 @@
     <div id="chat-feed"></div>
     <div id="chat-send-err" hidden></div>
     <div id="chat-atts" hidden></div>
+    <!-- file context: while a file screen is open, this says which file (and
+         which lines, when something is selected) rides along with every
+         message sent from here — see chat.js refreshQuote -->
+    <div id="chat-quote" hidden></div>
     <form id="chat-form" class="composer">
       <!-- slash-command autocomplete: opens when the composer holds a single
            leading-"/" token; fed by /api/commands for the current chat target -->
@@ -131,11 +135,14 @@
     <div class="pane-resize" id="chat-resize" title="drag to resize · double-click to reset"></div>
   </section>
 
-  <!-- board: right — one region, three modes (kanban | table | archived) -->
+  <!-- board: right — one region, four modes (kanban | table | archived | file).
+       The file screen is entered by opening a file, not from the switcher: it
+       takes the board's place with the chat still at its side. -->
   <section id="board-wrap">
     <div id="board"><div class="empty">waiting for board…</div></div>
     <div id="table"></div>
     <div id="archive"></div>
+    <div id="filepane"></div>
   </section>
 </main>
 
@@ -291,7 +298,7 @@
 <!-- artifact viewer -->
 <div id="av-overlay" hidden>
   <div id="av-modal">
-    <div class="av-head"><span class="av-name" id="av-name"></span><a id="av-download" title="download" hidden>⬇</a><button id="av-copy" title="copy full source" aria-label="copy full source to clipboard" hidden>⧉</button><button id="av-src" title="toggle rendered / source" hidden>&lt;/&gt;</button><button id="av-expand" title="expand">⛶</button><button id="av-close" title="close">✕</button></div>
+    <div class="av-head"><span class="av-name" id="av-name"></span><a id="av-download" title="download" hidden>⬇</a><button id="av-copy" title="copy full source" aria-label="copy full source to clipboard" hidden>⧉</button><button id="av-src" title="toggle rendered / source" hidden>&lt;/&gt;</button><button id="av-edit" title="edit this file — opens the file screen" hidden>✎</button><button id="av-expand" title="expand">⛶</button><button id="av-close" title="close">✕</button></div>
     <pre id="av-body"></pre>
     <div id="av-img-wrap" hidden><img id="av-img" alt=""></div>
     <div id="av-video-wrap" hidden><video id="av-video" controls playsinline preload="metadata"></video></div>

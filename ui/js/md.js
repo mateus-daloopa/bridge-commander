@@ -45,9 +45,10 @@ export function md(src) {
 
 // ---------- post-render enhancement ----------
 
-// one-shot script loader for the lazy vendors (highlight.js, mermaid)
+// one-shot script loader for the lazy vendors (highlight.js, mermaid, and —
+// from fileedit.js — CodeMirror): one fetch per src, shared by every caller
 const scriptP = {};
-function loadScript(src, ready) {
+export function loadScript(src, ready) {
   if (!scriptP[src]) scriptP[src] = new Promise((resolve, reject) => {
     const s = document.createElement('script');
     s.src = src;

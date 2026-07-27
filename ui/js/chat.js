@@ -10,6 +10,7 @@ import { speakMessage, trackMessages } from './voice.js';
 import { openAttachment } from './detail.js';
 import { avatarHtml } from './avatars.js';
 import { isEchoOf, addPending, pendingFor } from './pending.js';
+import { fileContextBlock } from './filectx.js';
 
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
@@ -628,6 +629,41 @@ inputEl.addEventListener('paste', (e) => {
 
 function autoGrow(t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 132) + 'px'; }
 
+// ---------- file context (four-handed editing) ----------
+// While a file screen is open, EVERY message the captain sends carries which
+// file he is in — and, when he has highlighted something, which lines and what
+// text. That is what makes the lieutenant a second pair of hands on the same
+// file instead of a second program on the same screen.
+//
+// The context is pulled, never pushed: filepane.js owns the truth and calls
+// refreshQuote() whenever it changes (open, cursor moved, closed). The message
+// itself still goes to the card's thread — the context travels with it, it
+// doesn't get an address of its own.
+let quote = null; // { name, lines?, text? }
+let quoteSource = () => null; // registered by main.js
+const quoteEl = document.getElementById('chat-quote');
+export function onQuoteSource(fn) { quoteSource = fn; refreshQuote(); }
+export function refreshQuote() { quote = quoteSource(); renderQuote(); }
+function renderQuote() {
+  if (!quote) { quoteEl.hidden = true; quoteEl.textContent = ''; return; }
+  quoteEl.hidden = false;
+  quoteEl.textContent = '';
+  const where = document.createElement('span');
+  where.className = 'q-where';
+  where.textContent = '📎 ' + quote.name + (quote.lines ? ' L' + quote.lines : '');
+  const snip = document.createElement('span');
+  snip.className = 'q-snip';
+  if (quote.text) {
+    const first = quote.text.split('\n')[0];
+    snip.textContent = first.slice(0, 120) + (first.length > 120 || quote.text.includes('\n') ? ' …' : '');
+    snip.title = quote.text.slice(0, 2000);
+  } else {
+    snip.textContent = 'goes with every message — select lines to point at them';
+    snip.classList.add('q-hint');
+  }
+  quoteEl.append(where, snip);
+}
+
 // ---------- slash-command autocomplete ----------
 // A composer holding a single leading-"/" token opens the picker, fed by
 // /api/commands for the CURRENT target (lieutenant chat → its own session;
@@ -744,9 +780,11 @@ async function send() {
   if (sending) return;
   const target = currentTarget();
   if (!target) return;
-  const text = inputEl.value.trim();
+  const typed = inputEl.value.trim();
   const atts = pendingAtts.slice();
-  if (!text && !atts.length) return; // nothing to send
+  const q = quote; // the file screen's context rides along with this message
+  if (!typed && !atts.length && !q) return; // nothing to send
+  const text = q ? fileContextBlock(q) + typed : typed;
   sending = true;
   clearSendError();
   sendBtn.disabled = true;
@@ -764,6 +802,7 @@ async function send() {
     // flags a stalled echo.
     addPending(target, text, metas);
     inputEl.value = '';
+    if (q) refreshQuote(); // re-arm from the screen: still there = still attached
     closeSlash();
     pendingAtts = [];
     renderPendingAtts();

@@ -1045,6 +1045,82 @@ a.a-uri { color: var(--accent); }
 #av-download { flex: none; color: var(--dim); font-size: 15px; padding: 2px 6px; text-decoration: none; }
 #av-download:hover { color: var(--accent); }
 
+/* ---------- file editor (co-edit) ---------- */
+/* The editor fills the file screen: a breadcrumb row, a toolbar row, then
+   either CodeMirror or the preview. Every pane is a flex child with
+   min-height:0 so the text scrolls inside the region instead of stretching it. */
+.fs-head {
+  flex: none; display: flex; align-items: center; gap: 8px; min-width: 0;
+  padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 12.5px;
+}
+.fs-back { flex: none; color: var(--dim); font-size: 14px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
+.fs-back:hover { color: var(--text); border-color: var(--line2); }
+.fs-from { flex: 0 1 auto; min-width: 0; color: var(--dim); padding: 2px 4px; border-radius: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-from:hover { color: var(--accent); background: var(--panel2); }
+.fs-sep { flex: none; color: var(--faint); }
+.fs-file { flex: 1; min-width: 0; font-family: var(--mono); font-weight: 650; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* what the save said — stays put until the next save, never a fading toast */
+.fs-note {
+  flex: none; padding: 8px 14px; font-size: 12.5px; line-height: 1.45;
+  border-bottom: 1px solid var(--line); color: var(--dim);
+}
+.fs-note-ok { color: var(--ok); background: rgba(62, 207, 142, .07); }
+.fs-note-err { color: var(--warn); background: rgba(230, 192, 74, .09); border-left: 3px solid var(--warn); }
+.fe-bar { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.fe-bar .fe-gap { flex: 1; }
+.fe-bar button {
+  flex: none; padding: 4px 9px; border-radius: 7px; font-size: 12px;
+  background: var(--panel); border: 1px solid var(--line); color: var(--dim); white-space: nowrap;
+}
+.fe-bar button:hover { color: var(--text); border-color: var(--line2); }
+.fe-bar button.on { color: var(--accent); border-color: var(--accent2); background: var(--accent-soft); }
+.fe-edit { flex: 1; min-height: 0; overflow: hidden; padding: 0; color: var(--dim); }
+.fe-edit .CodeMirror { height: 100%; }
+.fe-prev { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px; }
+/* ✎ in the viewer head — same weight as its ⇄ source neighbour */
+#av-edit { flex: none; color: var(--dim); font-size: 14px; padding: 2px 6px; border: 1px solid transparent; border-radius: 6px; }
+#av-edit:hover { color: var(--text); }
+
+/* CodeMirror theme "bc": the board's own palette, so the editor and the
+   highlight.js code blocks elsewhere speak the same colors. (Vendored
+   codemirror.css brings only the structural rules — no theme file.) */
+.cm-s-bc.CodeMirror { background: var(--bg2); color: var(--text); font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
+.cm-s-bc .CodeMirror-gutters { background: var(--bg2); border-right: 1px solid var(--line); }
+.cm-s-bc .CodeMirror-linenumber { color: var(--faint); }
+.cm-s-bc .CodeMirror-cursor { border-left: 2px solid var(--accent); }
+.cm-s-bc .CodeMirror-selected { background: rgba(88, 182, 255, .18); }
+.cm-s-bc.CodeMirror-focused .CodeMirror-selected { background: rgba(88, 182, 255, .28); }
+.cm-s-bc .CodeMirror-line::selection, .cm-s-bc .CodeMirror-line > span::selection { background: rgba(88, 182, 255, .28); }
+.cm-s-bc .CodeMirror-matchingbracket { color: var(--accent); font-weight: 700; }
+.cm-s-bc .cm-comment { color: var(--faint); font-style: italic; }
+.cm-s-bc .cm-keyword, .cm-s-bc .cm-atom { color: #c792ea; }
+.cm-s-bc .cm-string, .cm-s-bc .cm-string-2 { color: #9ece6a; }
+.cm-s-bc .cm-number { color: #ff9e64; }
+.cm-s-bc .cm-def, .cm-s-bc .cm-header { color: #7aa2f7; }
+.cm-s-bc .cm-builtin, .cm-s-bc .cm-qualifier { color: #e0af68; }
+.cm-s-bc .cm-variable-2, .cm-s-bc .cm-attribute, .cm-s-bc .cm-property { color: #73daca; }
+.cm-s-bc .cm-tag, .cm-s-bc .cm-variable-3, .cm-s-bc .cm-type { color: #f7768e; }
+.cm-s-bc .cm-meta { color: var(--dim); }
+.cm-s-bc .cm-link, .cm-s-bc .cm-url { color: var(--accent); }
+.cm-s-bc .cm-quote { color: var(--dim); font-style: italic; }
+.cm-s-bc .cm-hr { color: var(--line2); }
+.cm-s-bc .cm-em { font-style: italic; }
+.cm-s-bc .cm-strong { font-weight: 700; }
+.cm-s-bc .cm-error { color: var(--danger); }
+
+/* file-context chip over the composer — what travels with every message while
+   the file screen is up */
+#chat-quote {
+  flex: none; display: flex; align-items: center; gap: 8px; min-width: 0;
+  margin: 8px 12px 0; padding: 6px 9px; font-size: 11.5px;
+  background: var(--panel2); border: 1px solid var(--line2); border-left: 3px solid var(--accent);
+  border-radius: 7px;
+}
+#chat-quote .q-where { flex: none; color: var(--accent); font-family: var(--mono); }
+#chat-quote .q-snip { flex: 1; min-width: 0; color: var(--dim); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#chat-quote .q-snip.q-hint { font-family: var(--sans); color: var(--faint); }
+
 /* ---------- speech transport ---------- */
 /* The transport belongs to ui/js/speech.js and brings its own stylesheet — a
    player WebKit can SEE is what keeps the lock screen answering, so it is part
@@ -1130,9 +1206,9 @@ a.a-uri { color: var(--accent); }
 #view-seg button:hover { color: var(--accent); }
 #view-seg button.on { color: var(--accent); background: var(--accent-soft); }
 
-#table, #archive { display: none; }
-#board-wrap.table-mode #board, #board-wrap.archive-mode #board { display: none; }
-#board-wrap.table-mode #table, #board-wrap.archive-mode #archive { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+#table, #archive, #filepane { display: none; }
+#board-wrap.table-mode #board, #board-wrap.archive-mode #board, #board-wrap.file-mode #board { display: none; }
+#board-wrap.table-mode #table, #board-wrap.archive-mode #archive, #board-wrap.file-mode #filepane { display: flex; flex: 1; min-height: 0; flex-direction: column; }
 
 .tv-scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 16px 16px; }
 table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 820px; }

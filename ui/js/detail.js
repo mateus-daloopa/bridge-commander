@@ -5,6 +5,7 @@ import { md, mdEnhance, copyText } from './md.js';
 import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
 import { openCardThread, syncChatToMain } from './chat.js';
+import { openFile, closeFile } from './filepane.js';
 import { openMoveMenu } from './board.js';
 import { archivedCard, unarchive } from './archive.js';
 
@@ -30,7 +31,10 @@ export function openArchivedDetail(id) {
   S.openCardId = id;
   render();
 }
-export function closeDetail() {
+// opts.keepChat: leave the chat on this card's thread instead of returning it
+// to the lieutenant — for closing the panel on the way INTO the card's own
+// file screen, where the conversation is still about this card.
+export function closeDetail(opts) {
   const wasId = S.openCardId;
   S.openCardId = null;
   if (editingTitle) stopTitleEdit();
@@ -38,7 +42,7 @@ export function closeDetail() {
   el.hidden = true;
   // Desktop: closing a card-synced detail returns the left chat to the owning
   // lieutenant's main conversation rather than stranding it on the closed card.
-  if (isDesktop() && wasId && S.chatMode && S.chatMode.mode === 'card' && S.chatMode.id === wasId) {
+  if (!(opts && opts.keepChat) && isDesktop() && wasId && S.chatMode && S.chatMode.mode === 'card' && S.chatMode.id === wasId) {
     syncChatToMain(); // renders
     return;
   }
@@ -67,6 +71,11 @@ document.getElementById('dt-close').onclick = closeDetail;
 document.addEventListener('click', (e) => {
   if (!S.openCardId || !isDesktop()) return;
   const t = e.target;
+  // A click on a control that removed itself on the way out reaches document
+  // with a DETACHED target: every closest() below then misses and the detail
+  // closes as collateral. A node that is no longer in the page can't tell us
+  // anything about where the click landed — ignore it.
+  if (!t.isConnected) return;
   if (el.contains(t)) return;                 // inside the panel — stays open
   if (t.closest && (
     t.closest('#chat') ||                     // left chat = the selected card's thread; part of its context
@@ -197,6 +206,7 @@ const avExpand = document.getElementById('av-expand');
 const avDownload = document.getElementById('av-download');
 const avSrcBtn = document.getElementById('av-src');
 const avCopyBtn = document.getElementById('av-copy');
+const avEditBtn = document.getElementById('av-edit');
 const MD_EXT = /\.(md|markdown)$/i;
 const HTML_EXT = /\.html?$/i;
 // Reset the shared overlay to a clean text-mode state (used by both openers).
@@ -226,6 +236,8 @@ function avReset(name, uri) {
   avCopyBtn.hidden = true;
   avCopyBtn.textContent = '⧉';
   avCopyBtn.classList.remove('ok');
+  avEditBtn.hidden = true;
+  avEditable = null;
   avModal.classList.remove('expanded'); // each open starts at the default size
   avOverlay.hidden = false;
 }
@@ -256,6 +268,73 @@ function renderAvMd() {
   else { avBody.className = 'md'; avBody.innerHTML = md(avMd); mdEnhance(avBody); }
 }
 avSrcBtn.onclick = () => { avShowSrc = !avShowSrc; renderAvMd(); };
+
+// ---------- editing a text artifact ----------
+// The viewer stays what it was born as: something you open and close in ten
+// seconds. Editing is where you stay, so ✎ LEAVES the popup — it hands the file
+// to the file screen (filepane.js), which takes the board's place with the chat
+// still at its side. This module is the part that knows the file is a card
+// artifact; the screen and the editor below it never learn that.
+//
+// Saving writes the file for real (PUT /api/artifact), carrying the version the
+// GET handed out. Two things are kept per uri: the draft (so leaving the screen
+// and coming back never loses typing) and the version last seen on disk, which
+// is what makes a concurrent write a 409 on the screen instead of a silent
+// overwrite.
+const drafts = new Map();   // uri -> edited text, until it is saved
+const versions = new Map(); // uri -> sha256 of the content this browser read
+let avEditable = null;      // { uri, name, markdown, content } while a text artifact is up
+
+// Offer ✎ for the text we just put in the viewer (markdown or plain source).
+function avEditableText(uri, name, markdown, content) {
+  avEditable = { uri, name, markdown, content };
+  avEditBtn.hidden = false;
+}
+avEditBtn.onclick = () => {
+  if (!avEditable) return;
+  const { uri, name, markdown, content } = avEditable;
+  const c = card(S.openCardId);
+  closeArtifact();
+  // The card panel is a board-area overlay and the board is what we are
+  // leaving — but the chat must NOT follow it back to the lieutenant: it stays
+  // on this card's thread, which is where the conversation about this file goes.
+  closeDetail({ keepChat: true });
+  openFile({
+    key: uri,
+    name,
+    markdown,
+    content: drafts.has(uri) ? drafts.get(uri) : content,
+    crumb: c && {
+      label: cardEmoji(c) + ' ' + (c.title || c.id),
+      title: 'back to this card',
+      onClick: () => { closeFile(); openDetail(c.id); },
+    },
+    onChange: (text) => drafts.set(uri, text),
+    onSave: (text) => saveArtifactText(uri, text),
+  });
+};
+// The save the file screen calls. Resolves with the line it should show, or
+// rejects with the one it should show in red — the screen prints what it is
+// told and never learns what an artifact is.
+async function saveArtifactText(uri, text) {
+  try {
+    const r = await api.saveArtifact(uri, text, versions.get(uri) || '');
+    versions.set(uri, r.version);
+    drafts.delete(uri); // what is on disk IS this text now
+    if (avEditable && avEditable.uri === uri) avEditable.content = text;
+    return 'saved — ' + r.bytes + ' bytes on disk';
+  } catch (e) {
+    // 409: someone (or something) else wrote this file since we read it. Say
+    // exactly that, and say the part that matters most — the captain's text was
+    // NOT written and was NOT lost; it is still in the editor in front of him.
+    if (e.status === 409) {
+      if (e.body && e.body.version) versions.set(uri, e.body.version); // saving again now overwrites deliberately
+      throw new Error('this file changed on disk since you opened it — nothing was written, and your text is still here. ' +
+        'Save again to overwrite the disk version, or copy your text out first.');
+    }
+    throw e;
+  }
+}
 // An artifact entry may carry a content-type hint ({uri, label, type}) — e.g.
 // the auto-attached worker brief is markdown in a `.prompt` file. The hint
 // wins; the extension regex is the fallback.
@@ -317,13 +396,21 @@ async function openArtifact(uri) {
   // download offer, carrying the server's message.
   try {
     const r = await api.artifact(uri);
-    if (isMdArtifact(at, name)) {
-      showMarkdown(r.content); // rendered via md.js, with the ⇄ source toggle
+    const markdown = isMdArtifact(at, name);
+    // An unsaved draft is what the captain last typed — show that, not the copy
+    // on disk. The version follows the same rule: while a draft is open it stays
+    // pinned to the disk state the draft was started from, so a write that lands
+    // underneath it is still a 409 when he finally saves.
+    if (!drafts.has(uri)) versions.set(uri, r.version || '');
+    const text = drafts.has(uri) ? drafts.get(uri) : r.content;
+    if (markdown) {
+      showMarkdown(text); // rendered via md.js, with the ⇄ source toggle
     } else {
       avBody.className = '';
-      avBody.textContent = r.content; // non-markdown: plain preformatted text
-      avCopyable(r.content);
+      avBody.textContent = text; // non-markdown: plain preformatted text
+      avCopyable(text);
     }
+    avEditableText(uri, name, markdown, r.content); // ✎ turns the preview into an editor
   } catch (e) {
     offerDownload('⚠ no preview — ' + e.message + ' (use ⬇ to download)'); // binary / too large / unreadable
   }

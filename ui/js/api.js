@@ -6,9 +6,14 @@ async function j(method, url, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) {
-    let msg = 'HTTP ' + r.status;
-    try { msg = (await r.json()).error || msg; } catch (e) {}
-    throw new Error(msg);
+    // The status and the parsed body ride on the error: a 409 from the artifact
+    // write carries what is on disk now, and the screen has to say so.
+    let msg = 'HTTP ' + r.status, parsed = null;
+    try { parsed = await r.json(); msg = parsed.error || msg; } catch (e) {}
+    const err = new Error(msg);
+    err.status = r.status;
+    err.body = parsed;
+    throw err;
   }
   return r.json();
 }
@@ -49,6 +54,9 @@ export const api = {
   markThreadRead: (target) => j('POST', '/api/read', { user: 'user', target }),
   labels: (body) => j('POST', '/api/labels', body),
   artifact: (uri) => j('GET', '/api/artifact?uri=' + encodeURIComponent(uri)),
+  // Write an artifact back. `version` is what the GET handed out (sha256 of the
+  // content read); a stale one comes back 409 and nothing is written.
+  saveArtifact: (uri, content, version) => j('PUT', '/api/artifact', { uri, content, version }),
   board: () => j('GET', '/api/board'),
   // archived (frozen) card snapshots, newest first, paged over the append-only
   // log: {archive: [...], total}; restore resurrects one

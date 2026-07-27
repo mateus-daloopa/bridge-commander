@@ -199,6 +199,7 @@
         "artifacts": [
           { "uri": "file:///fake/artifacts/event-pipeline-brief.md", "label": "worker brief" },
           { "uri": "file:///fake/artifacts/board-mock.svg", "label": "board mock" },
+          { "uri": "file:///fake/artifacts/drain.py", "label": "drain.py" },
           { "uri": "file:///fake/artifacts/worker.log", "label": "sample log" }
         ]
       },

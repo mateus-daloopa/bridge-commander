@@ -355,6 +355,7 @@ function createDevServer(opts) {
   }
 
   // ----- http plumbing -----
+  const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
   function sendJson(res, code, obj) {
     const data = JSON.stringify(obj);
     res.writeHead(code, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) });
@@ -438,7 +439,28 @@ function createDevServer(opts) {
           return res.end(a.data);
         }
         if (a.data.includes(0)) return sendJson(res, 415, { error: 'binary file' });
-        return sendJson(res, 200, { name: a.name, content: a.data.toString('utf8') });
+        return sendJson(res, 200, { name: a.name, content: a.data.toString('utf8'), version: sha256(a.data) });
+      }
+      // Same write contract as the real server (version in, 409 on mismatch,
+      // 403 for anything that isn't a listed artifact) — against the in-memory
+      // fixture, so the playground exercises the real save path without ever
+      // touching disk. `?stale=1` fakes a write underneath you, to see the 409.
+      if (route === 'PUT /api/artifact') {
+        const body = JSON.parse(await readBody(req) || '{}');
+        const uri = String(body.uri || '');
+        const a = artifacts.get(uri);
+        if (typeof body.content !== 'string') return sendJson(res, 400, { error: 'content required' });
+        if (!a) return sendJson(res, 403, { error: 'not an artifact of any card — refusing to write' });
+        if (url.searchParams.get('stale') === '1') a.data = Buffer.concat([a.data, Buffer.from('\n# touched by someone else\n')]);
+        const version = sha256(a.data);
+        if (String(body.version || '') !== version) {
+          return sendJson(res, 409, {
+            error: 'the file changed on disk since you opened it — nothing was written',
+            version, content: a.data.toString('utf8'),
+          });
+        }
+        a.data = Buffer.from(body.content, 'utf8');
+        return sendJson(res, 200, { ok: true, version: sha256(a.data), bytes: a.data.length });
       }
 
       // ----- attachments -----
