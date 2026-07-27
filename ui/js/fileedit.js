@@ -1,8 +1,9 @@
 // Generic file editor surface: content + filename in, edits and selection out.
 // It knows nothing about cards, artifacts or the board — the host that mounts
 // it owns all of that and passes callbacks (onChange / onSelection) plus its
-// own toolbar buttons (actions). Today's caller is the card artifact viewer;
-// tomorrow's is something else.
+// own toolbar buttons (actions). Today's host is the file screen showing a card
+// artifact; tomorrow's could be the card description, and this file must not
+// have to change for that.
 //
 // CodeMirror 5 is vendored (ui/vendor/codemirror, zero-CDN like the rest) and
 // lazy-loaded on first mount exactly the way md.js lazy-loads highlight.js:
@@ -60,7 +61,7 @@ function mkBtn(label, title) {
 //   opts.onChange() fires on every edit — the host owns persistence
 //   opts.onSelection(sel|null)  sel = { text, lines, from, to }
 //   opts.actions    [{ label, title, onClick(handle, btn) }] — host toolbar buttons
-// Returns { getValue, selection, focus, destroy }.
+// Returns { getValue, selection, destroy }.
 export function mountFileEditor(host, opts) {
   const o = opts || {};
   host.textContent = '';
@@ -81,11 +82,10 @@ export function mountFileEditor(host, opts) {
   prevWrap.hidden = true;
   host.append(bar, edWrap, prevWrap);
 
-  let cm = null, sel = null, previewing = false;
+  let cm = null, sel = null;
   const handle = {
     getValue: () => (cm ? cm.getValue() : o.content || ''),
     selection: () => sel,
-    focus: () => { if (cm && !previewing) cm.focus(); },
     destroy: () => { cm = null; sel = null; host.textContent = ''; },
   };
 
@@ -111,7 +111,6 @@ export function mountFileEditor(host, opts) {
   }
 
   function showPreview(on) {
-    previewing = on;
     edWrap.hidden = on;
     prevWrap.hidden = !on;
     editBtn.classList.toggle('on', !on);

@@ -9,7 +9,8 @@ import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieu
 import { renderTable } from './table.js';
 import { renderArchive } from './archtable.js';
 import { renderFilterUI, filterPanelOpen, closeFilterPanel } from './filterpop.js';
-import { renderChat, onOpenCard as chatOnOpenCard, openCardConversation, openLieutenantChat } from './chat.js';
+import { renderChat, onOpenCard as chatOnOpenCard, openCardConversation, openLieutenantChat, onQuoteSource } from './chat.js';
+import { onModeSwitch, forgetFile, fileOpen, fileName, fileQuote } from './filepane.js';
 import { renderLtSwitcher, ltSwitcherOpen, closeLtSwitcher, ltSettingsOpen, closeLtSettings } from './ltswitcher.js';
 import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, onArtifactClose, closeOwnerMenu, ownerMenuOpen } from './detail.js';
 import { closePane, paneOpen } from './pane.js';
@@ -82,22 +83,29 @@ document.getElementById('mon-open').onclick = () => {
   openMonitor();
 };
 
-// ---------- board region mode: kanban ⇄ table ⇄ archived ----------
+// ---------- board region mode: kanban ⇄ table ⇄ archived ⇄ file ----------
 // Board and table are two views over the LIVE cards; 🧊 is the archived
 // snapshots' own read-only mode. The choice sticks per browser.
+// 'file' is the fourth mode and the odd one out: it is not in the switcher (you
+// enter it by opening a file, not by picking it), and it is never remembered —
+// a reload has no file to come back to.
 const MODE_BTN = { board: 'vs-board', table: 'vs-table', archive: 'vs-arch' };
 function setBoardMode(mode) {
-  if (!MODE_BTN[mode]) mode = 'board';
+  if (!MODE_BTN[mode] && mode !== 'file') mode = 'board';
+  if (mode !== 'file') forgetFile(); // picking a switcher mode leaves the file screen
   S.boardMode = mode;
-  try { localStorage.setItem('bc-board-mode', mode); } catch (e) {}
+  if (mode !== 'file') try { localStorage.setItem('bc-board-mode', mode); } catch (e) {}
   const wrap = document.getElementById('board-wrap');
   wrap.classList.toggle('table-mode', mode === 'table');
   wrap.classList.toggle('archive-mode', mode === 'archive');
+  wrap.classList.toggle('file-mode', mode === 'file');
   for (const [m, id] of Object.entries(MODE_BTN)) {
     document.getElementById(id).classList.toggle('on', m === mode);
   }
   render();
 }
+onModeSwitch(setBoardMode);   // the file screen flips the mode through this one owner
+onQuoteSource(fileQuote);     // …and is where every message's file context comes from
 // Mobile collapses the switcher to just the active mode's button; tapping it
 // opens a small dropdown of the three modes. Desktop shows all three buttons,
 // where clicking the active one was always a no-op — so the dropdown branch
@@ -139,6 +147,8 @@ tabChat.onclick = () => { S.view = 'chat'; render(); };
 tabBoard.onclick = () => { S.view = 'board'; render(); };
 function renderTabs() {
   document.body.dataset.view = S.view;
+  // The board tab IS the main area, so when that area holds a file it says so.
+  tabBoard.firstChild.nodeValue = fileOpen() ? '📄 ' + fileName() : '▦ Board';
   tabChat.classList.toggle('on', S.view === 'chat');
   tabBoard.classList.toggle('on', S.view === 'board');
   // chat tab badge: unread across every lieutenant chat + all card threads;
@@ -199,7 +209,10 @@ onRender(() => {
   syncFilterInputs();
   renderFilterUI();
   renderStatusDot();
-  if (S.boardMode === 'archive') renderArchive();
+  // The file screen owns its own DOM and is never repainted from here: a render
+  // under the captain's cursor would eat what he is typing.
+  if (S.boardMode === 'file') { /* nothing to repaint */ }
+  else if (S.boardMode === 'archive') renderArchive();
   else if (S.boardMode === 'table') renderTable();
   else renderBoard();
   renderChat();

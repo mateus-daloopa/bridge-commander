@@ -4,8 +4,8 @@ import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, 
 import { md, mdEnhance, copyText } from './md.js';
 import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
-import { openCardThread, syncChatToMain, setQuote, focusComposer } from './chat.js';
-import { mountFileEditor } from './fileedit.js';
+import { openCardThread, syncChatToMain } from './chat.js';
+import { openFile, closeFile } from './filepane.js';
 import { openMoveMenu } from './board.js';
 import { archivedCard, unarchive } from './archive.js';
 
@@ -31,7 +31,10 @@ export function openArchivedDetail(id) {
   S.openCardId = id;
   render();
 }
-export function closeDetail() {
+// opts.keepChat: leave the chat on this card's thread instead of returning it
+// to the lieutenant — for closing the panel on the way INTO the card's own
+// file screen, where the conversation is still about this card.
+export function closeDetail(opts) {
   const wasId = S.openCardId;
   S.openCardId = null;
   if (editingTitle) stopTitleEdit();
@@ -39,7 +42,7 @@ export function closeDetail() {
   el.hidden = true;
   // Desktop: closing a card-synced detail returns the left chat to the owning
   // lieutenant's main conversation rather than stranding it on the closed card.
-  if (isDesktop() && wasId && S.chatMode && S.chatMode.mode === 'card' && S.chatMode.id === wasId) {
+  if (!(opts && opts.keepChat) && isDesktop() && wasId && S.chatMode && S.chatMode.mode === 'card' && S.chatMode.id === wasId) {
     syncChatToMain(); // renders
     return;
   }
@@ -68,10 +71,9 @@ document.getElementById('dt-close').onclick = closeDetail;
 document.addEventListener('click', (e) => {
   if (!S.openCardId || !isDesktop()) return;
   const t = e.target;
-  // A click on a control that removed itself (the editor's "talk about this"
-  // closes the viewer, taking its own toolbar with it) reaches document with a
-  // DETACHED target: every closest() below then misses and the detail would
-  // close as collateral. A node that is no longer in the page can't tell us
+  // A click on a control that removed itself on the way out reaches document
+  // with a DETACHED target: every closest() below then misses and the detail
+  // closes as collateral. A node that is no longer in the page can't tell us
   // anything about where the click landed — ignore it.
   if (!t.isConnected) return;
   if (el.contains(t)) return;                 // inside the panel — stays open
@@ -205,7 +207,6 @@ const avDownload = document.getElementById('av-download');
 const avSrcBtn = document.getElementById('av-src');
 const avCopyBtn = document.getElementById('av-copy');
 const avEditBtn = document.getElementById('av-edit');
-const avEditWrap = document.getElementById('av-edit-wrap');
 const MD_EXT = /\.(md|markdown)$/i;
 const HTML_EXT = /\.html?$/i;
 // Reset the shared overlay to a clean text-mode state (used by both openers).
@@ -235,7 +236,6 @@ function avReset(name, uri) {
   avCopyBtn.hidden = true;
   avCopyBtn.textContent = '⧉';
   avCopyBtn.classList.remove('ok');
-  stopEdit();
   avEditBtn.hidden = true;
   avEditable = null;
   avModal.classList.remove('expanded'); // each open starts at the default size
@@ -269,77 +269,45 @@ function renderAvMd() {
 }
 avSrcBtn.onclick = () => { avShowSrc = !avShowSrc; renderAvMd(); };
 
-// ---------- co-editing a text artifact (prototype) ----------
-// The viewer is the host: it knows this text is a card artifact, hands the
-// generic editor (fileedit.js) the content and the filename, and takes back
-// two things — the edited text and whatever the captain has highlighted. The
-// selection goes straight to the chat composer as a quote, which is what turns
-// "two programs on one screen" into four hands on one file.
+// ---------- editing a text artifact ----------
+// The viewer stays what it was born as: something you open and close in ten
+// seconds. Editing is where you stay, so ✎ LEAVES the popup — it hands the file
+// to the file screen (filepane.js), which takes the board's place with the chat
+// still at its side. This module is the part that knows the file is a card
+// artifact; the screen and the editor below it never learn that.
 //
 // PROTOTYPE: saving is local. Drafts live in this Map for the session (so
-// closing and reopening the viewer never loses typing) and go no further —
+// leaving the screen and coming back never loses typing) and go no further —
 // writing back through the API is the next card.
 const drafts = new Map(); // uri -> edited text
 let avEditable = null;    // { uri, name, markdown, content } while a text artifact is up
-let feHandle = null;      // the mounted editor, or null
 
-function stopEdit() {
-  if (feHandle) { feHandle.destroy(); feHandle = null; }
-  avEditWrap.hidden = true;
-  avEditBtn.classList.remove('on');
-}
 // Offer ✎ for the text we just put in the viewer (markdown or plain source).
 function avEditableText(uri, name, markdown, content) {
   avEditable = { uri, name, markdown, content };
   avEditBtn.hidden = false;
 }
-function startEdit() {
-  if (!avEditable || feHandle) return;
-  const { uri, name, markdown } = avEditable;
-  avBody.hidden = true;
-  avEditWrap.hidden = false;
-  avEditBtn.classList.add('on');
-  avModal.classList.add('expanded'); // editing wants the room
-  feHandle = mountFileEditor(avEditWrap, {
+avEditBtn.onclick = () => {
+  if (!avEditable) return;
+  const { uri, name, markdown, content } = avEditable;
+  const c = card(S.openCardId);
+  closeArtifact();
+  // The card panel is a board-area overlay and the board is what we are
+  // leaving — but the chat must NOT follow it back to the lieutenant: it stays
+  // on this card's thread, which is where the conversation about this file goes.
+  closeDetail({ keepChat: true });
+  openFile({
+    key: uri,
     name,
     markdown,
-    content: drafts.has(uri) ? drafts.get(uri) : avEditable.content,
-    onChange: () => { drafts.set(uri, feHandle.getValue()); },
-    onSelection: (s) => setQuote(s ? { name, uri, lines: s.lines, text: s.text } : null),
-    actions: [
-      {
-        label: '💬 talk about this',
-        title: 'take the highlighted lines to the chat',
-        onClick: (h) => {
-          const s = h.selection();
-          if (s) setQuote({ name, uri, lines: s.lines, text: s.text });
-          talkAboutSelection();
-        },
-      },
-      {
-        label: '💾 save',
-        title: 'prototype: the draft is kept in this browser only',
-        onClick: (h, btn) => {
-          drafts.set(uri, h.getValue());
-          btn.textContent = '✓ saved (fake)';
-          setTimeout(() => { btn.textContent = '💾 save'; }, 1600);
-        },
-      },
-    ],
+    content: drafts.has(uri) ? drafts.get(uri) : content,
+    crumb: c && {
+      label: cardEmoji(c) + ' ' + (c.title || c.id),
+      title: 'back to this card',
+      onClick: () => { closeFile(); openDetail(c.id); },
+    },
+    onChange: (text) => drafts.set(uri, text),
   });
-}
-// Leave the editor for the conversation: the viewer covers the chat, so talking
-// means closing it. Mobile has no side-by-side at all — there the detail closes
-// too and the chat tab comes forward, exactly like the detail's 💬 button does.
-function talkAboutSelection() {
-  const id = S.openCardId;
-  closeArtifact();
-  if (!isDesktop() && id) { closeDetail(); openCardThread(id); }
-  focusComposer();
-}
-avEditBtn.onclick = () => {
-  if (feHandle) { stopEdit(); avBody.hidden = false; return; } // back to the read view
-  startEdit();
 };
 // An artifact entry may carry a content-type hint ({uri, label, type}) — e.g.
 // the auto-attached worker brief is markdown in a `.prompt` file. The hint
@@ -480,7 +448,7 @@ export async function openAttachment(att) {
 // state.js onRender: a setter avoids a circular import back into main.js.
 let onCloseFn = () => {};
 export function onArtifactClose(fn) { onCloseFn = fn; }
-export function closeArtifact() { avOverlay.hidden = true; avVideo.pause(); avAudio.pause(); stopEdit(); onCloseFn(); }
+export function closeArtifact() { avOverlay.hidden = true; avVideo.pause(); avAudio.pause(); onCloseFn(); }
 export function artifactOpen() { return !avOverlay.hidden; }
 document.getElementById('av-close').onclick = closeArtifact;
 // Maximize / restore the viewer (pure CSS class toggle — see #av-modal.expanded).
