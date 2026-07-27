@@ -35,7 +35,8 @@ export function fileQuote() {
     : { name: open.name };
 }
 
-// spec: { key, name, content, markdown, crumb: { label, title, onClick }, onChange(text) }
+// spec: { key, name, content, markdown, crumb: { label, title, onClick },
+//         onChange(text), onSave(text) -> Promise<string> (the line to show) }
 export function openFile(spec) {
   const back = S.boardMode === 'file' ? (open && open.backMode) || 'board' : S.boardMode;
   drop();
@@ -59,6 +60,7 @@ export function forgetFile() { if (open) drop(); }
 function drop() {
   if (handle) { handle.destroy(); handle = null; }
   el.textContent = '';
+  noteEl = null;
   open = null;
   refreshQuote(); // the chip goes with the screen
 }
@@ -66,10 +68,10 @@ function drop() {
 function build() {
   el.textContent = '';
   const head = document.createElement('div');
-  head.className = 'fp-head';
+  head.className = 'fs-head';
   const back = document.createElement('button');
   back.type = 'button';
-  back.className = 'fp-back';
+  back.className = 'fs-back';
   back.textContent = '⟵';
   back.title = 'back to the board';
   back.onclick = closeFile;
@@ -78,22 +80,29 @@ function build() {
   if (open.crumb) {
     const from = document.createElement('button');
     from.type = 'button';
-    from.className = 'fp-from';
+    from.className = 'fs-from';
     from.textContent = open.crumb.label;
     from.title = open.crumb.title || '';
     from.onclick = open.crumb.onClick;
     const sep = document.createElement('span');
-    sep.className = 'fp-sep';
+    sep.className = 'fs-sep';
     sep.textContent = '›';
     head.append(from, sep);
   }
   const nm = document.createElement('span');
-  nm.className = 'fp-file';
+  nm.className = 'fs-file';
   nm.textContent = open.name;
   head.appendChild(nm);
+  // Where saving reports what happened, in words, above the text it refers to.
+  // A refused write (the file moved under us) must never be a toast that fades
+  // while the captain is looking somewhere else.
+  const note = document.createElement('div');
+  note.className = 'fs-note';
+  note.hidden = true;
   const body = document.createElement('div');
-  body.className = 'fp-body';
-  el.append(head, body);
+  body.className = 'fs-body';
+  el.append(head, note, body);
+  noteEl = note;
 
   handle = mountFileEditor(body, {
     name: open.name,
@@ -103,12 +112,42 @@ function build() {
     onSelection: () => refreshQuote(), // the chip follows the cursor
     actions: [{
       label: '💾 save',
-      title: 'prototype: the draft is kept in this browser only',
-      onClick: (h, btn) => {
-        if (open.onChange) open.onChange(h.getValue());
-        btn.textContent = '✓ saved (fake)';
-        setTimeout(() => { btn.textContent = '💾 save'; }, 1600);
-      },
+      title: 'write this file (⌘S / Ctrl+S)',
+      onClick: save,
     }],
   });
 }
+
+// Save through the host's writer, saying what happened either way. The screen
+// knows nothing about what it is saving to — it prints the line it is handed.
+let saving = false;
+let noteEl = null;
+function say(text, kind) {
+  if (!noteEl) return;
+  noteEl.hidden = !text;
+  noteEl.textContent = text || '';
+  noteEl.className = 'fs-note' + (kind ? ' fs-note-' + kind : '');
+}
+function save(h, btn) {
+  if (saving || !open || !open.onSave) return;
+  saving = true;
+  const was = btn.textContent;
+  btn.textContent = '💾 saving…';
+  btn.disabled = true;
+  Promise.resolve(open.onSave(h.getValue())).then(
+    (msg) => { say(msg || 'saved', 'ok'); },
+    (e) => { say('⚠ ' + (e && e.message ? e.message : 'save failed'), 'err'); },
+  ).then(() => {
+    saving = false;
+    btn.disabled = false;
+    btn.textContent = was;
+  });
+}
+// ⌘S / Ctrl+S saves the file screen — the reflex every editor has trained, and
+// on this screen the browser's own "save page" is never what is meant.
+document.addEventListener('keydown', (e) => {
+  if (!open || !(e.metaKey || e.ctrlKey) || e.key !== 's') return;
+  e.preventDefault();
+  const btn = el.querySelector('.fe-bar button[title^="write this file"]');
+  if (handle && btn) save(handle, btn);
+});

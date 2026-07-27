@@ -11,6 +11,7 @@
 // demand too, one file per language, resolved from the filename by CodeMirror's
 // own mode/meta.js.
 import { md, mdEnhance, loadScript } from './md.js';
+import { fileLang } from './filectx.js';
 
 const CM_BASE = '/ui/vendor/codemirror/';
 
@@ -36,14 +37,6 @@ function loadCM() {
     ]).then(() => { CM.modeURL = CM_BASE + 'mode/%N/%N.js'; return CM; }));
   cmP.catch(() => { cmP = null; }); // a failed load must not poison later mounts
   return cmP;
-}
-
-// Fence language for a filename — also used by the chat composer when it quotes
-// a selection into a message.
-export function fileLang(name) {
-  const m = /\.([a-z0-9]+)$/i.exec(String(name || ''));
-  const ext = m ? m[1].toLowerCase() : '';
-  return { markdown: 'md', prompt: 'md', javascript: 'js', python: 'py', shell: 'sh', yml: 'yaml' }[ext] || ext;
 }
 
 function mkBtn(label, title) {

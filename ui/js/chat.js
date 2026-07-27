@@ -10,7 +10,7 @@ import { speakMessage, trackMessages } from './voice.js';
 import { openAttachment } from './detail.js';
 import { avatarHtml } from './avatars.js';
 import { isEchoOf, addPending, pendingFor } from './pending.js';
-import { fileLang } from './fileedit.js';
+import { fileContextBlock } from './filectx.js';
 
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
@@ -663,16 +663,6 @@ function renderQuote() {
   }
   quoteEl.append(where, snip);
 }
-// The context leads the captain's own words. With a selection it is a quoted
-// block, fenced longer than any backtick run inside it so a snippet of markdown
-// can't break out; without one it is the single line saying where he is.
-function quoteBlock(q) {
-  if (!q.text) return '📎 `' + q.name + '` — open in the editor\n\n';
-  const runs = (q.text.match(/`+/g) || []).map((s) => s.length + 1);
-  const fence = '`'.repeat(Math.max(3, ...runs, 3));
-  return '📎 `' + q.name + '` L' + q.lines + '\n' +
-    fence + fileLang(q.name) + '\n' + q.text + '\n' + fence + '\n\n';
-}
 
 // ---------- slash-command autocomplete ----------
 // A composer holding a single leading-"/" token opens the picker, fed by
@@ -794,7 +784,7 @@ async function send() {
   const atts = pendingAtts.slice();
   const q = quote; // the file screen's context rides along with this message
   if (!typed && !atts.length && !q) return; // nothing to send
-  const text = q ? quoteBlock(q) + typed : typed;
+  const text = q ? fileContextBlock(q) + typed : typed;
   sending = true;
   clearSendError();
   sendBtn.disabled = true;

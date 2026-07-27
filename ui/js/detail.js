@@ -276,11 +276,14 @@ avSrcBtn.onclick = () => { avShowSrc = !avShowSrc; renderAvMd(); };
 // still at its side. This module is the part that knows the file is a card
 // artifact; the screen and the editor below it never learn that.
 //
-// PROTOTYPE: saving is local. Drafts live in this Map for the session (so
-// leaving the screen and coming back never loses typing) and go no further —
-// writing back through the API is the next card.
-const drafts = new Map(); // uri -> edited text
-let avEditable = null;    // { uri, name, markdown, content } while a text artifact is up
+// Saving writes the file for real (PUT /api/artifact), carrying the version the
+// GET handed out. Two things are kept per uri: the draft (so leaving the screen
+// and coming back never loses typing) and the version last seen on disk, which
+// is what makes a concurrent write a 409 on the screen instead of a silent
+// overwrite.
+const drafts = new Map();   // uri -> edited text, until it is saved
+const versions = new Map(); // uri -> sha256 of the content this browser read
+let avEditable = null;      // { uri, name, markdown, content } while a text artifact is up
 
 // Offer ✎ for the text we just put in the viewer (markdown or plain source).
 function avEditableText(uri, name, markdown, content) {
@@ -307,8 +310,31 @@ avEditBtn.onclick = () => {
       onClick: () => { closeFile(); openDetail(c.id); },
     },
     onChange: (text) => drafts.set(uri, text),
+    onSave: (text) => saveArtifactText(uri, text),
   });
 };
+// The save the file screen calls. Resolves with the line it should show, or
+// rejects with the one it should show in red — the screen prints what it is
+// told and never learns what an artifact is.
+async function saveArtifactText(uri, text) {
+  try {
+    const r = await api.saveArtifact(uri, text, versions.get(uri) || '');
+    versions.set(uri, r.version);
+    drafts.delete(uri); // what is on disk IS this text now
+    if (avEditable && avEditable.uri === uri) avEditable.content = text;
+    return 'saved — ' + r.bytes + ' bytes on disk';
+  } catch (e) {
+    // 409: someone (or something) else wrote this file since we read it. Say
+    // exactly that, and say the part that matters most — the captain's text was
+    // NOT written and was NOT lost; it is still in the editor in front of him.
+    if (e.status === 409) {
+      if (e.body && e.body.version) versions.set(uri, e.body.version); // saving again now overwrites deliberately
+      throw new Error('this file changed on disk since you opened it — nothing was written, and your text is still here. ' +
+        'Save again to overwrite the disk version, or copy your text out first.');
+    }
+    throw e;
+  }
+}
 // An artifact entry may carry a content-type hint ({uri, label, type}) — e.g.
 // the auto-attached worker brief is markdown in a `.prompt` file. The hint
 // wins; the extension regex is the fallback.
@@ -371,8 +397,11 @@ async function openArtifact(uri) {
   try {
     const r = await api.artifact(uri);
     const markdown = isMdArtifact(at, name);
-    // An unsaved draft is what the captain last typed — show that, not the
-    // stale copy on disk (prototype: drafts never leave the browser).
+    // An unsaved draft is what the captain last typed — show that, not the copy
+    // on disk. The version follows the same rule: while a draft is open it stays
+    // pinned to the disk state the draft was started from, so a write that lands
+    // underneath it is still a 409 when he finally saves.
+    if (!drafts.has(uri)) versions.set(uri, r.version || '');
     const text = drafts.has(uri) ? drafts.get(uri) : r.content;
     if (markdown) {
       showMarkdown(text); // rendered via md.js, with the ⇄ source toggle
