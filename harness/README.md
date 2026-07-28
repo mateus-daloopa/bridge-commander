@@ -27,12 +27,38 @@ and degrades gracefully when the verb is absent (the pane endpoints answer
 
 | Verb | Signature | Purpose |
 |---|---|---|
-| `openPane` | `(ref, {onFrame, intervalMs?, lines?}) → {close()}` | deliver the pane's CURRENT RENDERED SCREEN as successive frames: `onFrame(frameString)` fires whenever the content changes (identical frames are skipped); `close()` stops delivery and releases resources |
+| `openPane` | `(ref, {onFrame, intervalMs?, lines?, burstMs?, burstWindowMs?}) → {close()}` | deliver the pane's CURRENT RENDERED SCREEN as successive frames: `onFrame(frameString)` fires whenever the content changes (identical frames are skipped); `close()` stops delivery and releases resources |
 | `paneSnapshot` | `(ref, {lines?}) → Promise<string>` | one-shot capture — the initial paint / non-streaming fallback |
+| `paneInput` | `(ref, {text?\|key?}) → Promise<void>` | forward RAW input to the pane — `text` typed literally (multi-line becomes a bracketed paste), `key` one tmux key name (`Enter`, `BSpace`, `Up`, `BTab`, `C-c`, …). Pass one, not both. **Not `send`**: no type→settle→Enter, no composer verification — one keystroke in, one keystroke out |
 | `adoptWindow` | `(ref, window, taken?) → Promise<HarnessRef\|null>` | migrate a SESSION-granular ref to window granularity **without restarting the agent** — the tmux adapters rename the session's first window; `taken` names windows that belong to someone else and must never be adopted; `null` = the agent's window cannot be identified, keep the old ref |
 
 `intervalMs` defaults to ~1000, `lines` (scrollback depth) to ~200. A frame is
 a string that MAY carry ANSI SGR escapes (colors/bold).
+
+`paneInput` also **bursts** the open feed for that pane: a 1s poll makes typing
+feel dead, so a keystroke drops the interval to `burstMs` (~120) for
+`burstWindowMs` (~1500) and it falls back on its own. The burst is registered on
+the feed object itself, so it cannot outlive the feed — closing the pane, or
+typing into one nobody is watching, leaves nothing behind.
+
+The poll is a self-rescheduling `setTimeout`, so captures are strictly
+sequential and can never stack. Each hop's delay is measured from when the
+previous one STARTED, not when it finished, which keeps the period at
+`max(interval, capture)` — schedule from the end instead and a 60ms tmux turns
+the advertised 120ms burst into 180ms and the 1s baseline into 1.06s.
+
+Neither `paneInput` nor `sendLiteral` needs a pattern for `text`: `tmux.js`
+passes `--` before every operand, so a payload beginning with `-` is typed
+rather than parsed as flags. That guard is not cosmetic — without it
+`{text:'-t=<other-session>:'}` retargets `send-keys` at a pane the caller was
+never authorised to touch (`harness/test/tmux-literal.test.js` pins it against
+real tmux). `text` is capped at `PANE_INPUT_MAX` (64 KB) so one call cannot
+paste a whole file into a live agent's pane.
+
+`command` panes accept `paneInput` even though their `send` always throws: those
+are different capabilities. `send` refuses because a program has no COMPOSER for
+a brief to land in; `paneInput` assumes nothing about what the pane runs, which
+is exactly how you answer a prompt, quit a pager, or Ctrl-C a stuck script.
 
 The claude implementation polls `capture-pane -e` — deliberately **rendered
 frames, not a `pipe-pane` byte stream**: the target is a full-screen TUI that

@@ -43,6 +43,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { SLASH_COMMANDS, helpText, formatStatus } = require('./agent-status.js');
+const { validatePaneInput } = require('./port.js');
 
 const sessions = new Map(); // key (session or session:window) -> { alive, cwd, resumeId, transcript, hooks, turns }
 
@@ -267,11 +268,11 @@ async function adoptWindow(ref, window) {
 // the process boundary.
 //   BC_FAKE_PANE_MS   default frame interval (callers' intervalMs still wins)
 //   BC_FAKE_NO_PANE   hides both verbs — the "harness without pane support"
-function logPane(session, event) {
+function logPane(session, event, extra) {
   const dir = fakeStateDir();
   if (!dir) return;
   fs.appendFileSync(path.join(dir, session + '.pane.jsonl'),
-    JSON.stringify({ ts: new Date().toISOString(), session, event }) + '\n');
+    JSON.stringify({ ts: new Date().toISOString(), session, event, ...extra }) + '\n');
 }
 
 function openPane(ref, opts = {}) {
@@ -302,6 +303,16 @@ function openPane(ref, opts = {}) {
 
 async function paneSnapshot(ref) {
   return 'fake pane ' + refKey(ref) + ' — snapshot\n';
+}
+
+// paneInput records the keystroke into the same <key>.pane.jsonl the open/close
+// events land in, so a watching test process can assert what the server
+// forwarded. Validation is the SHARED one from port.js, not a copy: a fake that
+// is laxer than the real harness turns route tests green against payloads tmux
+// would choke on, and two copies of a regex are two regexes that drift.
+async function paneInput(ref, input = {}) {
+  const { key, text } = validatePaneInput(input);
+  logPane(refKey(ref), 'input', key ? { key } : { text });
 }
 
 // ---------- slash commands + status (OPTIONAL capability verbs — see port.js) ----------
@@ -356,6 +367,7 @@ const impl = { spawn, send, alive, resumable, resume, onTurnEnd, kill, adoptWind
 if (!process.env.BC_FAKE_NO_PANE) {
   impl.openPane = openPane;
   impl.paneSnapshot = paneSnapshot;
+  impl.paneInput = paneInput;
 }
 // Slash commands + status are OPTIONAL too; BC_FAKE_NO_COMMANDS simulates a
 // harness that never implemented them.

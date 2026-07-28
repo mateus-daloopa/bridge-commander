@@ -15,6 +15,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const t = require('./tmux.js');
+const { validatePaneInput } = require('./port.js');
 
 // A pane sitting back at a bare shell means the agent process exited.
 const SHELLS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash', 'ksh']);
@@ -268,48 +269,99 @@ function onTurnEnd(ref, hook, opts = {}) {
 }
 
 // ---------- pane viewing (OPTIONAL capability verbs — see port.js) ----------
-// openPane(ref, { onFrame, intervalMs?, lines? }) -> { close() }
+// Feeds opened by openPane, keyed by tmux target — the ONLY place a burst can
+// be registered, so a burst can never outlive the feed it speeds up (see
+// paneInput below). One entry per open feed; the entry is the feed's own
+// object, so a close only ever removes ITS OWN entry (the server's pane hub
+// refcounts N viewers onto ONE feed per target, but identity beats assuming it).
+const feeds = new Map(); // tmux target -> { until: ms deadline for fast polling }
+const PANE_BURST_MS = 120; // fast poll while a burst is live
+const PANE_BURST_WINDOW_MS = 1500; // how long one keystroke keeps the feed fast
+
+// openPane(ref, { onFrame, intervalMs?, lines?, burstMs?, burstWindowMs? }) -> { close() }
 // Streams the pane's CURRENT RENDERED SCREEN as successive frames: every
 // intervalMs the pane is captured with ANSI styling and scrollback, and
 // onFrame(frame) fires only when the content changed since the last frame.
-// close() stops delivery and releases the interval.
+// close() stops delivery and releases the timer.
 //
 // Deliberately rendered frames via capture-pane, NOT a pipe-pane byte stream:
 // the target is a full-screen TUI that repaints in place, so raw pty bytes
 // would need a client-side terminal emulator (xterm.js — a dependency we
 // will not add). capture-pane returns the already-composed screen, works for
 // any TUI, and keeps the client a plain <pre>.
+//
+// The timer is a self-rescheduling setTimeout, not a setInterval: the next
+// capture is scheduled only after the current one finished (so a slow tmux can
+// never stack children — no busy flag needed) and each hop re-reads the delay,
+// which is what lets paneInput burst a live feed down to burstMs for a moment
+// so typing does not feel dead behind the 1s baseline.
 function openPane(ref, opts = {}) {
   const onFrame = typeof opts.onFrame === 'function' ? opts.onFrame : () => {};
   const intervalMs = opts.intervalMs > 0 ? opts.intervalMs : 1000;
   const lines = opts.lines > 0 ? opts.lines : 200;
+  const burstMs = opts.burstMs > 0 ? opts.burstMs : PANE_BURST_MS;
+  const burstWindowMs = opts.burstWindowMs > 0 ? opts.burstWindowMs : PANE_BURST_WINDOW_MS;
   const target = paneTarget(ref.session, ref.window);
   let last = null;
   let closed = false;
-  let busy = false; // never overlap captures — a slow tmux must not stack children
+  let ticking = false;
+  let timer = null;
+  // bump() — a keystroke just landed: go fast for burstWindowMs. Rescheduling
+  // NOW matters as much as the deadline: the next hop was already pending at
+  // the 1s baseline, and leaving it alone would make the FIRST key of a burst
+  // (the one the typist is actually watching for) the slowest of all. Mid-tick
+  // is the one case to leave alone — loop() schedules the moment it returns and
+  // reads the fresh deadline then; racing it here would leave two live timers.
+  const feed = {
+    until: 0,
+    bump() {
+      feed.until = Date.now() + burstWindowMs;
+      if (closed || ticking) return;
+      clearTimeout(timer);
+      schedule();
+    },
+  };
+  feeds.set(target, feed); // this pane now has a feed a keystroke can burst
 
   async function tick() {
-    if (closed || busy) return;
-    busy = true;
-    try {
-      if (!(await paneExists(ref.session, ref.window))) {
-        close();
-        try { onFrame('\n[pane gone]'); } catch { /* subscriber's problem */ }
-        return;
-      }
-      const frame = await t.captureStyled(target, lines);
-      if (closed || frame === null || frame === last) return;
-      last = frame;
-      try { onFrame(frame); } catch { /* a throwing subscriber must not kill the feed */ }
-    } finally {
-      busy = false;
+    if (closed) return;
+    if (!(await paneExists(ref.session, ref.window))) {
+      close();
+      try { onFrame('\n[pane gone]'); } catch { /* subscriber's problem */ }
+      return;
     }
+    const frame = await t.captureStyled(target, lines);
+    if (closed || frame === null || frame === last) return;
+    last = frame;
+    try { onFrame(frame); } catch { /* a throwing subscriber must not kill the feed */ }
   }
 
-  const timer = setInterval(tick, intervalMs);
-  timer.unref?.();
-  tick(); // immediate first frame — the subscriber paints without waiting a tick
-  function close() { closed = true; clearInterval(timer); }
+  // schedule(spentMs) — the next hop, measured from when the LAST one STARTED.
+  // Subtracting the time the capture already burned keeps the period at
+  // max(interval, capture) instead of interval + capture; without it a 60ms
+  // tmux would turn the advertised 120ms burst into 180ms and the 1s baseline
+  // into 1.06s. Still strictly sequential, so captures cannot overlap.
+  function schedule(spentMs = 0) {
+    if (closed) return;
+    const base = feed.until > Date.now() ? Math.min(burstMs, intervalMs) : intervalMs;
+    timer = setTimeout(loop, Math.max(0, base - spentMs));
+    timer.unref?.();
+  }
+  async function loop() {
+    const started = Date.now();
+    ticking = true;
+    try { await tick(); } finally { ticking = false; }
+    schedule(Date.now() - started);
+  }
+
+  function close() {
+    closed = true;
+    clearTimeout(timer);
+    if (feeds.get(target) === feed) feeds.delete(target); // burst dies with the feed
+  }
+
+  // immediate first frame — the subscriber paints without waiting a tick
+  loop();
   return { close };
 }
 
@@ -320,6 +372,43 @@ async function paneSnapshot(ref, opts = {}) {
   const out = await t.captureStyled(paneTarget(ref.session, ref.window), lines);
   return out === null ? '' : out;
 }
+
+// ---------- pane input (OPTIONAL capability verb — see port.js) ----------
+// paneInput(ref, { text? | key? }) -> Promise<void>
+// Forward RAW input to the pane: `text` is typed literally (sendLiteral, which
+// switches to a bracketed paste when it spans lines), `key` is one tmux key
+// name ('Enter', 'BSpace', 'Up', 'BTab', 'C-c', …).
+//
+// Deliberately NOT the agent `send` verb: send() types, settles, presses Enter
+// and retries until the composer verifies empty. That is right for delivering
+// a brief and wrong for a keystroke — an arrow key has no composer state to
+// verify and a retried Enter would submit twice. Raw passthrough bypasses all
+// of it: one keystroke in, one keystroke out.
+//
+// The payload contract (key XOR text, the key grammar, the size cap) lives in
+// port.js so the fake enforces the SAME rules — two copies of a validation
+// regex are two regexes that drift. Text needs no pattern of its own: tmux.js's
+// sendLiteral passes `--` so a flag-shaped payload can never be read as flags,
+// which is the guarantee every caller of that primitive now gets.
+async function paneInput(ref, input = {}) {
+  const { key, text } = validatePaneInput(input);
+  if (!(await paneExists(ref.session, ref.window))) {
+    throw new Error(`pane ${stateKey(ref.session, ref.window)} is gone`);
+  }
+  const target = paneTarget(ref.session, ref.window);
+  if (key) await t.sendKey(target, key);
+  else await t.sendLiteral(target, text);
+  // Burst the WATCHING feed so the echo lands in ~a frame instead of ~a second.
+  // No feed open (nobody watching) → nothing to record, nothing to leak.
+  const feed = feeds.get(target);
+  if (feed) feed.bump();
+}
+
+// openFeedCount() — how many pane feeds are registered right now. A test hook,
+// not a port verb: the "a burst cannot outlive its feed" claim rests on the map
+// being emptied on close, and without a way to look at the map that claim is
+// untestable — deleting the delete kept every other assertion green.
+function openFeedCount() { return feeds.size; }
 
 module.exports = {
   SHELLS,
@@ -340,4 +429,6 @@ module.exports = {
   onTurnEnd,
   openPane,
   paneSnapshot,
+  paneInput,
+  openFeedCount,
 };
