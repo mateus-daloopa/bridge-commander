@@ -76,13 +76,45 @@ async function assertIsolated(wt, projectPath) {
   if (wGit === pGit) throw new Error('worktree shares the clone\'s git dir (not isolated): ' + wt);
 }
 
-// createWorktree(projectPath, cardId, workspace) -> { path, tool }
+// freshBase(proj) -> commit-ish for a new worktree, or null.
+//
+// `git worktree add` with no commit-ish uses the clone's HEAD, and nothing
+// keeps a long-lived clone's HEAD current — so every worker was starting from
+// wherever the clone last happened to stand. On the monorepo that was hundreds
+// of commits back, against files that no longer existed; the work was doomed
+// before the agent read the brief. Fetch, then cut from origin's default
+// branch.
+//
+// A fetch that fails must not block the board: fall back to the local
+// origin/HEAD ref (stale, but still a real base), then to the clone's HEAD
+// (the old behaviour). Both fallbacks say so on stderr — a silent fallback is
+// how this bug hid in the first place.
+async function freshBase(proj) {
+  let fetched = true;
+  try {
+    await git(proj, 'fetch', '--quiet', 'origin');
+  } catch (e) {
+    fetched = false;
+    process.stderr.write('worktrees: fetch failed in ' + proj + ' — base may be stale: ' + String(e.message || e) + '\n');
+  }
+  try {
+    const ref = await git(proj, 'rev-parse', '--abbrev-ref', 'origin/HEAD');
+    if (!fetched) process.stderr.write('worktrees: cutting from the last-fetched ' + ref + '\n');
+    return ref;
+  } catch (e) {
+    process.stderr.write('worktrees: no origin/HEAD in ' + proj + ' — cutting from the clone HEAD: ' + String(e.message || e) + '\n');
+    return null;
+  }
+}
+
+// createWorktree(projectPath, cardId, workspace) -> { path, tool, base? }
 // Always returns an asserted-isolated worktree or throws.
 function createWorktree(projectPath, cardId, workspace) {
   const proj = fs.realpathSync(projectPath);
   return withProjectLock(proj, async () => {
     let wt = null;
     let tool = 'git';
+    const base = await freshBase(proj);
     if (await treehouseAvailable()) {
       try {
         const out = await run('treehouse', ['get', '--lease', '--lease-holder', 'bc-w-' + cardId], { cwd: proj });
@@ -90,6 +122,9 @@ function createWorktree(projectPath, cardId, workspace) {
         const cand = lines[lines.length - 1];
         if (cand && fs.existsSync(cand)) { wt = cand; tool = 'treehouse'; }
       } catch (e) { wt = null; /* fall back to git worktree */ }
+      // A pooled worktree comes back on whatever the pool left it on, so the
+      // base has to be applied after the fact rather than at creation.
+      if (wt && base) await git(wt, 'checkout', '--detach', base);
     }
     if (!wt) {
       tool = 'git';
@@ -97,10 +132,10 @@ function createWorktree(projectPath, cardId, workspace) {
       fs.mkdirSync(dir, { recursive: true });
       wt = path.join(dir, String(cardId).replace(/[^A-Za-z0-9_.-]/g, '-'));
       if (fs.existsSync(wt)) throw new Error('worktree path already exists: ' + wt);
-      await git(proj, 'worktree', 'add', '-d', wt);
+      await git(proj, 'worktree', 'add', '-d', wt, ...(base ? [base] : []));
     }
     await assertIsolated(wt, proj);
-    return { path: fs.realpathSync(wt), tool };
+    return { path: fs.realpathSync(wt), tool, base: base || null };
   });
 }
 

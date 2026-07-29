@@ -324,6 +324,29 @@ test('worker turn-end without done on a Working card wakes the owner (worker-sto
   } finally { await teardown(); }
 });
 
+test('a worktree is cut from origin\'s tip, not from wherever the clone happens to stand', async () => {
+  const { s, repo, teardown } = await boot();
+  try {
+    // the source moves on AFTER the project was registered — the shape of any
+    // long-lived clone. Nothing pulls it, so its HEAD is now behind.
+    fs.writeFileSync(path.join(repo, 'NEW.md'), 'landed after the clone\n');
+    git(repo, 'add', '.');
+    git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'moved on');
+    const tip = git(repo, 'rev-parse', 'HEAD');
+    const clone = path.join(s.dir, 'projects', 'proj');
+    assert.notStrictEqual(git(clone, 'rev-parse', 'HEAD'), tip, 'the clone really is behind');
+
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Late start', id: 'late-start', attributes: { repo: 'proj' },
+    }));
+    const r = await s.api('POST', '/api/cards/late-start/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    const wt = r.body.worker.worktree.path;
+    assert.strictEqual(git(wt, 'rev-parse', 'HEAD'), tip, 'the worker starts from origin\'s tip');
+    assert.ok(fs.existsSync(path.join(wt, 'NEW.md')), 'files added since the clone are present');
+  } finally { await teardown(); }
+});
+
 test('card start --resume reincarnates a dead recorded worker in the same worktree', async () => {
   const { s, teardown } = await boot();
   try {
