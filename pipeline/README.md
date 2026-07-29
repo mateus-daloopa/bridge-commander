@@ -50,6 +50,28 @@ prompts it would send. Nothing is spawned.
    round counter goes up. Rounds exhausted → a level-1 event calling the lieutenant.
 8. Approval → the validator pushed and opened the PR. The executor reports and stops.
 
+## Reading the past
+
+`state.json` answers *where am I* and is overwritten on every move. The journal answers
+*what has ever happened* and is never overwritten: one JSON object per line, appended, at
+`<workspace>/.bridge-commander/pipeline/runs.jsonl`, across every run of every card.
+
+Verdicts and prompts go in **whole**. A findings text folded into a summary is exactly the
+part worth reading a month later.
+
+```sh
+pipeline/history.js --workspace <dir>              # one line per run + the numbers
+pipeline/history.js --workspace <dir> --rejections # every finding, whole
+pipeline/history.js --workspace <dir> --run <id>   # one run, event by event
+```
+
+Durations are **derived** from the timestamps rather than recorded, so lines written
+before anyone thought to time anything still answer the question. A stage lasts from the
+moment its agent opened to the moment its verdict landed — the wait, which is where all
+the time in a run goes. The summary reports what a bounce costs: the average delivered
+run, clean versus after a rejection. The case for the validator rests on that number
+staying smaller than the cost of the bug reaching the captain.
+
 ## It is code, not a model
 
 Zero tokens are spent by the executor. It reads, validates, substitutes, opens a window,

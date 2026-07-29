@@ -344,6 +344,87 @@ test('--check validates and shows the prompts without spawning anything', async 
   }
 });
 
+// The journal is the executor's memory ACROSS runs — the thing state.json is
+// not. What is pinned here is the property the whole idea rests on: nothing is
+// ever overwritten, and a verdict is kept WHOLE. A history that folded findings
+// into a one-line summary would answer none of the questions it exists for.
+test('the journal keeps every run, whole, and a second run appends instead of overwriting', async () => {
+  const { s, runDir, fdir, teardown } = await boot();
+  const { child, out, exited } = startExecutor(s, fdir);
+  const FINDINGS = 'The fix drops the error branch.\nRepro: click with a 500 from the API.\nLine three, which a summary would eat.';
+  try {
+    await waitForFile(path.join(runDir, 'prompt-working-r1.md'), out);
+    verdictCli(['done', '--to', path.join(runDir, 'verdict-working-r1.json'), '--outcome', 'committed 3 files']);
+    await waitForFile(path.join(runDir, 'prompt-validating-r1.md'), out);
+    const f = path.join(runDir, 'findings.md');
+    fs.writeFileSync(f, FINDINGS);
+    verdictCli(['reject', '--to', path.join(runDir, 'verdict-validating-r1.json'), '--findings', f]);
+    await waitForFile(path.join(runDir, 'prompt-working-r2.md'), out);
+    verdictCli(['done', '--to', path.join(runDir, 'verdict-working-r2.json'), '--outcome', 'fixed it']);
+    await waitForFile(path.join(runDir, 'prompt-validating-r2.md'), out);
+    verdictCli(['done', '--to', path.join(runDir, 'verdict-validating-r2.json'),
+      '--outcome', 'good — https://github.com/o/r/pull/7']);
+    assert.strictEqual(await exited, 0, out.text);
+
+    const jfile = path.join(s.dir, '.bridge-commander', 'pipeline', 'runs.jsonl');
+    const lines = () => fs.readFileSync(jfile, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const first = lines();
+    assert.ok(first.length >= 8, 'every step is a line:\n' + first.map((r) => r.kind).join(', '));
+
+    // One run, and it carries what it was cut from — the fact that was silently
+    // wrong for months and is invisible in a summary.
+    const ids = new Set(first.map((r) => r.run));
+    assert.strictEqual(ids.size, 1, 'one run id across the whole run');
+    const start = first.find((r) => r.kind === 'start');
+    assert.strictEqual(start.card, 'demo');
+    assert.ok('base' in start, 'the base commit is recorded');
+    assert.strictEqual(start.resumed, false);
+
+    // The verdict is stored WHOLE. This is the assertion the file exists for.
+    const rej = first.find((r) => r.kind === 'verdict' && r.verdict === 'reject');
+    assert.strictEqual(rej.text.trim(), FINDINGS, 'the findings are kept verbatim, not summarised');
+    assert.strictEqual(rej.round, 1);
+    assert.ok(first.some((r) => r.kind === 'stage-open' && /IMPLEMENT/.test(r.prompt)), 'prompts are kept too');
+    assert.ok(first.some((r) => r.kind === 'run' && /gate output/.test(r.output)), 'and the run output');
+
+    // Folded: rounds, rejections, outcome, and durations derived from the stamps.
+    const journal = require('../pipeline/journal.js');
+    const [row] = journal.runs(s.dir);
+    assert.strictEqual(row.card, 'demo');
+    assert.strictEqual(row.rounds, 2);
+    assert.strictEqual(row.rejections.length, 1);
+    assert.strictEqual(row.rejections[0].text.trim(), FINDINGS);
+    assert.strictEqual(row.outcomeKind, 'finish');
+    assert.match(row.outcome, /pull\/7/);
+    assert.ok(Number.isFinite(row.ms) && row.ms >= 0, 'the run has a wall clock');
+    assert.strictEqual(row.stages.length, 4, 'each stage of each round is timed');
+    assert.ok(row.stages.every((st) => Number.isFinite(st.ms)), 'every stage has a duration');
+
+    // THE PROMISE: run it again and the first run is still there, untouched.
+    const again = startExecutor(s, fdir);
+    assert.strictEqual(await again.exited, 0, again.out.text);
+    const second = lines();
+    assert.ok(second.length > first.length, 'the second run appended');
+    assert.deepStrictEqual(second.slice(0, first.length), first, 'and did not touch a byte of the first');
+    assert.ok(second.some((r) => r.kind === 'start' && r.resumed === true), 'the restart is recorded as one');
+
+    // And the reader answers the question in one command.
+    const printed = [];
+    require('../pipeline/history.js').main(['--workspace', s.dir], (l) => printed.push(l));
+    const text = printed.join('\n');
+    assert.match(text, /demo/);
+    assert.match(text, /2 rounds/);
+    assert.match(text, /1 rej/);
+    assert.match(text, /delivered/);
+    const rejOut = [];
+    require('../pipeline/history.js').main(['--workspace', s.dir, '--rejections'], (l) => rejOut.push(l));
+    assert.match(rejOut.join('\n'), /Line three, which a summary would eat/);
+  } finally {
+    child.kill('SIGKILL');
+    await teardown();
+  }
+});
+
 test('a rejection with no text is refused at the source', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-verdict-'));
   try {

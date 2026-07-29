@@ -31,11 +31,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const { getHarness } = require('../harness/port.js');
 const { resolve } = require('./config.js');
 const { render } = require('./template.js');
 const { Board } = require('./board.js');
 const { State } = require('./state.js');
+const journalLib = require('./journal.js');
 const verdict = require('./verdict.js');
 const stageLib = require('./stage.js');
 
@@ -72,6 +74,15 @@ function log(msg) {
 }
 function firstLine(s) {
   return String(s || '').trim().split('\n')[0].slice(0, 300);
+}
+// What this run was actually cut from. Worth recording precisely because it is
+// the thing that was silently wrong for months: a run judged on its rounds and
+// its findings is unreadable later if you cannot see it started 700 commits
+// behind master.
+function headOf(dir) {
+  try {
+    return execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch { return null; }
 }
 
 // variables(ctx, stage, round, runOutput) — the flat map every template is
@@ -141,8 +152,10 @@ async function runStage(ctx, stageName) {
       // The command lines are templates too — `--intent "{{card.title}}"` is
       // the whole reason the run knows what it is looking at.
       const vars = variables(ctx, stageName, round, '');
-      runOutput = await stageLib.runCommands(stage.run.map((line) => render(line, vars)), ctx.cwd);
+      const commands = stage.run.map((line) => render(line, vars));
+      runOutput = await stageLib.runCommands(commands, ctx.cwd);
       fs.writeFileSync(runFile, runOutput);
+      ctx.journal.event('run', { stage: stageName, round, commands, output: runOutput });
     }
   }
 
@@ -159,6 +172,10 @@ async function runStage(ctx, stageName) {
     });
     ctx.state.setAgent(stageName, ref);
     fs.writeFileSync(promptFile, prompt);
+    ctx.journal.event('stage-open', {
+      stage: stageName, round, fresh, prompt,
+      agent: ref.session + (ref.window ? ':' + ref.window : ''),
+    });
     ctx.board.signal(ctx.card.id,
       `pipeline ${ctx.pipelineName}: ${stageName} round ${round}/${ctx.pipeline.max_rounds} — agent in `
       + `${ref.session}${ref.window ? ':' + ref.window : ''}`);
@@ -175,6 +192,15 @@ async function runStage(ctx, stageName) {
     },
   });
   ctx.state.setAgent(stageName, r.ref);
+  // The verdict goes in whole. A findings text folded into a one-line summary
+  // is precisely the part worth reading a month from now.
+  if (r.verdict) {
+    ctx.journal.event('verdict', {
+      stage: stageName, round, verdict: r.verdict.kind, text: r.verdict.text || '',
+    });
+  } else {
+    ctx.journal.event('no-verdict', { stage: stageName, round });
+  }
   return r.verdict;
 }
 
@@ -192,6 +218,7 @@ async function killAgents(ctx) {
 // reporting the executor's exit as a crash). The card is NOT moved.
 async function escalate(ctx, text) {
   log('ESCALATING: ' + firstLine(text));
+  ctx.journal.event('escalate', { round: ctx.state.round, text });
   ctx.board.event(ctx.card.id, { level: 1, text: `🔔 pipeline ${ctx.pipelineName} needs you\n\n${text}` });
   await killAgents(ctx);
   ctx.state.set({ finished: new Date().toISOString() });
@@ -201,6 +228,7 @@ async function escalate(ctx, text) {
 async function finish(ctx, outcome) {
   await killAgents(ctx);
   const rounds = ctx.state.round;
+  ctx.journal.event('finish', { round: rounds, outcome });
   ctx.state.set({ finished: new Date().toISOString() });
   ctx.board.done(ctx.card.id,
     `pipeline ${ctx.pipelineName} finished in ${rounds} round${rounds === 1 ? '' : 's'}: ${outcome}`);
@@ -263,6 +291,13 @@ async function main(argv) {
       + r.errors.map((e) => '- ' + e).join('\n');
     process.stderr.write(text + '\n');
     if (!opts.check) {
+      // A refusal never gets a State, so it gets its own run id. It still
+      // belongs in the history — "we tried and it would not start" is a fact
+      // about the pipeline, and it is the one nobody remembers a week later.
+      journalLib.append(opts.workspace, {
+        kind: 'refused', run: journalLib.runId(card.id, new Date().toISOString()),
+        card: card.id, pipeline: pipelineName, project: project.name, text,
+      });
       board.event(card.id, { level: 1, text: '🔔 ' + text.slice(0, 1900) });
       board.done(card.id, `pipeline ${pipelineName} refused its own file (${r.errors.length} problem(s)) — nothing was spawned`);
     }
@@ -270,8 +305,12 @@ async function main(argv) {
   }
 
   const state = new State(runDir, { card: card.id, pipeline: pipelineName });
+  const journal = new journalLib.Journal(opts.workspace, {
+    run: journalLib.runId(card.id, state.data.startedAt),
+    card: card.id, pipeline: pipelineName, project: project.name,
+  });
   const ctx = {
-    board, card, project, state, pipelineName,
+    board, card, project, state, journal, pipelineName,
     pipeline: r.pipeline,
     workspace: opts.workspace,
     harness: opts.harness,
@@ -300,6 +339,7 @@ async function main(argv) {
       + `--command\`, which provisions an isolated worktree and runs the executor inside it.`;
     process.stderr.write(text + '\n');
     if (!opts.check) {
+      journal.event('refused', { text });
       board.event(card.id, { level: 1, text: '🔔 ' + text.slice(0, 1900) });
       board.done(card.id, `pipeline ${pipelineName} refused: checkout resolved to the project clone — nothing was spawned`);
     }
@@ -316,6 +356,12 @@ async function main(argv) {
   }
 
   log(`card ${card.id} · pipeline ${pipelineName} · cwd ${ctx.cwd}`);
+  journal.event('start', {
+    title: card.title, task: String(card.body || '').trim() || card.title,
+    branch: ctx.branch, worktree: ctx.cwd, base: headOf(ctx.cwd),
+    max_rounds: r.pipeline.max_rounds, resumed: !!state.resumed,
+    stage: state.stage, round: state.round,
+  });
   if (state.data.finished) {
     // A resume re-runs the command, and this run already ended. Reporting done
     // a second time would put a second item in the lieutenant's queue for work
@@ -334,6 +380,7 @@ async function main(argv) {
   const reaped = stageLib.reapOrphans(ctx.session, card.id, claimed);
   if (reaped.length) {
     log(`reaped ${reaped.length} orphan stage agent(s): ${reaped.join(', ')}`);
+    journal.event('reaped', { round: state.round, windows: reaped });
     board.signal(card.id, `pipeline ${pipelineName}: reaped orphan stage agent(s) from a previous run — ${reaped.join(', ')}`);
     // An orphan may already have written this round's answer before we got
     // here — the executor would then read it as its own stage's work and skip
