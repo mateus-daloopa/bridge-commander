@@ -89,7 +89,7 @@ function variables(ctx, stageName, round, runOutput) {
     'card.title': card.title,
     'card.task': String(card.body || '').trim() || card.title,
     'card.thread': thread,
-    branch: (card.attributes && card.attributes.branch) || '',
+    branch: ctx.branch,
     worktree: ctx.cwd,
     workspace: ctx.workspace,
     'project.name': ctx.project.name,
@@ -276,10 +276,35 @@ async function main(argv) {
     workspace: opts.workspace,
     harness: opts.harness,
     session: stageLib.ownSession(),
+    // The executor is the card's worker, so `card start` already put this
+    // process INSIDE the worktree. process.cwd() is therefore the truth, and
+    // the card attribute is only a nicer label: `card start` writes it AFTER
+    // it spawns us, so reading it first would race and come back empty.
+    // Falling back to the project clone is what that race used to do — the
+    // shared checkout every other worktree hangs off. Never again: below,
+    // resolving to the clone is a refusal, not a default.
     cwd: r.pipeline.worktree === false
       ? project.path
-      : (card.attributes && card.attributes.worktree) || project.path,
+      : (card.attributes && card.attributes.worktree) || process.cwd(),
+    branch: (card.attributes && card.attributes.branch) || ('bc/' + card.id),
   };
+
+  // Same reason the branch has a fallback: the attribute lands after we start.
+  // 'bc/<card.id>' is the server's own rule (server.js: card.start), so the
+  // fallback and the attribute always agree.
+
+  if (r.pipeline.worktree !== false && path.resolve(ctx.cwd) === path.resolve(project.path)) {
+    const text = `pipeline ${pipelineName} refused — its checkout resolved to the project clone `
+      + `(${project.path}). The clone is shared by every worktree of this project; an agent working `
+      + `there corrupts the source every later card is cut from. Run this through \`card start `
+      + `--command\`, which provisions an isolated worktree and runs the executor inside it.`;
+    process.stderr.write(text + '\n');
+    if (!opts.check) {
+      board.event(card.id, { level: 1, text: '🔔 ' + text.slice(0, 1900) });
+      board.done(card.id, `pipeline ${pipelineName} refused: checkout resolved to the project clone — nothing was spawned`);
+    }
+    return 1;
+  }
 
   if (opts.check) {
     process.stdout.write(`pipeline ${pipelineName} is valid (layers: ${r.layers.map((l) => l.file).join(', ')})\n`);
@@ -299,6 +324,31 @@ async function main(argv) {
     log(`to run it again, remove ${state.file}`);
     return 0;
   }
+  // Stage agents outlive the executor: tmux keeps them when we are paused,
+  // killed or die. Anything of this card's still standing that this run's state
+  // does not claim is from a previous life — it would go on editing the same
+  // checkout, and its window name would collide with the one we are about to
+  // open. Kill it before the first stage, not after it has done damage.
+  const claimed = Object.values(state.data.agents || {})
+    .map((a) => a && a.window).filter(Boolean);
+  const reaped = stageLib.reapOrphans(ctx.session, card.id, claimed);
+  if (reaped.length) {
+    log(`reaped ${reaped.length} orphan stage agent(s): ${reaped.join(', ')}`);
+    board.signal(card.id, `pipeline ${pipelineName}: reaped orphan stage agent(s) from a previous run — ${reaped.join(', ')}`);
+    // An orphan may already have written this round's answer before we got
+    // here — the executor would then read it as its own stage's work and skip
+    // straight past the stage. An answer from an agent this run never opened is
+    // not evidence, so the round starts over: prompt, run output and verdict go.
+    for (const w of reaped) {
+      const stageName = w.endsWith('-impl') ? 'working' : 'validating';
+      for (const f of [state.verdictFile(stageName, state.round),
+        state.promptFile(stageName, state.round),
+        state.runFile(stageName, state.round)]) {
+        if (fs.existsSync(f)) { fs.rmSync(f); log(`discarded ${path.basename(f)} — its author was an orphan`); }
+      }
+    }
+  }
+
   if (state.resumed) {
     log(`resuming at stage ${state.stage}, round ${state.round} (state: ${state.file})`);
     board.signal(card.id, `pipeline ${pipelineName}: executor restarted — resuming at ${state.stage} round ${state.round}`);

@@ -43,6 +43,38 @@ function windowName(cardId, stage, round) {
   return stage === 'working' ? `s-${id}-impl` : `s-${id}-val${round}`;
 }
 
+// reapOrphans(session, cardId, keep) -> the window names it killed.
+//
+// The executor's stage agents are its children in name only: tmux keeps them
+// running when the executor is paused, killed or dies. They keep editing, keep
+// committing, and keep writing verdict files — so the next run reads an answer
+// nobody in it produced, and then dies on a window name that is already taken.
+// Both of those happened on the first real run of this pipeline.
+//
+// A window is this card's, and unknown to this run's state, or it is not.
+// `keep` holds the windows this run is legitimately resuming.
+function reapOrphans(session, cardId, keep = []) {
+  if (!session) return [];
+  const id = String(cardId).replace(/[^A-Za-z0-9_-]/g, '-');
+  const mine = new RegExp(`^s-${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-(impl|val\\d+)$`);
+  let windows;
+  try {
+    windows = execFileSync('tmux', ['list-windows', '-t', session, '-F', '#{window_name}'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().split('\n').filter(Boolean);
+  } catch {
+    return []; // no session, nothing to reap
+  }
+  const killed = [];
+  for (const w of windows) {
+    if (!mine.test(w) || keep.includes(w)) continue;
+    try {
+      execFileSync('tmux', ['kill-window', '-t', `${session}:${w}`], { stdio: 'ignore' });
+      killed.push(w);
+    } catch { /* raced with its own exit — already gone is the outcome we wanted */ }
+  }
+  return killed;
+}
+
 // runCommands(lines, cwd) -> transcript text.
 // A non-zero exit is NOT a failure here: the whole point of the validation run
 // is that it stops at the first finding, and that output is the material the
@@ -114,4 +146,4 @@ async function waitForVerdict({ harness, ref, file, onRevive, pollMs = POLL_MS }
   }
 }
 
-module.exports = { ownSession, windowName, runCommands, deliver, waitForVerdict, sleep };
+module.exports = { ownSession, windowName, reapOrphans, runCommands, deliver, waitForVerdict, sleep };
