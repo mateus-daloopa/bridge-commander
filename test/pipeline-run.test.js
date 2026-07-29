@@ -425,6 +425,50 @@ test('the journal keeps every run, whole, and a second run appends instead of ov
   }
 });
 
+// The journal keeps the executor's half of a round. The agent's own half — its
+// reasoning, the files it read, what it tried and dropped — lives in the
+// harness's session transcript. The journal points at it rather than swallowing
+// it: megabytes read one at a time do not belong in a file you grep across runs.
+test('an agent\'s transcript is located and pointed at from the journal', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-transcript-'));
+  try {
+    const stage = require('../pipeline/stage.js');
+    const { claudeProjectSlug } = require('../harness/agent-status.js');
+    const projects = path.join(root, 'projects');
+    const cwd = path.join(root, 'worktree');
+    const ref = { harness: 'claude', cwd, resumeId: 'abc-123' };
+    const dir = path.join(projects, claudeProjectSlug(cwd));
+    fs.mkdirSync(dir, { recursive: true });
+    const BODY = '{"type":"assistant","text":"reading selecto source"}\n';
+    fs.writeFileSync(path.join(dir, 'abc-123.jsonl'), BODY);
+
+    const prev = process.env.BC_CLAUDE_PROJECTS_DIR;
+    process.env.BC_CLAUDE_PROJECTS_DIR = projects;
+    try {
+      assert.strictEqual(stage.transcriptPath(ref), path.join(dir, 'abc-123.jsonl'));
+
+      const found = stage.transcriptOf(ref);
+      assert.ok(found, 'the transcript was located');
+      assert.strictEqual(found.path, path.join(dir, 'abc-123.jsonl'), 'the pointer is the real file');
+      assert.strictEqual(found.bytes, Buffer.byteLength(BODY), 'and its size, so you know what you are opening');
+
+      // Best effort, always. A harness with no transcript, an agent with no
+      // session yet, or a file that has gone away must never cost anyone a run.
+      assert.strictEqual(stage.transcriptPath({ harness: 'fake', cwd }), null);
+      assert.strictEqual(stage.transcriptPath({ harness: 'claude', cwd }), null, 'no resumeId yet');
+      assert.strictEqual(stage.transcriptPath(null), null);
+      fs.rmSync(path.join(dir, 'abc-123.jsonl'));
+      assert.strictEqual(stage.transcriptOf(ref), null, 'gone — null, not a throw');
+      assert.strictEqual(stage.transcriptOf({ harness: 'fake', cwd }), null);
+    } finally {
+      if (prev === undefined) delete process.env.BC_CLAUDE_PROJECTS_DIR;
+      else process.env.BC_CLAUDE_PROJECTS_DIR = prev;
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a rejection with no text is refused at the source', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-verdict-'));
   try {

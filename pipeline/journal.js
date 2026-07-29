@@ -101,6 +101,7 @@ function runs(workspace) {
       row.stages.push({
         stage: r.stage, round: r.round, verdict: r.verdict,
         ms: from ? Date.parse(r.ts) - Date.parse(from) : null,
+        transcript: r.transcript || null, transcriptBytes: r.transcriptBytes || 0,
       });
       if (r.verdict === 'reject') row.rejections.push({ round: r.round, text: r.text || '' });
     }

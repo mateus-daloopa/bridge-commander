@@ -192,14 +192,20 @@ async function runStage(ctx, stageName) {
     },
   });
   ctx.state.setAgent(stageName, r.ref);
+  // The transcript is a POINTER: megabytes, read one at a time, when one
+  // specific run confuses you. Prompts and verdicts are kilobytes and are what
+  // you query across many runs, so those go in whole.
+  const tr = stageLib.transcriptOf(r.ref);
+  if (tr) log(`${stageName} round ${round}: transcript at ${tr.path} (${Math.round(tr.bytes / 1024)}KB)`);
   // The verdict goes in whole. A findings text folded into a one-line summary
   // is precisely the part worth reading a month from now.
+  const trail = tr ? { transcript: tr.path, transcriptBytes: tr.bytes } : {};
   if (r.verdict) {
-    ctx.journal.event('verdict', {
+    ctx.journal.event('verdict', Object.assign({
       stage: stageName, round, verdict: r.verdict.kind, text: r.verdict.text || '',
-    });
+    }, trail));
   } else {
-    ctx.journal.event('no-verdict', { stage: stageName, round });
+    ctx.journal.event('no-verdict', Object.assign({ stage: stageName, round }, trail));
   }
   return r.verdict;
 }

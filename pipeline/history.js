@@ -49,7 +49,12 @@ function printRun(records, runIdWanted, out) {
     const where = r.stage ? ` ${r.stage} r${r.round}` : '';
     let detail = '';
     if (r.kind === 'start') detail = `${r.resumed ? 'resumed' : 'first start'} · base ${String(r.base || '?').slice(0, 12)} · ${r.branch || ''}`;
-    else if (r.kind === 'verdict') detail = `${r.verdict} — ${firstLine(r.text)}`;
+    else if (r.kind === 'verdict') {
+      detail = `${r.verdict} — ${firstLine(r.text)}`;
+      // The pointer, printed where you are already looking: this is the view
+      // you are in when you want to know what the agent was actually thinking.
+      if (r.transcript) detail += `\n${' '.repeat(35)}transcript: ${r.transcript}`;
+    }
     else if (r.kind === 'stage-open') detail = `${r.fresh ? 'fresh agent' : 'same agent'} ${r.agent || ''} · prompt ${String(r.prompt || '').length} chars`;
     else if (r.kind === 'run') detail = `${(r.commands || []).length} command(s) · ${String(r.output || '').length} chars out`;
     else detail = firstLine(r.outcome || r.text || '');
@@ -102,7 +107,9 @@ function main(argv, out = (s) => process.stdout.write(s + '\n')) {
     // Where the time went, stage by stage — the answer to "is the cost in
     // building it or in reviewing it", and to "what did that bounce cost me".
     if (r.stages.length) {
-      out(`${' '.repeat(18)}${r.stages.map((s) => `${s.stage.slice(0, 4)} r${s.round} ${journal.human(s.ms)}`).join(' · ')}`);
+      const kept = r.stages.filter((s) => s.transcript).length;
+      out(`${' '.repeat(18)}${r.stages.map((s) => `${s.stage.slice(0, 4)} r${s.round} ${journal.human(s.ms)}`).join(' · ')}`
+        + (kept ? `  ·  ${kept} transcript${kept === 1 ? '' : 's'} kept` : ''));
     }
     if (r.outcome) out(`${' '.repeat(18)}${firstLine(r.outcome).slice(0, 110)}`);
   }

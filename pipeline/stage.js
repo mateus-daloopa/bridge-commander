@@ -10,8 +10,11 @@
 // their own would leave the watcher looking at a log.
 
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { execFileSync, execFile } = require('node:child_process');
 const { getHarness } = require('../harness/port.js');
+const agentStatus = require('../harness/agent-status.js');
 const verdict = require('./verdict.js');
 
 const POLL_MS = Number(process.env.BC_PIPELINE_POLL_MS || 5000);
@@ -146,4 +149,48 @@ async function waitForVerdict({ harness, ref, file, onRevive, pollMs = POLL_MS }
   }
 }
 
-module.exports = { ownSession, windowName, reapOrphans, runCommands, deliver, waitForVerdict, sleep };
+// transcriptOf(ref) -> { path, bytes } | null
+//
+// The journal records what the EXECUTOR knows — the prompt it sent, the verdict
+// it got back. The agent's own reasoning, every file it read, every approach it
+// tried and dropped, lives in the harness's session transcript. That is the
+// half you want when a run confuses you six weeks later.
+//
+// A POINTER, not a copy, and not inline. Transcripts are megabytes and are read
+// one at a time; prompts and verdicts are kilobytes and are what you query
+// across many runs. Duplicating a megabyte per stage to guard against a cleanup
+// that has never happened is storage spent on a hypothetical.
+//
+// The implementer keeps ONE session across rounds, so both rounds point at the
+// same growing file. That is the truth of what it saw.
+//
+// Best effort throughout: an unknown harness, no session yet, or a transcript
+// that is not there returns null. This must never cost anyone a run.
+function transcriptOf(ref) {
+  try {
+    const src = transcriptPath(ref);
+    if (!src || !fs.existsSync(src)) return null;
+    return { path: src, bytes: fs.statSync(src).size };
+  } catch {
+    return null;
+  }
+}
+
+function transcriptPath(ref) {
+  if (!ref) return null;
+  if (ref.harness === 'claude' && ref.resumeId) {
+    const projects = process.env.BC_CLAUDE_PROJECTS_DIR
+      || path.join(os.homedir(), '.claude', 'projects');
+    return path.join(projects, agentStatus.claudeProjectSlug(ref.cwd), ref.resumeId + '.jsonl');
+  }
+  if (ref.harness === 'codex' && ref.resumeId) {
+    return agentStatus.codexRolloutFile(ref.resumeId,
+      process.env.BC_CODEX_SESSIONS_DIR || path.join(os.homedir(), '.codex', 'sessions'));
+  }
+  return null;
+}
+
+module.exports = {
+  ownSession, windowName, reapOrphans, runCommands, deliver, waitForVerdict, sleep,
+  transcriptOf, transcriptPath,
+};

@@ -59,6 +59,10 @@ prompts it would send. Nothing is spawned.
 Verdicts and prompts go in **whole**. A findings text folded into a summary is exactly the
 part worth reading a month later.
 
+The agent's own transcript — its reasoning, the files it read, what it tried and dropped —
+goes in as a **pointer**. Megabytes read one at a time do not belong in a file you grep
+across runs.
+
 ```sh
 pipeline/history.js --workspace <dir>              # one line per run + the numbers
 pipeline/history.js --workspace <dir> --rejections # every finding, whole
