@@ -148,18 +148,64 @@ function open(url, title, inputAt) {
   es.onerror = () => setLive(false); // EventSource reconnects on its own
 }
 
-export function openCardPane(cardId) {
+// ---------- tabs ----------
+// A card may offer several windows of its worker's session (an orchestrator and
+// the agents running beside it). One window renders no tabs at all, so the
+// drawer is byte-for-byte what it was before this existed.
+//
+// The names come from the CARD, and the server only honours a window the card
+// itself advertised — a tab can never become a way to watch something the card
+// does not own.
+const tabsEl = document.getElementById('pane-tabs');
+
+function paneWindows(c) {
+  const v = c && c.attributes && c.attributes.pane;
+  const list = Array.isArray(v) ? v : (typeof v === 'string' ? v.split(',') : []);
+  const out = [];
+  for (const w of list) {
+    const name = String(w).trim();
+    if (/^[A-Za-z0-9_.-]{1,80}$/.test(name) && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+function drawTabs(names, current, onPick) {
+  tabsEl.textContent = '';
+  tabsEl.hidden = names.length < 2;
+  if (tabsEl.hidden) return;
+  for (const name of names) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'pane-tab' + (name === current ? ' on' : '');
+    b.textContent = name;
+    b.onclick = () => onPick(name);
+    tabsEl.appendChild(b);
+  }
+}
+
+export function openCardPane(cardId, window_) {
   const c = card(cardId);
   const at = (c && c.attributes) || {};
+  const names = paneWindows(c);
+  const pick = window_ && names.includes(window_) ? window_ : names[0];
   const base = '/api/cards/' + encodeURIComponent(cardId) + '/pane/';
-  open(base + 'stream', String(at.session || (c && c.title) || cardId), base + 'input');
+  const q = pick ? '?window=' + encodeURIComponent(pick) : '';
+  drawTabs(names, pick, (name) => openCardPane(cardId, name));
+  open(base + 'stream' + q, String(at.session || (c && c.title) || cardId), base + 'input' + q);
 }
 export function openLieutenantPane(id) {
   const l = lieutenant(id);
   const base = '/api/lieutenants/' + encodeURIComponent(id) + '/pane/';
+  drawTabs([], null, () => {}); // a lieutenant is one session, never tabbed
   open(base + 'stream', String((l && l.ref && l.ref.session) || (l && l.name) || id), base + 'input');
 }
-export function closePane() { stop(); inputUrl = null; preEl.blur(); overlay.hidden = true; }
+export function closePane() {
+  stop();
+  inputUrl = null;
+  drawTabs([], null, () => {});
+  preEl.blur();
+  overlay.hidden = true;
+}
 export function paneOpen() { return !overlay.hidden; }
 
 document.getElementById('pane-close').onclick = closePane;

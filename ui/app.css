@@ -942,6 +942,19 @@ a.a-uri { color: var(--accent); }
 .pane-hint.on { color: var(--accent); }
 #pane-close { flex: none; color: var(--dim); font-size: 15px; padding: 2px 6px; }
 #pane-close:hover { color: var(--text); }
+/* window tabs: rendered only when a card offers more than one, so a single
+   window is the drawer exactly as it was before they existed */
+.pane-tabs {
+  flex: none; display: flex; gap: 2px; padding: 6px 10px 0; overflow-x: auto;
+  background: var(--bg2); border-bottom: 1px solid var(--line);
+}
+.pane-tab {
+  flex: none; font-family: var(--mono); font-size: 10.5px; color: var(--dim);
+  padding: 4px 10px; border-radius: 6px 6px 0 0; white-space: nowrap;
+  border: 1px solid transparent; border-bottom: none;
+}
+.pane-tab:hover { color: var(--text); background: var(--accent-soft); }
+.pane-tab.on { color: var(--accent); background: #0a0c11; border-color: var(--line2); }
 /* the terminal surface: mono, whole-screen frames, no wrapping — the frame IS
    the rendered screen, so it scrolls in both axes instead of reflowing */
 #pane-body {

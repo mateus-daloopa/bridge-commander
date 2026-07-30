@@ -66,18 +66,20 @@ class Board {
     this.run(['worker', 'done', id, '--text-file', '-'], outcome);
   }
 
-  // pane(id, window) — point the card's LIVE pane at one of the worker's own
-  // windows, or back at the worker itself with null.
+  // pane(id, windows) — the windows this card offers the board's LIVE drawer,
+  // most interesting first. More than one and the drawer draws tabs.
   //
   // The executor's own pane is three log lines and then silence: the typing
   // happens in the stage agent beside it. Without this the board shows the
-  // quiet window and the run looks dead while it is working.
+  // quiet window and a working run looks dead. With it you get the executor's
+  // routing decisions on one tab and the actual work on another.
   //
   // Best effort. Losing the pointer costs visibility; failing the run over it
   // would cost the work.
-  pane(id, window) {
+  pane(id, windows) {
+    const list = (Array.isArray(windows) ? windows : [windows]).filter(Boolean);
     try {
-      this.run(['card', 'patch', id, '--attr', 'pane=' + (window || '')]);
+      this.run(['card', 'patch', id, '--attr', 'pane=' + list.join(',')]);
     } catch (e) {
       process.stderr.write('pane pointer not set: ' + String((e && e.message) || e) + '\n');
     }

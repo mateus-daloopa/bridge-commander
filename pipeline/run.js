@@ -184,10 +184,10 @@ async function runStage(ctx, stageName) {
     log(`${stageName} round ${round}: prompt was already delivered — waiting on the agent`);
   }
 
-  // Point the card's LIVE pane at whoever is actually typing — set on a resume
-  // too, not only on a fresh open, since a restarted executor is exactly when
-  // you go looking. The executor's own pane is three lines and then silence.
-  if (ref && ref.window) ctx.board.pane(ctx.card.id, ref.window);
+  // Offer the board every window of this run, the one that is actually typing
+  // first. Set on a resume too, not only on a fresh open — a restarted executor
+  // is exactly when someone goes looking.
+  if (ref && ref.window) ctx.board.pane(ctx.card.id, [ref.window, ...ctx.windows(ref.window)]);
 
   const r = await stageLib.waitForVerdict({
     harness: ctx.harness, ref, file: vFile,
@@ -216,10 +216,10 @@ async function runStage(ctx, stageName) {
 }
 
 async function killAgents(ctx) {
-  // The stage agents are about to be gone; a pane pointed at one of them would
-  // show a dead window. Hand the card back to the executor, whose final lines
-  // are the last thing worth reading.
-  ctx.board.pane(ctx.card.id, null);
+  // The stage agents are about to be gone; a tab pointed at one of them would
+  // show a dead window. Drop the offers — the card falls back to the executor,
+  // whose final lines are the last thing worth reading.
+  ctx.board.pane(ctx.card.id, []);
   for (const [name, ref] of Object.entries(ctx.state.data.agents)) {
     if (!ref) continue;
     try { await getHarness(ctx.harness).kill(ref); } catch { /* already gone */ }
@@ -341,6 +341,16 @@ async function main(argv) {
       ? project.path
       : (card.attributes && card.attributes.worktree) || process.cwd(),
     branch: (card.attributes && card.attributes.branch) || ('bc/' + card.id),
+    // windows(first) — the other windows worth offering the board's pane
+    // drawer: every stage agent this run has opened, plus the executor's own
+    // window, minus whichever one is already leading. Order is what the tabs
+    // show, so the one typing goes first and the executor sits last.
+    windows(first) {
+      const mine = process.env.TMUX_PANE ? stageLib.ownWindow() : null;
+      const all = Object.values(state.data.agents || {})
+        .map((a) => a && a.window).filter(Boolean).concat(mine ? [mine] : []);
+      return all.filter((w, i) => w !== first && all.indexOf(w) === i);
+    },
   };
 
   // Same reason the branch has a fallback: the attribute lands after we start.

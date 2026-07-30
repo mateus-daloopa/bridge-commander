@@ -37,6 +37,22 @@ function ownSession() {
   }
 }
 
+// ownWindow() -> the executor's own tmux window name, or null. Same trick as
+// ownSession: the process asks tmux where it lives, and nothing had to tell it.
+// The executor's window is worth offering the pane drawer as a tab — it is
+// where the routing decisions are printed.
+function ownWindow() {
+  if (!process.env.TMUX || !process.env.TMUX_PANE) return null;
+  try {
+    const out = execFileSync('tmux',
+      ['display-message', '-p', '-t', process.env.TMUX_PANE, '#{window_name}'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return /^[A-Za-z0-9_.-]{1,80}$/.test(out) ? out : null;
+  } catch {
+    return null;
+  }
+}
+
 // windowName — the stage agent's window inside that session. `s-` keeps it
 // clear of the board's own `w-<card>` worker window (which is the executor
 // itself) and of tmux's numeric-name trap. The validator is a fresh session
@@ -191,6 +207,6 @@ function transcriptPath(ref) {
 }
 
 module.exports = {
-  ownSession, windowName, reapOrphans, runCommands, deliver, waitForVerdict, sleep,
+  ownSession, ownWindow, windowName, reapOrphans, runCommands, deliver, waitForVerdict, sleep,
   transcriptOf, transcriptPath,
 };

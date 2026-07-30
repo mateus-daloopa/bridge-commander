@@ -797,28 +797,42 @@ const PANE_MAX = parseInt(process.env.BC_PANE_MAX, 10) > 0 ? parseInt(process.en
 // input) so they can never disagree about what `/api/cards/x/pane/*` means.
 // ref null + a human reason is the "nothing to watch / nothing to type into"
 // answer; each route renders it in its own dialect (SSE event vs 404).
-function resolvePaneRef(kind, id) {
+// paneWindows(card) -> the windows a card offers, in order, first is default.
+// `pane` is one name or a list of them; anything malformed is simply not
+// offered. A worker that opens sibling windows (an orchestrator running its
+// agents beside itself) is otherwise unwatchable — the board shows the window
+// it bound at `card.start`, which sits silent while the work happens one window
+// over.
+//
+// Only WINDOW names live here, never sessions: the pane always rides the
+// worker's own session, so this can never address a session the card does not
+// already own. The charset excludes `:` deliberately — the value becomes a
+// `session:window` tmux target and a colon would retarget another session.
+const PANE_WINDOW = /^[A-Za-z0-9_.-]{1,80}$/;
+function paneWindows(card) {
+  const v = card && card.attributes && card.attributes.pane;
+  const list = Array.isArray(v) ? v : (typeof v === 'string' ? v.split(',') : []);
+  const out = [];
+  for (const w of list) {
+    const name = String(w).trim();
+    if (PANE_WINDOW.test(name) && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+function resolvePaneRef(kind, id, want) {
   if (kind === 'cards') {
     const card = findCard(id);
     const w = card && findWorker(card.id);
     if (!card) return { ref: null, reason: 'unknown card: ' + id };
     if (card.column !== 'working') return { ref: null, reason: 'card is not Working' };
     if (!w) return { ref: null, reason: 'no worker bound to ' + id };
-    // A card may point its pane at a DIFFERENT WINDOW of its own worker's
-    // session. A worker that opens sibling windows (an orchestrator running its
-    // agents beside itself) is otherwise unwatchable: the board shows the
-    // window it bound at `card.start`, which sits silent while the work happens
-    // one window over.
-    //
-    // Only the window is taken from the card, never the session, so this can
-    // never address a session the card does not already own — the blast radius
-    // is exactly what it was. The charset excludes `:` deliberately: the value
-    // becomes a `session:window` tmux target, and a colon in it would retarget
-    // the pane at another session entirely.
-    const win = card.attributes && card.attributes.pane;
-    if (typeof win === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(win)) {
-      return { ref: Object.assign({}, w.ref, { window: win }), reason: '' };
-    }
+    // `want` is the caller asking for one of the offered windows by name —
+    // honoured only if the CARD listed it, so a request can never name a window
+    // of its own. Unlisted or absent falls back to the card's first offer, then
+    // to the worker's own window.
+    const offered = paneWindows(card);
+    const win = want && offered.includes(want) ? want : offered[0];
+    if (win) return { ref: Object.assign({}, w.ref, { window: win }), reason: '' };
     return { ref: w.ref, reason: '' };
   }
   const lt = findLieutenant(id);
@@ -2997,7 +3011,7 @@ const server = http.createServer(async (req, res) => {
     // an EventSource, which can't read error bodies.
     const paneRoute = /^\/api\/(cards|lieutenants)\/([^/]+)\/pane\/stream$/.exec(p);
     if (paneRoute && req.method === 'GET') {
-      const { ref, reason } = resolvePaneRef(paneRoute[1], decodeURIComponent(paneRoute[2]));
+      const { ref, reason } = resolvePaneRef(paneRoute[1], decodeURIComponent(paneRoute[2]), url.searchParams.get('window'));
       return paneStream(req, res, ref, reason);
     }
 
@@ -3013,7 +3027,8 @@ const server = http.createServer(async (req, res) => {
     // network boundary is the auth boundary (README).
     const paneInputRoute = /^\/api\/(cards|lieutenants)\/([^/]+)\/pane\/input$/.exec(p);
     if (paneInputRoute && req.method === 'POST') {
-      const { ref, reason } = resolvePaneRef(paneInputRoute[1], decodeURIComponent(paneInputRoute[2]));
+      const { ref, reason } = resolvePaneRef(paneInputRoute[1], decodeURIComponent(paneInputRoute[2]),
+        url.searchParams.get('window'));
       if (!ref) return sendJson(res, 404, { error: reason });
       let impl;
       try { impl = harnessFor(ref); }

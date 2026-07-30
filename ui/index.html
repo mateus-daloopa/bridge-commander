@@ -273,6 +273,10 @@
       <span class="pane-hint" id="pane-hint">click the screen to type</span>
       <button id="pane-close" title="close">✕</button>
     </div>
+    <!-- One window, no tabs — the drawer looks exactly as it always has. A card
+         that offers several (an orchestrator and the agents beside it) gets one
+         button each, rendered by pane.js. -->
+    <div class="pane-tabs" id="pane-tabs" hidden></div>
     <!-- tabindex makes the screen focusable: focused, it forwards keystrokes to
          the pane (including Escape, which is why the head carries the way out) -->
     <pre id="pane-body" tabindex="0"></pre>

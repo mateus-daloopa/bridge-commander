@@ -407,3 +407,49 @@ test('a card can point its pane at another window of its own worker\'s session, 
       'every rejected pointer typed into the card\'s OWN window, never elsewhere');
   } finally { await teardown(); }
 });
+
+// Plural: a card offers several windows and the caller picks one by name. The
+// pick is honoured ONLY if the card advertised it — the request never names a
+// window on its own, which is what keeps a tab from becoming a way to watch
+// something the card does not own.
+test('a card offers several windows; ?window= picks one, and only from what the card offered', async () => {
+  const { s, fdir, teardown } = await boot();
+  try {
+    const own = await startWorker(s, s.dir, 'three-tabs');
+    const session = lieutenantSession(s.dir, LT);
+    assert.strictEqual((await s.api('PATCH', '/api/cards/three-tabs',
+      { attributes: { repo: 'proj', pane: 's-three-tabs-impl,s-three-tabs-val1,w-three-tabs' } })).status, 200);
+
+    // No ?window= → the card's FIRST offer leads. That is how the executor puts
+    // whoever is typing in front without the client knowing anything.
+    assert.strictEqual((await s.api('POST', '/api/cards/three-tabs/pane/input', { text: 'default' })).status, 200);
+    let log = await waitLog(fdir, session + ':s-three-tabs-impl', (l) => l.some((e) => e.event === 'input'));
+    assert.deepStrictEqual(log.filter((e) => e.event === 'input').map((e) => e.text), ['default']);
+
+    // A named offer is honoured — this is the tab click.
+    assert.strictEqual((await s.api('POST',
+      '/api/cards/three-tabs/pane/input?window=s-three-tabs-val1', { text: 'second tab' })).status, 200);
+    log = await waitLog(fdir, session + ':s-three-tabs-val1', (l) => l.some((e) => e.event === 'input'));
+    assert.deepStrictEqual(log.filter((e) => e.event === 'input').map((e) => e.text), ['second tab']);
+
+    // The stream agrees with the input route about which window a name means.
+    const c = await sseOpen(s.base + '/api/cards/three-tabs/pane/stream?window=w-three-tabs');
+    const f = await c.waitFor('frame');
+    assert.match(String(f.data), /w-three-tabs/);
+    c.close();
+
+    // A window the card did NOT offer is ignored — it falls back to the first
+    // offer rather than addressing anything the caller asked for.
+    for (const evil of ['s-someone-elses-impl', 'lt', '0', 'other:win']) {
+      assert.strictEqual((await s.api('POST',
+        '/api/cards/three-tabs/pane/input?window=' + encodeURIComponent(evil), { text: 'nope' })).status, 200);
+    }
+    log = await waitLog(fdir, session + ':s-three-tabs-impl', (l) => l.filter((e) => e.event === 'input').length === 5);
+    assert.strictEqual(log.filter((e) => e.event === 'input').length, 5,
+      'every unoffered window fell back to the first offer, never to what was asked for');
+    // and nothing was ever typed into a window the card did not name
+    assert.ok(!fs.existsSync(path.join(fdir, session + ':s-someone-elses-impl.jsonl')));
+    // the card's own worker window was never touched either — it was not first
+    assert.ok(!fs.existsSync(path.join(fdir, own + '.jsonl')), own);
+  } finally { await teardown(); }
+});
