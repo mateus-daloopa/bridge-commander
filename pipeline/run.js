@@ -373,8 +373,19 @@ async function main(argv) {
     // a second time would put a second item in the lieutenant's queue for work
     // that landed once. Say so on the pane and stop.
     log(`this pipeline already finished at ${state.data.finished} — nothing to do.`);
-    log(`to run it again, remove ${state.file}`);
+    log(`to run it again, remove ${state.dir}`);
     return 0;
+  }
+  // A run that is not resuming starts from nothing. Anything a previous life
+  // left in this directory is not this run's evidence — and `runStage` would
+  // read it as such, finish in seconds, and report the card done again with an
+  // outcome from hours ago. That happened.
+  if (!state.resumed) {
+    const swept = state.clearRoundArtifacts();
+    if (swept.length) {
+      log(`fresh run: discarded ${swept.length} artefact(s) from a previous run — ${swept.join(', ')}`);
+      journal.event('swept', { files: swept });
+    }
   }
   // Stage agents outlive the executor: tmux keeps them when we are paused,
   // killed or die. Anything of this card's still standing that this run's state

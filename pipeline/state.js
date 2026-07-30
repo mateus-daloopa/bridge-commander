@@ -59,6 +59,29 @@ class State {
     fs.renameSync(tmp, this.file);
   }
 
+  // clearRoundArtifacts() -> [names removed]
+  //
+  // Everything a round leaves behind, swept. Called only when a run starts
+  // WITHOUT resuming: `runStage` treats a verdict on disk as this round's
+  // answer, and after `state.json` is deleted the round counter goes back to 1
+  // while last time's `verdict-*-r1.json` is still lying there. The executor
+  // then believes both stages already answered, finishes in zero seconds, and
+  // reports the card done a second time with an outcome from hours ago.
+  // Observed in the wild 2026-07-30 on `pendingqueue-lease`.
+  //
+  // Same rule as the orphan reaping: an answer on disk is evidence only if THIS
+  // run is what put it there.
+  clearRoundArtifacts() {
+    const stale = /^(verdict|prompt|run)-(working|validating)-r\d+\.(json|md|txt)$/;
+    const gone = [];
+    for (const name of fs.readdirSync(this.dir)) {
+      if (!stale.test(name)) continue;
+      fs.rmSync(path.join(this.dir, name), { force: true });
+      gone.push(name);
+    }
+    return gone;
+  }
+
   verdictFile(stage, round) { return path.join(this.dir, `verdict-${stage}-r${round}.json`); }
   promptFile(stage, round) { return path.join(this.dir, `prompt-${stage}-r${round}.md`); }
   runFile(stage, round) { return path.join(this.dir, `run-${stage}-r${round}.txt`); }

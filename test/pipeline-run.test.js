@@ -425,6 +425,67 @@ test('the journal keeps every run, whole, and a second run appends instead of ov
   }
 });
 
+// Observed in the wild 2026-07-30, on a real card: a pipeline reported itself
+// delivered a SECOND time, in zero seconds, repeating an outcome from hours
+// earlier. `state.json` had been removed to re-run it — which is what the
+// executor's own message tells you to do — but the verdict files survived. The
+// round counter went back to 1, `runStage` found last life's `verdict-*-r1`
+// and believed both stages had already answered.
+//
+// A verdict on disk is evidence only if THIS run put it there.
+test('a fresh run does not inherit a previous life\'s verdicts and re-report the card done', async () => {
+  const { s, runDir, fdir, teardown } = await boot();
+  const first = startExecutor(s, fdir);
+  try {
+    // A complete run, one round, delivered.
+    await waitForFile(path.join(runDir, 'prompt-working-r1.md'), first.out);
+    verdictCli(['done', '--to', path.join(runDir, 'verdict-working-r1.json'), '--outcome', 'the real work']);
+    await waitForFile(path.join(runDir, 'prompt-validating-r1.md'), first.out);
+    verdictCli(['done', '--to', path.join(runDir, 'verdict-validating-r1.json'),
+      '--outcome', 'first landing — https://github.com/o/r/pull/1']);
+    assert.strictEqual(await first.exited, 0, first.out.text);
+
+    let card = (await s.api('GET', '/api/cards/demo')).body;
+    assert.strictEqual(card.events.filter((e) => e.kind === 'worker-done').length, 1);
+
+    // Exactly what a person does to run it again: remove the state file. The
+    // verdicts stay — nothing tells you to delete those.
+    fs.rmSync(path.join(runDir, 'state.json'));
+    assert.ok(fs.existsSync(path.join(runDir, 'verdict-validating-r1.json')), 'last life\'s answer is still there');
+
+    const second = startExecutor(s, fdir);
+    // Waiting for the prompt file proves nothing here — last life's copy is
+    // still on disk. Wait for the sweep to be announced instead.
+    const deadline = Date.now() + 15000;
+    while (!/discarded \d+ artefact/.test(second.out.text)) {
+      if (Date.now() > deadline) assert.fail('never swept:\n' + second.out.text);
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    assert.ok(!fs.existsSync(path.join(runDir, 'verdict-validating-r1.json')),
+      'the previous life\'s answer is gone');
+
+    // and it is genuinely waiting for an answer rather than having finished
+    card = (await s.api('GET', '/api/cards/demo')).body;
+    assert.strictEqual(card.events.filter((e) => e.kind === 'worker-done').length, 1,
+      'the card was NOT reported done a second time');
+
+    verdictCli(['done', '--to', path.join(runDir, 'verdict-working-r1.json'), '--outcome', 'redone']);
+    await waitForFile(path.join(runDir, 'prompt-validating-r1.md'), second.out);
+    verdictCli(['done', '--to', path.join(runDir, 'verdict-validating-r1.json'),
+      '--outcome', 'second landing — https://github.com/o/r/pull/2']);
+    assert.strictEqual(await second.exited, 0, second.out.text);
+
+    card = (await s.api('GET', '/api/cards/demo')).body;
+    const done = card.events.filter((e) => e.kind === 'worker-done');
+    assert.strictEqual(done.length, 2, 'two real runs, two reports');
+    assert.match(done[1].text, /pull\/2/, 'the second report is the second run\'s outcome, not a replay of the first');
+    second.child.kill('SIGKILL');
+  } finally {
+    first.child.kill('SIGKILL');
+    await teardown();
+  }
+});
+
 // The journal keeps the executor's half of a round. The agent's own half — its
 // reasoning, the files it read, what it tried and dropped — lives in the
 // harness's session transcript. The journal points at it rather than swallowing
