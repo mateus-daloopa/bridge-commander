@@ -804,6 +804,21 @@ function resolvePaneRef(kind, id) {
     if (!card) return { ref: null, reason: 'unknown card: ' + id };
     if (card.column !== 'working') return { ref: null, reason: 'card is not Working' };
     if (!w) return { ref: null, reason: 'no worker bound to ' + id };
+    // A card may point its pane at a DIFFERENT WINDOW of its own worker's
+    // session. A worker that opens sibling windows (an orchestrator running its
+    // agents beside itself) is otherwise unwatchable: the board shows the
+    // window it bound at `card.start`, which sits silent while the work happens
+    // one window over.
+    //
+    // Only the window is taken from the card, never the session, so this can
+    // never address a session the card does not already own — the blast radius
+    // is exactly what it was. The charset excludes `:` deliberately: the value
+    // becomes a `session:window` tmux target, and a colon in it would retarget
+    // the pane at another session entirely.
+    const win = card.attributes && card.attributes.pane;
+    if (typeof win === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(win)) {
+      return { ref: Object.assign({}, w.ref, { window: win }), reason: '' };
+    }
     return { ref: w.ref, reason: '' };
   }
   const lt = findLieutenant(id);

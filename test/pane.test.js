@@ -361,3 +361,49 @@ test('concurrent-pane cap → busy (existing streams unaffected)', async () => {
     c.close();
   } finally { await teardown(); }
 });
+
+// A worker that opens sibling windows — an orchestrator running its agents
+// beside itself — is otherwise unwatchable: the board shows the window it bound
+// at card.start, which sits silent while the work happens one window over. The
+// card can redirect its own pane to another window OF ITS OWN SESSION.
+//
+// The session is never taken from the card. That is the whole security of it,
+// and the reason `:` is not in the accepted charset: the value becomes a
+// `session:window` tmux target, and a colon would retarget another session.
+test('a card can point its pane at another window of its own worker\'s session, and only that', async () => {
+  const { s, fdir, teardown } = await boot();
+  try {
+    const own = await startWorker(s, s.dir, 'orchestrator');
+    const session = lieutenantSession(s.dir, LT);
+
+    // With no pointer, the pane is the worker's own window.
+    assert.strictEqual((await s.api('POST', '/api/cards/orchestrator/pane/input', { text: 'hi' })).status, 200);
+    let log = await waitLog(fdir, own, (l) => l.some((e) => e.event === 'input'));
+    assert.strictEqual(log.filter((e) => e.event === 'input').length, 1);
+
+    // Point it at a sibling window and the SAME route lands there instead.
+    assert.strictEqual((await s.api('PATCH', '/api/cards/orchestrator',
+      { attributes: { repo: 'proj', pane: 's-orchestrator-impl' } })).status, 200);
+    assert.strictEqual((await s.api('POST', '/api/cards/orchestrator/pane/input', { text: 'in the sibling' })).status, 200);
+    const sibling = session + ':s-orchestrator-impl';
+    log = await waitLog(fdir, sibling, (l) => l.some((e) => e.event === 'input'));
+    assert.deepStrictEqual(log.filter((e) => e.event === 'input').map((e) => e.text), ['in the sibling']);
+
+    // The stream follows the same pointer — both routes agree, always.
+    const c = await sseOpen(s.base + '/api/cards/orchestrator/pane/stream');
+    const f = await c.waitFor('frame');
+    assert.match(String(f.data), /s-orchestrator-impl/, 'the stream watches the redirected window too');
+    c.close();
+
+    // A pointer carrying a session is refused: it falls back to the worker's
+    // own window rather than addressing anything else.
+    for (const evil of ['other-session:win', 'bc-lt-someone-else:0', '../../etc', 'a b', '']) {
+      assert.strictEqual((await s.api('PATCH', '/api/cards/orchestrator',
+        { attributes: { repo: 'proj', pane: evil } })).status, 200);
+      assert.strictEqual((await s.api('POST', '/api/cards/orchestrator/pane/input', { text: 'x' })).status, 200);
+    }
+    log = await waitLog(fdir, own, (l) => l.filter((e) => e.event === 'input').length === 6);
+    assert.strictEqual(log.filter((e) => e.event === 'input').length, 6,
+      'every rejected pointer typed into the card\'s OWN window, never elsewhere');
+  } finally { await teardown(); }
+});

@@ -65,6 +65,23 @@ class Board {
   done(id, outcome) {
     this.run(['worker', 'done', id, '--text-file', '-'], outcome);
   }
+
+  // pane(id, window) — point the card's LIVE pane at one of the worker's own
+  // windows, or back at the worker itself with null.
+  //
+  // The executor's own pane is three log lines and then silence: the typing
+  // happens in the stage agent beside it. Without this the board shows the
+  // quiet window and the run looks dead while it is working.
+  //
+  // Best effort. Losing the pointer costs visibility; failing the run over it
+  // would cost the work.
+  pane(id, window) {
+    try {
+      this.run(['card', 'patch', id, '--attr', 'pane=' + (window || '')]);
+    } catch (e) {
+      process.stderr.write('pane pointer not set: ' + String((e && e.message) || e) + '\n');
+    }
+  }
 }
 
 module.exports = { Board };

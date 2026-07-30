@@ -184,6 +184,11 @@ async function runStage(ctx, stageName) {
     log(`${stageName} round ${round}: prompt was already delivered — waiting on the agent`);
   }
 
+  // Point the card's LIVE pane at whoever is actually typing — set on a resume
+  // too, not only on a fresh open, since a restarted executor is exactly when
+  // you go looking. The executor's own pane is three lines and then silence.
+  if (ref && ref.window) ctx.board.pane(ctx.card.id, ref.window);
+
   const r = await stageLib.waitForVerdict({
     harness: ctx.harness, ref, file: vFile,
     onRevive: (revived) => {
@@ -211,6 +216,10 @@ async function runStage(ctx, stageName) {
 }
 
 async function killAgents(ctx) {
+  // The stage agents are about to be gone; a pane pointed at one of them would
+  // show a dead window. Hand the card back to the executor, whose final lines
+  // are the last thing worth reading.
+  ctx.board.pane(ctx.card.id, null);
   for (const [name, ref] of Object.entries(ctx.state.data.agents)) {
     if (!ref) continue;
     try { await getHarness(ctx.harness).kill(ref); } catch { /* already gone */ }
