@@ -13,6 +13,8 @@ tarball. To update: repack, copy, and bump the line here.
 - react.production.min.js, react-dom.production.min.js — React 18.3.1 (MIT) — https://github.com/facebook/react — `npm pack react@18.3.1 react-dom@18.3.1` → `package/umd/{react,react-dom}.production.min.js`. React 18, not 19: 19 dropped the UMD builds, and a UMD that sets `window.React` is the only form a no-build-step page can load. Only here because Excalidraw needs it.
 - excalidraw/ — Excalidraw v0.17.6 (MIT) — https://github.com/excalidraw/excalidraw — `npm pack @excalidraw/excalidraw@0.17.6` → `package/dist/{excalidraw.production.min.js,excalidraw-assets/}`. 0.17, not 0.18: 0.18 ships ESM with ~28 bare-specifier imports (react, jotai, roughjs, …) and can only be loaded through a bundler. 0.17 is the last UMD release — it takes `window.React`/`window.ReactDOM` and hands back `window.ExcalidrawLib`. `excalidraw-assets/` holds the woff2 fonts plus the lazy `vendor-*.js` chunk the bundle fetches on mount; `window.EXCALIDRAW_ASSET_PATH` must point at that directory before the bundle initialises. The 60-odd `locales/` files are deliberately NOT vendored — English is baked into the main bundle.
 
+- three/three.module.min.js — three.js r169 (MIT) — https://github.com/mrdoob/three.js — `npm pack three@0.169.0` → `package/build/three.module.min.js` (672 KB raw, 166 KB gzipped). Only the core build: the `examples/jsm` addons — the WebXR button, the controller models, the orbit camera — all import the bare specifier `three`, which needs an import map or a bundler, so the few lines of them this page wanted are hand-written in `ui/js/bridge3d/` instead. Nothing the board ships imports it.
+
 marked + purify load as classic scripts in index.html (globals — they are needed by every
 markdown surface). highlight and mermaid are lazy-loaded by `ui/js/md.js` only when rendered
 content actually contains a fenced code block / a ```mermaid fence. CodeMirror is lazy-loaded
@@ -23,3 +25,9 @@ React + Excalidraw are loaded by nothing the board ships. They exist only for th
 `ui/excalidraw-spike.html`, which answers whether a React component can run here without a
 build step. If that spike is not taken forward, delete `react*.js`, `react*.LICENSE`,
 `excalidraw/` and `excalidraw.LICENSE` — nothing else references them.
+
+three.js is the same shape of bet, one page further out: only `ui/bridge3d.html` loads it, and
+that page is a prototype of the board inside a headset — four spatial arrangements, live panes
+on surfaces, meant to have three of its four ideas killed by an evening of wearing it. If the
+room turns out not to be worth building, delete `three/`, `three.LICENSE`, `ui/bridge3d.html`,
+`ui/js/bridge3d/` and `test/bridge3d.test.js`; nothing else references any of it.

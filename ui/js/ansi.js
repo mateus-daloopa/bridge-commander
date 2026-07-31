@@ -1,8 +1,12 @@
-// ansi.js — tiny zero-dep ANSI SGR → HTML converter for pane frames.
+// ansi.js — tiny zero-dep ANSI SGR parser for pane frames.
 // Handles reset, bold/dim, 16-color and 256-color (and, defensively, truecolor)
-// fg/bg as inline-styled <span>s. Text is HTML-escaped BEFORE any markup is
-// added. Non-SGR escape sequences (cursor movement, OSC titles, …) are
+// fg/bg. Non-SGR escape sequences (cursor movement, OSC titles, …) are
 // stripped — capture-style frames are mostly SGR + text, but be defensive.
+//
+// The parse produces SEGMENTS — runs of text under one style. Two consumers
+// draw them: the board's pane, into <span style>; and the headset, onto a
+// canvas, where there is no DOM and a span would be no use. Neither owns the
+// parse, which is why it comes out as data first and markup second.
 
 // 16-color terminal palette (normal 0-7, bright 8-15), tuned for a dark surface.
 const BASE16 = [
@@ -26,26 +30,19 @@ function color256(n) {
   return rgb(g, g, g);
 }
 
-
-// ansiToHtml(frame) -> html string. Runs of text under one SGR state become one
-// <span style>; unstyled runs stay bare text.
-export function ansiToHtml(str) {
+// ansiToSegments(frame) -> [{text, fg, bg, bold, dim}]. Runs of text under one
+// SGR state become one segment; text is raw, unescaped — escaping belongs to
+// whoever is building markup, and the canvas must not be handed &amp;.
+export function ansiToSegments(str) {
   const st = { bold: false, dim: false, fg: null, bg: null };
-  let out = '';
-  let buf = '';        // pending text under bufStyle
-  let bufStyle = '';   // the css of the text sitting in buf
+  const out = [];
+  let buf = '';
+  let bufSt = { bold: false, dim: false, fg: null, bg: null };
 
-  const styleOf = () => {
-    const parts = [];
-    if (st.fg) parts.push('color:' + st.fg);
-    if (st.bg) parts.push('background:' + st.bg);
-    if (st.bold) parts.push('font-weight:700');
-    if (st.dim) parts.push('opacity:.55');
-    return parts.join(';');
-  };
+  const same = (a, b) => a.fg === b.fg && a.bg === b.bg && a.bold === b.bold && a.dim === b.dim;
   const flush = () => {
     if (!buf) return;
-    out += bufStyle ? '<span style="' + bufStyle + '">' + buf + '</span>' : buf;
+    out.push({ text: buf, fg: bufSt.fg, bg: bufSt.bg, bold: bufSt.bold, dim: bufSt.dim });
     buf = '';
   };
 
@@ -91,7 +88,6 @@ export function ansiToHtml(str) {
     }
   };
 
-  let cur = ''; // css of the CURRENT SGR state (recomputed only on SGR)
   for (let i = 0; i < str.length; i++) {
     const c = str[i];
     if (c === '\x1b') {
@@ -99,10 +95,7 @@ export function ansiToHtml(str) {
       if (n === '[') { // CSI: apply if SGR (final 'm'), strip anything else
         let j = i + 2;
         while (j < str.length && !/[@-~]/.test(str[j])) j++;
-        if (j < str.length && str[j] === 'm') {
-          applySgr(str.slice(i + 2, j));
-          cur = styleOf();
-        }
+        if (j < str.length && str[j] === 'm') applySgr(str.slice(i + 2, j));
         i = j < str.length ? j : str.length;
         continue;
       }
@@ -115,9 +108,26 @@ export function ansiToHtml(str) {
       i++; // lone ESC + one byte: drop
       continue;
     }
-    if (cur !== bufStyle) { flush(); bufStyle = cur; }
-    buf += c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c;
+    if (!same(st, bufSt)) { flush(); bufSt = { bold: st.bold, dim: st.dim, fg: st.fg, bg: st.bg }; }
+    buf += c;
   }
   flush();
+  return out;
+}
+
+// ansiToHtml(frame) -> html string. One <span style> per segment; unstyled
+// runs stay bare text. Text is HTML-escaped BEFORE any markup is added.
+export function ansiToHtml(str) {
+  let out = '';
+  for (const s of ansiToSegments(str)) {
+    const parts = [];
+    if (s.fg) parts.push('color:' + s.fg);
+    if (s.bg) parts.push('background:' + s.bg);
+    if (s.bold) parts.push('font-weight:700');
+    if (s.dim) parts.push('opacity:.55');
+    const css = parts.join(';');
+    const text = s.text.replace(/[&<>]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'));
+    out += css ? '<span style="' + css + '">' + text + '</span>' : text;
+  }
   return out;
 }

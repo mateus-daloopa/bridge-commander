@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>bridge — 3d prototype</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #05070b; color: #c8d2e0;
+               font: 15px/1.5 ui-monospace, "DejaVu Sans Mono", monospace; overflow: hidden; }
+  canvas { display: block; }
+  #gate { position: fixed; inset: auto 0 0 0; padding: 18px 20px 22px;
+          background: linear-gradient(transparent, rgba(5,7,11,.92) 40%); text-align: center; }
+  #enter { font: 600 16px ui-monospace, monospace; color: #05070b; background: #4cc2ff;
+           border: 0; border-radius: 8px; padding: 12px 26px; cursor: pointer; }
+  #enter:disabled { opacity: .4; }
+  #status { min-height: 1.5em; color: #8ea2c0; margin-top: 10px; }
+  #keys { color: #5b6b82; margin-top: 6px; font-size: 12.5px; }
+  #gate.ready #keys { display: block; }
+</style>
+
+<div id="gate">
+  <button id="enter">enter the bridge</button>
+  <div id="status">loading…</div>
+  <div id="keys">
+    in the headset — right A: next layout · right B: all panes readable · left X: reset ·
+    left Y: previous layout · right stick: turn the room / distance · left stick: pane size ·
+    squeeze: pick up a card · keyboard types into whatever you are facing<br>
+    at a desk — drag to look · 1-4 layouts · t all-text · [ ] size · - = distance
+  </div>
+</div>
+
+<script type="module" src="./js/bridge3d/main.js"></script>
