@@ -121,7 +121,7 @@ test('the drawing saves itself on a debounce, and never per stroke', () => {
 
 test('the save still carries the version, and a drawing merges instead of asking', () => {
   assert.match(detailSrc, /api\.saveArtifact\(uri, text, versions\.get\(uri\) \|\| ''\)/, 'the same guarded write');
-  assert.match(detailSrc, /e\.status === 409/, 'and the same refusal, said out loud');
+  assert.match(detailSrc, /if \(e\.status !== 409\) throw e;/, 'and the same refusal, still handled as one');
   assert.match(detailSrc, /if \(!fileDirty\(\) \|\| fileMerges\(\)\) return take\(/);
   assert.match(filepaneSrc, /export function fileMerges\(\) \{ return !!\(open && open\.draw\); \}/);
 });
@@ -133,7 +133,57 @@ test('the canvas never scrolls, zooms or interrupts the hand that is drawing', (
   assert.match(drawSrc, /if \(busy\(\)\) \{ timer = setTimeout\(apply, \d+\); return; \}/, 'a write in flight waits for the stroke');
   assert.match(drawSrc, /s\.draggingElement \|\| s\.resizingElement \|\| s\.editingElement/);
   assert.match(drawSrc, /s\.cursorButton === 'down'/);
+  // every field busy() reads has to exist in the version we pin, or it is a
+  // check that never fires — 0.18 vocabulary in a 0.17 bundle
+  const bundle = fs.readFileSync(path.join(__dirname, '..', 'ui', 'vendor', 'excalidraw', 'excalidraw.production.min.js'), 'utf8');
+  const fields = /function busy\(\) \{[\s\S]*?\n  \}/.exec(drawSrc)[0].match(/s\.(\w+)/g).map((s) => s.slice(2));
+  for (const f of fields) assert.ok(bundle.includes(f), 'appState.' + f + ' exists in Excalidraw 0.17.6');
   assert.match(drawSrc, /exportToSvg/, "the picture comes from Excalidraw's own exporter");
+});
+
+// ---------- what a refusal becomes ----------
+// The defect this round exists to kill: the client answered a 409 by pinning the
+// version it was refused with, and the autosave then wrote through clean 1.5 s
+// later. Nobody chose that, and what was only on disk was gone.
+
+test('a refused save comes back as a MERGE, keeping what was only on disk', async () => {
+  const { resolveRefusal, parseScene, sceneText } = await drawMod;
+  const mine = { elements: [box('seed1', 1), box('mine', 1)], appState: {}, files: {} };
+  const disk = sceneText([box('seed1', 1), box('unheard', 1)], {}, {});
+  const out = parseScene(resolveRefusal(mine, disk, new Set(['seed1']), new Set()));
+  assert.deepStrictEqual(ids(out.elements), ['mine', 'seed1', 'unheard'],
+    'what they wrote while we were not looking is still there, and so is ours');
+});
+
+test('a refusal we cannot read stays a refusal — there is nothing to write instead', async () => {
+  const { resolveRefusal } = await drawMod;
+  const mine = { elements: [box('mine', 1)], appState: {}, files: {} };
+  assert.strictEqual(resolveRefusal(mine, 'not a drawing at all', new Set(), new Set()), null);
+});
+
+test('a refused save never re-pins the version on a drawing — only a landed write does', () => {
+  const fn = /async function saveArtifactText\([\s\S]*?\n\}/.exec(detailSrc)[0];
+  const merge = /if \(fileMerges\(\) && fileKey\(\) === uri\) \{[\s\S]*?\n    \}/.exec(fn)[0];
+  assert.ok(!/versions\.set/.test(merge), 'the drawing branch never pins a version it was refused with');
+  assert.match(merge, /const merged = disk == null \? null : fileResolve\(disk\)/, 'it merges what the refusal handed back');
+  assert.match(merge, /if \(merged == null\) \{[\s\S]*?throw new Error/, 'and when it cannot, the refusal stands');
+  assert.match(merge, /api\.saveArtifact\(uri, merged, e\.body\.version\)/, 'the merged scene is what gets written');
+  // the pin that remains is the text editor's, where a human clicks 💾 again
+  assert.match(fn, /Text cannot be merged[\s\S]*?versions\.set\(uri, e\.body\.version\)/);
+});
+
+test('opening a drawing is a read: only a changed SHAPE counts as a change', async () => {
+  const { sceneKey } = await drawMod;
+  const loaded = [box('a', 3), box('b', 1)];
+  // the canvas re-serialising the same shapes (mount, scroll, zoom, selection)
+  // is not a change — only ids and versions are read
+  assert.strictEqual(sceneKey(loaded), sceneKey([box('a', 3, { x: 9, seed: 77 }), box('b', 1)]));
+  assert.notStrictEqual(sceneKey(loaded), sceneKey([box('a', 4), box('b', 1)]), 'a hand moved it — version bumped');
+  assert.notStrictEqual(sceneKey(loaded), sceneKey(loaded.concat([box('c', 1)])), 'a hand drew one');
+  assert.notStrictEqual(sceneKey(loaded), sceneKey([box('a', 4, { isDeleted: true }), box('b', 1)]), 'a hand deleted one');
+  const drawSrc = read('draw.js');
+  assert.match(drawSrc, /onChange: \(els\) => \{\n\s*if \(sceneKey\(els\) === mark\) return;/, 'the gate is on the way out of the canvas');
+  assert.match(drawSrc, /mark = sceneKey\(d\.elements\); \/\/ opening a drawing is a read/);
 });
 
 // ---------- 3. the server ----------
@@ -198,6 +248,48 @@ test('the .svg beside the drawing is created by the same door, under the same ru
     const raw = await fetch(s.base + '/api/artifact?uri=' + encodeURIComponent(svgUri) + '&raw=1');
     assert.strictEqual(raw.headers.get('content-type'), 'image/svg+xml');
     assert.match(await raw.text(), /^<svg /);
+  } finally {
+    await s.stop();
+  }
+});
+
+// The reviewer's repro, end to end against a real server and the real client
+// policy: a disk that moved without the PUT route (an agent writing its own
+// worktree file, or a board SSE that missed the event), a pinned stale version,
+// and then an AUTOMATIC save — the one with no human behind it.
+test('after a refusal, the automatic save that follows merges — it never overwrites clean', async () => {
+  const { resolveRefusal, sceneText, parseScene } = await drawMod;
+  const s = await startServerWithLieutenant();
+  try {
+    const file = path.join(s.dir, 'flow.excalidraw');
+    fs.writeFileSync(file, sceneText([box('seed1', 1)], {}, {}));
+    const { uri } = await cardWithArtifact(s, 'file://' + file, 'flow');
+
+    // the canvas opens: base and version as read
+    const opened = (await s.api('GET', '/api/artifact?uri=' + encodeURIComponent(uri))).body;
+    const baseIds = new Set(parseScene(opened.content).elements.map((e) => e.id));
+    let pinned = opened.version;
+    // the captain draws one shape
+    let scene = [box('seed1', 1), box('mine', 1)];
+
+    // and somebody writes the file without going through the PUT route at all,
+    // so nothing is announced and nothing here hears about it
+    fs.writeFileSync(file, sceneText([box('seed1', 1), box('unheard', 1)], {}, {}));
+
+    // autosave #1 — refused, as it must be
+    const refused = await s.api('PUT', '/api/artifact', { uri, content: sceneText(scene, {}, {}), version: pinned });
+    assert.strictEqual(refused.status, 409);
+    assert.deepStrictEqual(ids(parseScene(fs.readFileSync(file, 'utf8')).elements), ['seed1', 'unheard'], 'nothing was written');
+
+    // what the client does with that refusal, and it is the whole fix: merge,
+    // then write the merged scene against the version the refusal carried
+    const merged = resolveRefusal({ elements: scene, appState: {}, files: {} }, refused.body.content, baseIds, new Set());
+    assert.ok(merged, 'a drawing can always answer a refusal');
+    const again = await s.api('PUT', '/api/artifact', { uri, content: merged, version: refused.body.version });
+    assert.strictEqual(again.status, 200, JSON.stringify(again.body));
+
+    assert.deepStrictEqual(ids(parseScene(fs.readFileSync(file, 'utf8')).elements), ['mine', 'seed1', 'unheard'],
+      "the other hand's shape survived the save that followed its own refusal");
   } finally {
     await s.stop();
   }

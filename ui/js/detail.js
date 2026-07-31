@@ -5,7 +5,7 @@ import { md, mdEnhance, copyText } from './md.js';
 import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
 import { openCardThread, syncChatToMain } from './chat.js';
-import { openFile, closeFile, fileKey, fileDirty, fileMerges, fileUpdate, fileNotice } from './filepane.js';
+import { openFile, closeFile, fileKey, fileDirty, fileMerges, fileResolve, fileUpdate, fileNotice } from './filepane.js';
 import { openMoveMenu } from './board.js';
 import { archivedCard, unarchive } from './archive.js';
 
@@ -344,23 +344,44 @@ async function openDrawing(uri, name) {
 // told and never learns what an artifact is.
 async function saveArtifactText(uri, text, svg, cardId) {
   try {
-    const r = await api.saveArtifact(uri, text, versions.get(uri) || '');
-    versions.set(uri, r.version);
-    drafts.delete(uri); // what is on disk IS this text now
-    if (avEditable && avEditable.uri === uri) avEditable.content = text;
-    const also = svg ? await saveSvg(uri, svg, cardId) : '';
-    return 'saved — ' + r.bytes + ' bytes on disk' + also;
+    return await landed(uri, await api.saveArtifact(uri, text, versions.get(uri) || ''), text, svg, cardId);
   } catch (e) {
-    // 409: someone (or something) else wrote this file since we read it. Say
-    // exactly that, and say the part that matters most — the captain's text was
-    // NOT written and was NOT lost; it is still in the editor in front of him.
-    if (e.status === 409) {
-      if (e.body && e.body.version) versions.set(uri, e.body.version); // saving again now overwrites deliberately
-      throw new Error('this file changed on disk since you opened it — nothing was written, and your text is still here. ' +
-        'Save again to overwrite the disk version, or copy your text out first.');
+    // 409: someone (or something) else wrote this file since we read it.
+    if (e.status !== 409) throw e;
+    const disk = e.body && e.body.content;
+    // A DRAWING resolves this itself, because that is the whole reason it merges
+    // shape by shape: take their copy, merge it with his, and write THAT against
+    // the version the refusal just handed us — in the same breath, so the pin
+    // never exists on its own. It must not: the canvas saves itself on a timer,
+    // so a pinned version with no merge behind it is a clean overwrite of
+    // somebody's work that no human ever chose.
+    if (fileMerges() && fileKey() === uri) {
+      const merged = disk == null ? null : fileResolve(disk);
+      if (merged == null) {
+        // Unreadable, or nothing to merge into. Then the refusal STANDS — and
+        // the version stays where it was, so the next automatic save is refused
+        // again instead of going through clean.
+        throw new Error('this file changed on disk and could not be merged — nothing was written, and your drawing is still here.');
+      }
+      const r = await api.saveArtifact(uri, merged, e.body.version);
+      const note = await landed(uri, r, merged, svg, cardId);
+      return { note: '↻ the other hand got there first — merged and ' + note, saved: merged };
     }
-    throw e;
+    // Text cannot be merged, so a human decides. He reads this, and clicking 💾
+    // again is that decision — which is the only reason pinning is sound here.
+    if (e.body && e.body.version) versions.set(uri, e.body.version);
+    throw new Error('this file changed on disk since you opened it — nothing was written, and your text is still here. ' +
+      'Save again to overwrite the disk version, or copy your text out first.');
   }
+}
+// A write landed: remember the version it produced, drop the draft, and put the
+// picture beside it. Returns the line to show.
+async function landed(uri, r, text, svg, cardId) {
+  versions.set(uri, r.version);
+  drafts.delete(uri); // what is on disk IS this text now
+  if (avEditable && avEditable.uri === uri) avEditable.content = text;
+  const also = svg ? await saveSvg(uri, svg, cardId) : '';
+  return 'saved — ' + r.bytes + ' bytes on disk' + also;
 }
 // A drawing renders in Excalidraw and nowhere else, which would make it
 // invisible in card bodies, reports and explains — where mermaid already shows.
@@ -375,7 +396,7 @@ async function saveArtifactText(uri, text, svg, cardId) {
 async function saveSvg(uri, svg, cardId) {
   const su = uri + '.svg';
   try {
-    const text = await svg;
+    const text = await svg(); // taken now, of what actually landed — not of a scene we did not write
     if (cardId) await api.addArtifact(cardId, su, uriBasename(su)); // idempotent; also what makes it writable
     try {
       versions.set(su, (await api.saveArtifact(su, text, versions.get(su) || '')).version);

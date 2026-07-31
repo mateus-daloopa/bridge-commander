@@ -39,6 +39,14 @@ export function fileDirty() { return !!(open && handle && handle.getValue() !== 
 // the captain's? A drawing does — shape by shape, which is why it can take one
 // while he is still drawing. Text cannot, so text still asks.
 export function fileMerges() { return !!(open && open.draw); }
+// A write was REFUSED and the host handed back what is on disk. On a screen
+// that merges, that is not a dead end: this returns the text to write instead —
+// theirs and his, merged — and the canvas takes theirs too. null when it cannot
+// be merged, and then the refusal stands, which is the point of it.
+export function fileResolve(disk) {
+  if (!open || !handle || !handle.resolve) return null;
+  return handle.resolve(disk);
+}
 // The file changed underneath us and the host decided we follow: swap the text
 // in place, mark the lines that moved, and say so in the note. No reload, no
 // button — the captain keeps his cursor and sees what the other hand did.
@@ -205,14 +213,20 @@ function save(h, btn) {
   const was = btn.textContent;
   btn.textContent = '💾 saving…';
   btn.disabled = true;
-  // A drawing also hands over its own picture, taken at the same instant as the
-  // text: the host decides what to do with it (today: a .svg beside the file, so
-  // the drawing is visible where mermaid already is). A refused write never gets
-  // that far, so the export must not be left rejecting into nobody's hands.
-  const svg = h.svg ? h.svg() : null;
-  if (svg) svg.catch(() => {});
-  Promise.resolve(open.onSave(text, svg)).then(
-    (msg) => { if (open) open.saved = text; say(msg || 'saved', 'ok'); },
+  // A drawing also hands over the means to take its own picture — called by the
+  // host once it knows what actually landed (today: a .svg beside the file, so
+  // the drawing is visible where mermaid already is).
+  //
+  // The host may answer with a line, or with { note, saved } when what landed is
+  // not what we handed it — a refused save that resolved itself into a merge
+  // wrote something else, and this screen has to believe the disk over its own
+  // snapshot or it will save the same stale text again.
+  Promise.resolve(open.onSave(text, h.svg || null)).then(
+    (r) => {
+      const msg = r && r.note !== undefined ? r.note : r;
+      if (open) open.saved = r && r.saved != null ? r.saved : text;
+      say(msg || 'saved', 'ok');
+    },
     (e) => { say('⚠ ' + (e && e.message ? e.message : 'save failed'), 'err'); },
   ).then(() => {
     saving = false;

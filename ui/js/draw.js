@@ -85,9 +85,37 @@ export function mergeElements(mine, theirs, baseIds, keep) {
   return out;
 }
 
+// What a REFUSED save becomes on a canvas. The server said the file moved and
+// wrote nothing, and handed back what is there now — so this merges their copy
+// with ours exactly the way an announced write is merged, and the result is
+// what gets written instead, against the version the refusal came with.
+//
+// This is the only answer a drawing is allowed to give a 409. The alternative —
+// pinning the version and letting the next automatic save through — is a clean
+// overwrite of somebody's work that nobody chose, and there is no human in the
+// loop to choose it: the canvas saves itself on a timer.
+//
+// null means the disk copy could not be read, and then the refusal STANDS.
+export function resolveRefusal(mine, disk, baseIds, keep) {
+  let d;
+  try { d = parseScene(disk); }
+  catch (e) { return null; }
+  return sceneText(
+    mergeElements(mine.elements, d.elements, baseIds, keep),
+    mine.appState,
+    Object.assign({}, d.files, mine.files),
+  );
+}
+
+// Has a HAND changed this scene? Excalidraw bumps an element's `version` on
+// every real mutation, so the ids and versions are the whole answer. Scrolling,
+// zooming, selecting and the re-serialisation that happens on mount are not
+// changes and must not trigger a save — a read that writes is still a write.
+export const sceneKey = (els) => (els || []).map((e) => e.id + ':' + e.version + (e.isDeleted ? 'x' : '')).join(',');
+
 // Mount a canvas into `host` (emptied first). Same opts as mountFileEditor —
 // name, content, onChange, actions — minus markdown, which a drawing has no use
-// for. Returns { getValue, selection, replace, svg, destroy }.
+// for. Returns { getValue, selection, replace, resolve, svg, destroy }.
 export function mountDrawing(host, opts) {
   const o = opts || {};
   host.textContent = '';
@@ -104,12 +132,19 @@ export function mountDrawing(host, opts) {
   let lib = null, api = null, root = null, dead = false;
   let text = o.content || '';   // the last disk state we took
   let baseIds = new Set();      // the ids in it
+  let mark = null;              // its shapes, as ids+versions — what "unchanged" means
   let pending = null, timer = null;
 
   const handle = {
     getValue: () => (api ? sceneText(api.getSceneElements(), api.getAppState(), api.getFiles()) : text),
     selection: () => null, // a drawing has no lines to quote
     replace: (t) => { pending = t; apply(); },
+    resolve: (disk) => {
+      if (!api) return null;
+      const merged = resolveRefusal(mine(), disk, baseIds, keep());
+      if (merged != null) { pending = disk; apply(); } // and the canvas takes theirs too, when the hand is free
+      return merged;
+    },
     svg: () => svgOf(),
     destroy: () => {
       dead = true;
@@ -134,7 +169,23 @@ export function mountDrawing(host, opts) {
   function busy() {
     const s = api.getAppState();
     return !!(s.draggingElement || s.resizingElement || s.editingElement || s.editingLinearElement ||
-      s.selectionElement || s.multiElement || s.newElement || s.cursorButton === 'down');
+      s.selectionElement || s.multiElement || s.cursorButton === 'down');
+  }
+  // What he has his hands on right now — never moved, never deleted by anyone else.
+  function keep() {
+    const st = api.getAppState();
+    const sel = st.selectedElementIds || {};
+    const k = new Set(Object.keys(sel).filter((id) => sel[id]));
+    if (st.editingElement) k.add(st.editingElement.id);
+    return k;
+  }
+  // The scene as it stands here, in the shape resolveRefusal wants it.
+  function mine() {
+    return {
+      elements: api.getSceneElementsIncludingDeleted(),
+      appState: api.getAppState(),
+      files: api.getFiles(),
+    };
   }
 
   function apply() {
@@ -146,17 +197,14 @@ export function mountDrawing(host, opts) {
     try { d = parseScene(t); }
     catch (e) { pending = null; return; } // garbage on disk — ours stands, the save will say so
     pending = null;
-    const st = api.getAppState();
-    const sel = st.selectedElementIds || {};
-    const keep = new Set(Object.keys(sel).filter((k) => sel[k]));
-    if (st.editingElement) keep.add(st.editingElement.id);
     const theirs = lib.restoreElements(d.elements, null);
     // No appState in the update: scroll, zoom and selection stay exactly where
     // the captain left them. Only the shapes move.
-    api.updateScene({ elements: mergeElements(api.getSceneElementsIncludingDeleted(), theirs, baseIds, keep) });
+    api.updateScene({ elements: mergeElements(api.getSceneElementsIncludingDeleted(), theirs, baseIds, keep()) });
     const files = Object.values(d.files || {});
     if (files.length) api.addFiles(files); // their embedded images, or our next save drops them
     baseIds = new Set(theirs.map((e) => e.id));
+    mark = sceneKey(theirs); // their shapes are the new "unchanged" — ours on top of them are a change
     text = t;
   }
 
@@ -177,6 +225,7 @@ export function mountDrawing(host, opts) {
     try { d = parseScene(text); }
     catch (e) { wrap.textContent = '⚠ ' + e.message + ' — nothing was changed'; return; }
     baseIds = new Set(d.elements.map((e) => e.id));
+    mark = sceneKey(d.elements); // opening a drawing is a read — it must not turn into a write
     wrap.textContent = '';
     root = globalThis.ReactDOM.createRoot(wrap);
     // No JSX without a build step, so createElement by hand. That is the entire
@@ -191,7 +240,12 @@ export function mountDrawing(host, opts) {
       },
       UIOptions: { canvasActions: { loadScene: false } },
       excalidrawAPI: (a) => { api = a; apply(); }, // a write may have arrived while we booted
-      onChange: () => { if (o.onChange) o.onChange(); },
+      // Excalidraw reports its first render, every scroll and every selection as
+      // a change. Only a change to the SHAPES is one — see sceneKey.
+      onChange: (els) => {
+        if (sceneKey(els) === mark) return;
+        if (o.onChange) o.onChange();
+      },
     }));
   }).catch((e) => { wrap.textContent = '⚠ canvas failed to load — ' + e.message; });
 
