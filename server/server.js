@@ -2245,7 +2245,23 @@ function serveStatic(res, rel) {
   }
   let data;
   try { data = fs.readFileSync(file); } catch (e) { return sendJson(res, 404, { error: 'not found' }); }
-  res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+  // Two populations of file, two opposite policies — and `no-cache` was the
+  // wrong answer for both. It permits a store-and-revalidate, and with no
+  // validator to revalidate against, a phone behind a CDN handed the captain
+  // yesterday's JavaScript three separate times. Each time it looked like a bug
+  // in the thing he was actually testing, which is the expensive kind of wrong.
+  //
+  // Ours changes every few minutes and is small: never store it.
+  // Vendored builds are immutable — their version is in the path, so a new
+  // version is a new URL — and one of them is four megabytes: keep it a year.
+  // Anchored at the start and cut at a separator: `ui/vendor/…` is vendored,
+  // anything merely spelled like it is ours. No file exercises that difference
+  // today, which is why it is written strictly here rather than pinned below.
+  const vendored = /^vendor([/\\]|$)/.test(rel);
+  res.writeHead(200, {
+    'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
+    'Cache-Control': vendored ? 'public, max-age=31536000, immutable' : 'no-store',
+  });
   res.end(data);
 }
 
