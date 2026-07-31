@@ -14,7 +14,7 @@
 // doesn't get a home of its own.
 import { S } from './state.js';
 import { mountFileEditor } from './fileedit.js';
-import { mountDrawing } from './draw.js';
+import { mountDrawing, saveDue } from './draw.js';
 import { refreshQuote } from './chat.js';
 import { changedLines } from './util.js';
 
@@ -54,10 +54,14 @@ export function fileUpdate(text, note) {
   if (!open) return;
   if (open.draw) {
     // A canvas has no lines to mark: the shapes are merged in, and what he has
-    // his hands on is left alone.
+    // his hands on is left alone. Mid-gesture the merge is parked until the hand
+    // comes off the mouse — so say which of the two happened, and never claim a
+    // merge that is still minutes away because he is typing a label.
     open.saved = text;
     if (handle) handle.replace(text);
-    return say((note || 'updated on disk') + ' — merged into the canvas', 'live');
+    return say((note || 'updated on disk') + (parked()
+      ? ' — merging into the canvas as soon as your hands are free'
+      : ' — merged into the canvas'), 'live');
   }
   const changed = changedLines(open.saved, text);
   open.saved = text;
@@ -168,16 +172,21 @@ function build() {
   });
 }
 
+// Is somebody else's write still parked behind a gesture on this screen?
+function parked() { return !!(handle && handle.parked && handle.parked()); }
 // Nobody saves a drawing by hand every few seconds, so the canvas saves itself
-// — on a debounce, not per stroke, and never when the text already matches what
-// is on disk (which is what keeps two open canvases from writing at each other
-// after a merge).
+// — on a debounce, not per stroke. What it may write, and when, is saveDue's
+// call: nothing while the disk already has this scene, and nothing at all while
+// a merge is parked, or this timer would put the unmerged canvas on disk and
+// take the other hand's shape off it with a 200.
 let autoTimer = null;
 function autosave() {
   clearTimeout(autoTimer);
   autoTimer = setTimeout(() => {
-    if (!open || !handle || handle.getValue() === open.saved) return;
-    if (saving) return autosave(); // one already in flight — come back after it
+    if (!open || !handle) return;
+    const due = saveDue(handle.getValue(), open.saved, saving, parked());
+    if (due === 'wait') return autosave(); // come back when the way is clear
+    if (due !== 'write') return;
     const btn = el.querySelector('.fe-bar button[title^="write this file"]');
     if (btn) save(handle, btn);
   }, 1500);

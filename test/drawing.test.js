@@ -116,7 +116,7 @@ test('the drawing saves itself on a debounce, and never per stroke', () => {
   const fn = /function autosave\(\) \{[\s\S]*?\n\}/.exec(filepaneSrc)[0];
   assert.match(fn, /setTimeout\([\s\S]*?, \d{3,}\)/, 'on a timer, restarted by every change');
   assert.match(fn, /clearTimeout\(autoTimer\)/);
-  assert.match(fn, /handle\.getValue\(\) === open\.saved\) return/, 'and not at all when disk already has it');
+  assert.match(fn, /saveDue\(handle\.getValue\(\), open\.saved/, 'and only what saveDue allows — never when disk already has it');
 });
 
 test('the save still carries the version, and a drawing merges instead of asking', () => {
@@ -170,6 +170,34 @@ test('a refused save never re-pins the version on a drawing — only a landed wr
   assert.match(merge, /api\.saveArtifact\(uri, merged, e\.body\.version\)/, 'the merged scene is what gets written');
   // the pin that remains is the text editor's, where a human clicks 💾 again
   assert.match(fn, /Text cannot be merged[\s\S]*?versions\.set\(uri, e\.body\.version\)/);
+});
+
+// The defect this round exists to kill: a lieutenant's write arrives while the
+// captain is mid-gesture, so the merge is PARKED — but the screen was already
+// told the file moved, and the debounce then wrote the not-yet-merged canvas at
+// the version that had just been pinned to disk. A 200, and their shape gone.
+// The refusal machinery cannot help: that write is not stale.
+test('the debounce writes nothing while an incoming merge is parked behind a gesture', async () => {
+  const { saveDue } = await drawMod;
+  const canvas = 'seed1, captX';          // what the hand is drawing on
+  const disk = 'seed1, captX, LT_NEW';    // what the other hand just wrote, not merged in yet
+  assert.strictEqual(saveDue(canvas, disk, false, true), 'wait',
+    'writing this would take LT_NEW off the disk, and the server would accept it');
+  assert.strictEqual(saveDue(canvas, disk, false, false), 'write',
+    'and the moment the merge has run, the save happens exactly as before');
+  assert.strictEqual(saveDue('a', 'b', true, false), 'wait', 'one save at a time, as before');
+  assert.strictEqual(saveDue('same', 'same', false, false), 'nothing', 'the disk already has this scene');
+  assert.strictEqual(saveDue('same', 'same', false, true), 'nothing');
+});
+
+test('the canvas answers whether a merge is parked, and the timer comes back for it', () => {
+  const drawSrc = read('draw.js');
+  assert.match(drawSrc, /parked: \(\) => pending != null/, 'the flag the merge already keeps');
+  assert.match(filepaneSrc, /const due = saveDue\(handle\.getValue\(\), open\.saved, saving, parked\(\)\)/);
+  assert.match(filepaneSrc, /if \(due === 'wait'\) return autosave\(\);/, 'it comes back instead of writing');
+  assert.match(filepaneSrc, /if \(due !== 'write'\) return;/);
+  // and the note no longer announces a merge that has not run
+  assert.match(filepaneSrc, /merging into the canvas as soon as your hands are free/);
 });
 
 test('opening a drawing is a read: only a changed SHAPE counts as a change', async () => {

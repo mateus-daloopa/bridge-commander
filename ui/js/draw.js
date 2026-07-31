@@ -107,6 +107,22 @@ export function resolveRefusal(mine, disk, baseIds, keep) {
   );
 }
 
+// What the debounce should do when it fires.
+//   'write'   — the canvas has something the disk does not;
+//   'wait'    — a save is already in flight, or an incoming write is PARKED
+//               behind a gesture, waiting for the hand to come off the mouse.
+//               Writing then would put the not-yet-merged canvas on disk at a
+//               version the server has no reason to refuse: the other hand's
+//               shape would be gone, with a 200 on it, and the refusal
+//               machinery could not catch it because the write is not stale.
+//               Waiting costs nothing — the merge lands the moment the gesture
+//               ends, and its own change books the save;
+//   'nothing' — the disk already has this scene.
+export function saveDue(value, saved, saving, parked) {
+  if (value === saved) return 'nothing';
+  return saving || parked ? 'wait' : 'write';
+}
+
 // Has a HAND changed this scene? Excalidraw bumps an element's `version` on
 // every real mutation, so the ids and versions are the whole answer. Scrolling,
 // zooming, selecting and the re-serialisation that happens on mount are not
@@ -115,7 +131,7 @@ export const sceneKey = (els) => (els || []).map((e) => e.id + ':' + e.version +
 
 // Mount a canvas into `host` (emptied first). Same opts as mountFileEditor —
 // name, content, onChange, actions — minus markdown, which a drawing has no use
-// for. Returns { getValue, selection, replace, resolve, svg, destroy }.
+// for. Returns { getValue, selection, replace, parked, resolve, svg, destroy }.
 export function mountDrawing(host, opts) {
   const o = opts || {};
   host.textContent = '';
@@ -139,6 +155,10 @@ export function mountDrawing(host, opts) {
     getValue: () => (api ? sceneText(api.getSceneElements(), api.getAppState(), api.getFiles()) : text),
     selection: () => null, // a drawing has no lines to quote
     replace: (t) => { pending = t; apply(); },
+    // Is somebody else's scene still waiting for the hand to come off the
+    // mouse? Then this canvas is deliberately behind the disk, and nothing may
+    // be written from it until the merge has run — see saveDue.
+    parked: () => pending != null,
     resolve: (disk) => {
       if (!api) return null;
       const merged = resolveRefusal(mine(), disk, baseIds, keep());
