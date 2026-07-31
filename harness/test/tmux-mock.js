@@ -17,7 +17,14 @@ const PATCHED = ['tmux', 'tryTmux', 'sleep', 'sendLiteral', 'sendKey', 'capture'
 // mockTmux({readyTail}) -> { calls, restore() }
 // readyTail — the string returned by capture()/captureStyled() (the adapter's
 // trust/ready regexes are tested against it) so launch-settle resolves fast.
+//
+// readyTail may also be an ARRAY of screens, handed out one per capture and
+// then held on the last. That is how a launch that has to walk THROUGH a dialog
+// is testable: give it [picker, readyUI] and the settle loop must answer the
+// first before it ever sees the second.
 function mockTmux({ readyTail }) {
+  const screens = Array.isArray(readyTail) ? readyTail.slice() : null;
+  const nextScreen = () => (screens ? (screens.length > 1 ? screens.shift() : screens[0]) : readyTail);
   const calls = [];
   const original = {};
   for (const name of PATCHED) original[name] = tmuxMod[name];
@@ -33,8 +40,8 @@ function mockTmux({ readyTail }) {
   };
   tmuxMod.sendLiteral = async (target, text) => { calls.push({ fn: 'sendLiteral', args: [target, text] }); };
   tmuxMod.sendKey = async (...args) => { calls.push({ fn: 'sendKey', args }); };
-  tmuxMod.capture = async (...args) => { calls.push({ fn: 'capture', args }); return readyTail; };
-  tmuxMod.captureStyled = async (...args) => { calls.push({ fn: 'captureStyled', args }); return readyTail; };
+  tmuxMod.capture = async (...args) => { calls.push({ fn: 'capture', args }); return nextScreen(); };
+  tmuxMod.captureStyled = async (...args) => { calls.push({ fn: 'captureStyled', args }); return nextScreen(); };
   tmuxMod.submit = async (target, text, opts) => {
     calls.push({ fn: 'submit', args: [target, text, opts] });
     return 'empty';

@@ -182,6 +182,12 @@ async function launchAndSettle(target, launchCmd, sig) {
   await t.sleep(300);
   await t.sendKey(target, 'Enter');
 
+  // Screens that stand between the launch and the UI, each one a menu whose
+  // PRESELECTED option is the one we want, so Enter answers all of them. They
+  // are checked before readyRe because a dialog can carry composer-like glyphs
+  // and would otherwise be mistaken for the main UI.
+  const menus = [sig.trustRe, sig.resumeRe].filter(Boolean);
+
   const deadline = Date.now() + 45000;
   while (Date.now() < deadline) {
     await t.sleep(500);
@@ -189,7 +195,7 @@ async function launchAndSettle(target, launchCmd, sig) {
     if (cmd === null) throw new Error(`tmux pane ${target} vanished during launch`);
     if (SHELLS.has(cmd)) continue; // agent not up yet (or it already exited — captured by timeout)
     const tail = paneTail(await t.capture(target, 40));
-    if (sig.trustRe.test(tail)) {
+    if (menus.some((re) => re.test(tail))) {
       await t.sendKey(target, 'Enter');
       await t.sleep(1000);
       continue;

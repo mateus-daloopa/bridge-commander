@@ -51,10 +51,34 @@ const { claudeStatus, SLASH_COMMANDS, helpText, formatStatus } = require('./agen
 const HOOK_SCRIPT = path.join(__dirname, 'turnend-hook.js');
 const TRUST_RE = /Yes, I trust this folder|Quick safety check/;
 
+// RESUME_RE — the picker `claude --resume` shows when the transcript is big
+// enough to be worth warning about:
+//
+//     Resuming the full session will consume a substantial portion of
+//     your usage limits. We recommend resuming from a summary.
+//     ❯ 1. Resume from summary (recommended)
+//       2. Resume full session as-is
+//
+// It cost three lieutenants a morning. Supervision found them dead, called
+// resume, hit this screen, waited 45s for a UI that was never coming, and gave
+// up after three tries — and the ones it hit were exactly the ones worth saving,
+// because the picker only appears when there is a lot to lose.
+//
+// Enter takes option 1, the preselected one, and summary is the right default
+// for an UNATTENDED revival: option 2 is spending a substantial slice of the
+// captain's usage limit, and nothing should do that while nobody is watching.
+// He can always resume one by hand and choose otherwise.
+const RESUME_RE = /Resume from summary|Resume full session as-is/;
+
 // UI_READY_RE matches signatures only the main UI renders (composer prompt,
 // busy footer, permission-mode footer) and the trust screen does not.
+//
+// ⚠ It is nearly wrong on the resume picker, which draws its own `❯` — and is
+// saved only by `\n❯` demanding column zero while the picker indents. Do not
+// relax that anchor: the picker would then read as READY and every unattended
+// revival would leave a lieutenant sitting on an unanswered menu forever.
 const UI_READY_RE = /bypass permissions|esc (to )?interrupt|\n❯/i;
-const SETTLE = { trustRe: TRUST_RE, readyRe: UI_READY_RE, label: 'claude' };
+const SETTLE = { trustRe: TRUST_RE, resumeRe: RESUME_RE, readyRe: UI_READY_RE, label: 'claude' };
 
 // installHooks — write/merge the Stop hook into <cwd>/.claude/settings.local.json.
 // Idempotent; preserves any existing settings/hooks. Also hides the file from
@@ -293,4 +317,8 @@ const { onTurnEnd, openPane, paneSnapshot, paneInput, adoptWindow } = s;
 // turn-end POSTs by session_id). openPane/paneSnapshot/paneInput and
 // commands/runCommand/status are OPTIONAL capability verbs (port.js).
 module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd, installHooks,
-  openPane, paneSnapshot, paneInput, commands, runCommand, status, adoptWindow };
+  openPane, paneSnapshot, paneInput, commands, runCommand, status, adoptWindow,
+  // Exported for the test that pins them against REAL captured screens. These
+  // regexes decide whether an unattended revival works or sits on a menu until
+  // it is given up on, and that is not a judgement to make by reading them.
+  SETTLE };
