@@ -5,7 +5,7 @@ import { md, mdEnhance, copyText } from './md.js';
 import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
 import { openCardThread, syncChatToMain } from './chat.js';
-import { openFile, closeFile, fileKey, fileDirty, fileUpdate, fileNotice } from './filepane.js';
+import { openFile, closeFile, fileKey, fileDirty, fileMerges, fileUpdate, fileNotice } from './filepane.js';
 import { openMoveMenu } from './board.js';
 import { archivedCard, unarchive } from './archive.js';
 
@@ -209,6 +209,7 @@ const avCopyBtn = document.getElementById('av-copy');
 const avEditBtn = document.getElementById('av-edit');
 const MD_EXT = /\.(md|markdown)$/i;
 const HTML_EXT = /\.html?$/i;
+const DRAW_EXT = /\.excalidraw$/i;
 // Reset the shared overlay to a clean text-mode state (used by both openers).
 function avReset(name, uri) {
   avName.textContent = name;
@@ -290,40 +291,65 @@ function avEditableText(uri, name, markdown, content) {
   avEditable = { uri, name, markdown, content };
   avEditBtn.hidden = false;
 }
-avEditBtn.onclick = () => {
-  if (!avEditable) return;
-  const { uri, name, markdown, content } = avEditable;
+// Hand a file to the file screen — the ✎ route and the drawing route both come
+// through here. `extra` carries what differs (markdown / draw, and the text).
+function toFileScreen(uri, name, extra) {
   const c = card(S.openCardId);
   closeArtifact();
   // The card panel is a board-area overlay and the board is what we are
   // leaving — but the chat must NOT follow it back to the lieutenant: it stays
   // on this card's thread, which is where the conversation about this file goes.
   closeDetail({ keepChat: true });
-  openFile({
+  openFile(Object.assign({
     key: uri,
     name,
-    markdown,
-    content: drafts.has(uri) ? drafts.get(uri) : content,
-    saved: content, // what is on disk — a restored draft is still unsaved typing
     crumb: c && {
       label: cardEmoji(c) + ' ' + (c.title || c.id),
       title: 'back to this card',
       onClick: () => { closeFile(); openDetail(c.id); },
     },
     onChange: (text) => drafts.set(uri, text),
-    onSave: (text) => saveArtifactText(uri, text),
+    onSave: (text, svg) => saveArtifactText(uri, text, svg, c && c.id),
+  }, extra));
+}
+avEditBtn.onclick = () => {
+  if (!avEditable) return;
+  const { uri, name, markdown, content } = avEditable;
+  toFileScreen(uri, name, {
+    markdown,
+    content: drafts.has(uri) ? drafts.get(uri) : content,
+    saved: content, // what is on disk — a restored draft is still unsaved typing
   });
 };
+// A drawing is not something you glance at and close — it is a surface you stay
+// in, like editing. So it skips the popup entirely and opens straight on the
+// file screen, where the canvas takes the board's place with the chat at its side.
+async function openDrawing(uri, name) {
+  let r;
+  try { r = await api.artifact(uri); }
+  catch (e) {
+    avReset(name, uri);
+    avBody.textContent = '⚠ cannot open this drawing — ' + e.message;
+    return;
+  }
+  if (!drafts.has(uri)) versions.set(uri, r.version || '');
+  toFileScreen(uri, name, {
+    draw: true,
+    content: drafts.has(uri) ? drafts.get(uri) : r.content,
+    saved: r.content,
+  });
+}
 // The save the file screen calls. Resolves with the line it should show, or
 // rejects with the one it should show in red — the screen prints what it is
 // told and never learns what an artifact is.
-async function saveArtifactText(uri, text) {
+async function saveArtifactText(uri, text, svg, cardId) {
   try {
     const r = await api.saveArtifact(uri, text, versions.get(uri) || '');
     versions.set(uri, r.version);
     drafts.delete(uri); // what is on disk IS this text now
     if (avEditable && avEditable.uri === uri) avEditable.content = text;
-    return 'saved — ' + r.bytes + ' bytes on disk';
+    const also = svg ? await saveSvg(uri, svg, cardId) : '';
+    return 'saved — ' + r.bytes + ' bytes on disk' + also;
   } catch (e) {
     // 409: someone (or something) else wrote this file since we read it. Say
     // exactly that, and say the part that matters most — the captain's text was
@@ -334,6 +360,32 @@ async function saveArtifactText(uri, text) {
         'Save again to overwrite the disk version, or copy your text out first.');
     }
     throw e;
+  }
+}
+// A drawing renders in Excalidraw and nowhere else, which would make it
+// invisible in card bodies, reports and explains — where mermaid already shows.
+// So every save also drops the picture next to the file as <name>.excalidraw.svg
+// and lists it on the card, which is what makes it servable and viewable.
+//
+// It is DERIVED output, not the deliverable: it goes through the same guarded
+// write, but a 409 on it just means someone else's render got there first, and
+// the newest drawing is the one that should be showing — so it is redone once
+// against what is on disk. Nothing here can turn a saved drawing into a failed
+// save; the worst it does is say the picture is missing.
+async function saveSvg(uri, svg, cardId) {
+  const su = uri + '.svg';
+  try {
+    const text = await svg;
+    if (cardId) await api.addArtifact(cardId, su, uriBasename(su)); // idempotent; also what makes it writable
+    try {
+      versions.set(su, (await api.saveArtifact(su, text, versions.get(su) || '')).version);
+    } catch (e) {
+      if (e.status !== 409 || !e.body || !e.body.version) throw e;
+      versions.set(su, (await api.saveArtifact(su, text, e.body.version)).version);
+    }
+    return ' + svg';
+  } catch (e) {
+    return ' (no svg — ' + (e && e.message ? e.message : 'export failed') + ')';
   }
 }
 // The other hand wrote a file (SSE `artifact` from a landed PUT: {uri, version,
@@ -358,7 +410,10 @@ export async function artifactWritten(ev) {
     if (avEditable && avEditable.uri === uri) avEditable.content = r.content;
     fileUpdate(r.content, note);
   };
-  if (!fileDirty()) return take('↻ the other hand wrote this file');
+  // A drawing never has to choose: the shapes merge, and the ones he has his
+  // hands on are left alone. That is the whole point of merging by element —
+  // there is nothing of his to lose, dirty or not, so there is nothing to ask.
+  if (!fileDirty() || fileMerges()) return take('↻ the other hand wrote this file');
   // Dirty: his text is NOT touched and the version stays pinned to what his
   // draft started from, so saving it is still a 409 — the last line of defense
   // holds even if he ignores this line entirely.
@@ -375,6 +430,7 @@ export async function artifactWritten(ev) {
 const isMdArtifact = (art, name) => (art && art.type) === 'markdown' || MD_EXT.test(name);
 async function openArtifact(uri) {
   const name = uriBasename(uri) || uri;
+  if (DRAW_EXT.test(name)) return openDrawing(uri, name); // a drawing opens as a canvas, not as its JSON
   avReset(name, uri);
   avBody.textContent = 'loading…';
   // A promoted chat attachment resolves through the attachment viewer (images

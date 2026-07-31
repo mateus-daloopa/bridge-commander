@@ -2400,21 +2400,36 @@ const server = http.createServer(async (req, res) => {
       if (!uri.startsWith('file://')) return sendJson(res, 403, { error: 'only file:// artifacts are writable' });
       const file = uri.slice('file://'.length);
       if (path.resolve(file) !== file) return sendJson(res, 403, { error: 'unsafe artifact path' });
-      let st, real;
+      // A listed artifact that is not on disk yet is CREATED — that is how a
+      // derived file gets written beside its source (a drawing's .svg), and it
+      // is the SAME lost-update rule with "nothing there" as the version read:
+      // an empty version means "I expect no file", so a file that turned up
+      // meanwhile is still a 409 below. The directory has to be real, for the
+      // same reason the file does.
+      let st = null, real;
       try { st = fs.statSync(file); real = fs.realpathSync(file); }
-      catch (e) { return sendJson(res, 404, { error: 'unreadable: ' + e.message }); }
-      if (!st.isFile()) return sendJson(res, 403, { error: 'not a regular file' });
-      if (real !== file) return sendJson(res, 403, { error: 'artifact path resolves elsewhere (symlink) — refusing to write' });
-      let cur;
-      try { cur = fs.readFileSync(file); }
-      catch (e) { return sendJson(res, 404, { error: 'unreadable: ' + e.message }); }
-      if (cur.includes(0)) return sendJson(res, 415, { error: 'binary file' });
-      const version = sha256(cur);
-      if (String(body.version || '') !== version) {
-        return sendJson(res, 409, {
-          error: 'the file changed on disk since you opened it — nothing was written',
-          version, content: cur.toString('utf8'),
-        });
+      catch (e) {
+        if (e.code !== 'ENOENT' || String(body.version || '') !== '') {
+          return sendJson(res, 404, { error: 'unreadable: ' + e.message });
+        }
+        const dir = path.dirname(file);
+        try { if (fs.realpathSync(dir) !== dir) throw new Error('symlink'); }
+        catch (e2) { return sendJson(res, 403, { error: 'artifact path resolves elsewhere (symlink) — refusing to write' }); }
+      }
+      if (st) {
+        if (!st.isFile()) return sendJson(res, 403, { error: 'not a regular file' });
+        if (real !== file) return sendJson(res, 403, { error: 'artifact path resolves elsewhere (symlink) — refusing to write' });
+        let cur;
+        try { cur = fs.readFileSync(file); }
+        catch (e) { return sendJson(res, 404, { error: 'unreadable: ' + e.message }); }
+        if (cur.includes(0)) return sendJson(res, 415, { error: 'binary file' });
+        const version = sha256(cur);
+        if (String(body.version || '') !== version) {
+          return sendJson(res, 409, {
+            error: 'the file changed on disk since you opened it — nothing was written',
+            version, content: cur.toString('utf8'),
+          });
+        }
       }
       const next = Buffer.from(body.content, 'utf8');
       if (next.length > ARTIFACT_MAX_BYTES) return sendJson(res, 413, { error: 'content too large (max ' + ARTIFACT_MAX_BYTES + ' bytes)' });
@@ -2423,7 +2438,7 @@ const server = http.createServer(async (req, res) => {
       // if the process died mid-write; a rename either happened or it didn't.
       const tmp = path.join(path.dirname(file), '.' + path.basename(file) + '.bc-' + process.pid + '-' + Date.now() + '.tmp');
       try {
-        fs.writeFileSync(tmp, next, { mode: st.mode & 0o777 });
+        fs.writeFileSync(tmp, next, st ? { mode: st.mode & 0o777 } : {});
         fs.renameSync(tmp, file);
       } catch (e) {
         try { fs.unlinkSync(tmp); } catch (e2) {}

@@ -14,6 +14,7 @@
 // doesn't get a home of its own.
 import { S } from './state.js';
 import { mountFileEditor } from './fileedit.js';
+import { mountDrawing } from './draw.js';
 import { refreshQuote } from './chat.js';
 import { changedLines } from './util.js';
 
@@ -34,11 +35,22 @@ export function fileName() { return open ? open.name : ''; }
 // earlier visit, and it has to keep counting as unsaved.
 export function fileKey() { return open ? open.key : ''; }
 export function fileDirty() { return !!(open && handle && handle.getValue() !== open.saved); }
+// Does what is open merge an outside write instead of choosing between it and
+// the captain's? A drawing does — shape by shape, which is why it can take one
+// while he is still drawing. Text cannot, so text still asks.
+export function fileMerges() { return !!(open && open.draw); }
 // The file changed underneath us and the host decided we follow: swap the text
 // in place, mark the lines that moved, and say so in the note. No reload, no
 // button — the captain keeps his cursor and sees what the other hand did.
 export function fileUpdate(text, note) {
   if (!open) return;
+  if (open.draw) {
+    // A canvas has no lines to mark: the shapes are merged in, and what he has
+    // his hands on is left alone.
+    open.saved = text;
+    if (handle) handle.replace(text);
+    return say((note || 'updated on disk') + ' — merged into the canvas', 'live');
+  }
   const changed = changedLines(open.saved, text);
   open.saved = text;
   if (handle) handle.replace(text, changed);
@@ -83,6 +95,7 @@ export function closeFile() {
 export function forgetFile() { if (open) drop(); }
 
 function drop() {
+  clearTimeout(autoTimer);
   if (handle) { handle.destroy(); handle = null; }
   el.textContent = '';
   noteEl = null;
@@ -129,11 +142,15 @@ function build() {
   el.append(head, note, body);
   noteEl = note;
 
-  handle = mountFileEditor(body, {
+  handle = (open.draw ? mountDrawing : mountFileEditor)(body, {
     name: open.name,
     markdown: open.markdown,
     content: open.content,
-    onChange: () => { if (open.onChange) open.onChange(handle.getValue()); },
+    onChange: () => {
+      if (!handle) return; // the canvas reports its first render before we hold it
+      if (open.onChange) open.onChange(handle.getValue());
+      if (open.draw) autosave(); // nobody hits ⌘S per stroke — the canvas saves itself
+    },
     onSelection: () => refreshQuote(), // the chip follows the cursor
     actions: [{
       label: '💾 save',
@@ -141,6 +158,21 @@ function build() {
       onClick: save,
     }],
   });
+}
+
+// Nobody saves a drawing by hand every few seconds, so the canvas saves itself
+// — on a debounce, not per stroke, and never when the text already matches what
+// is on disk (which is what keeps two open canvases from writing at each other
+// after a merge).
+let autoTimer = null;
+function autosave() {
+  clearTimeout(autoTimer);
+  autoTimer = setTimeout(() => {
+    if (!open || !handle || handle.getValue() === open.saved) return;
+    if (saving) return autosave(); // one already in flight — come back after it
+    const btn = el.querySelector('.fe-bar button[title^="write this file"]');
+    if (btn) save(handle, btn);
+  }, 1500);
 }
 
 // Save through the host's writer, saying what happened either way. The screen
@@ -173,7 +205,13 @@ function save(h, btn) {
   const was = btn.textContent;
   btn.textContent = '💾 saving…';
   btn.disabled = true;
-  Promise.resolve(open.onSave(text)).then(
+  // A drawing also hands over its own picture, taken at the same instant as the
+  // text: the host decides what to do with it (today: a .svg beside the file, so
+  // the drawing is visible where mermaid already is). A refused write never gets
+  // that far, so the export must not be left rejecting into nobody's hands.
+  const svg = h.svg ? h.svg() : null;
+  if (svg) svg.catch(() => {});
+  Promise.resolve(open.onSave(text, svg)).then(
     (msg) => { if (open) open.saved = text; say(msg || 'saved', 'ok'); },
     (e) => { say('⚠ ' + (e && e.message ? e.message : 'save failed'), 'err'); },
   ).then(() => {
