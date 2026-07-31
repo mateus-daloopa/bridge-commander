@@ -14,16 +14,32 @@
   #status { min-height: 1.5em; color: #8ea2c0; margin-top: 10px; }
   #keys { color: #5b6b82; margin-top: 6px; font-size: 12.5px; }
   #gate.ready #keys { display: block; }
+  /* The flat view has to be drivable with a thumb: a headset is not the only
+     place this gets looked at, and a phone has neither a keyboard nor a stick. */
+  #bar { position: fixed; top: 0; left: 0; right: 0; display: flex; flex-wrap: wrap; gap: 6px;
+         padding: 8px; background: rgba(5,7,11,.86); justify-content: center; }
+  #bar button { font: 13px ui-monospace, monospace; color: #8ea2c0; background: #10161f;
+                border: 1px solid #1d2a3d; border-radius: 6px; padding: 9px 14px; cursor: pointer; }
+  #bar button.on { color: #05070b; background: #4cc2ff; border-color: #4cc2ff; }
+  #bar .sep { width: 14px; }
 </style>
+
+<div id="bar" hidden>
+  <button data-layout="0" class="on">cockpit</button><button data-layout="1">stations</button>
+  <button data-layout="2">depth</button><button data-layout="3">objects</button>
+  <span class="sep"></span>
+  <button id="b-alltext">all text</button><button id="b-fit">fit to read</button>
+</div>
 
 <div id="gate">
   <button id="enter">enter the bridge</button>
   <div id="status">loading…</div>
   <div id="keys">
-    in the headset — right A: next layout · right B: all panes readable · left X: reset ·
+    in the headset — right A: next layout · right B: all panes readable ·
+    right trigger: fit to read (what legible actually costs) · left X: reset ·
     left Y: previous layout · right stick: turn the room / distance · left stick: pane size ·
     squeeze: pick up a card · keyboard types into whatever you are facing<br>
-    at a desk — drag to look · 1-4 layouts · t all-text · [ ] size · - = distance
+    at a desk — drag to look · 1-4 layouts · t all-text · f fit-to-read · [ ] size · - = distance
   </div>
 </div>
 

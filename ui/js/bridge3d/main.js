@@ -69,7 +69,7 @@ window.addEventListener('resize', () => {
 // ---------- knobs the captain turns while wearing it ----------
 // These exist so a session produces a NUMBER rather than an impression: he
 // tunes until it is readable and the HUD tells us the angle it took.
-const k = { distance: 1, scale: 1, layout: 0, allText: false };
+const k = { distance: 1, scale: 1, layout: 0, allText: false, fit: false };
 
 // ---------- panes ----------
 
@@ -119,7 +119,12 @@ function arrange() {
   panes.forEach((p, i) => {
     const s = spots[i];
     if (!s) return;
-    p.setSize(s.size);
+    // Fit mode sizes every pane so its characters are actually readable at the
+    // distance the layout put it. It is meant to be shocking: a 240-column tmux
+    // window turns into a four-metre wall, which is the honest cost of reading
+    // a full-width terminal in a headset and the argument for narrow panes.
+    const dist = Math.hypot(s.pos.x, s.pos.z, s.pos.y - EYE);
+    p.setSize(k.fit ? p.fitWidth(dist) * k.scale : s.size);
     p.group.position.set(s.pos.x, s.pos.y, s.pos.z);
     p.group.lookAt(0, EYE, 0);
   });
@@ -200,7 +205,7 @@ function drawHud() {
   g.fillStyle = '#5b6b82';
   g.font = '32px ui-monospace, monospace';
   g.fillText('dist ' + k.distance.toFixed(2) + '   size ' + k.scale.toFixed(2)
-    + (k.allText ? '   ALL TEXT' : ''), 24, 230);
+    + (k.allText ? '   ALL TEXT' : '') + (k.fit ? '   FIT TO READ' : ''), 24, 230);
   hudTex.needsUpdate = true;
   hudDirty = false;
 }
@@ -268,6 +273,7 @@ function readGamepads(dt) {
     if (side === 'right') {
       if (pressed(gp, 4, 'r4')) { k.layout = (k.layout + 1) % LAYOUTS.length; arrange(); }
       if (pressed(gp, 5, 'r5')) { k.allText = !k.allText; hudDirty = true; }
+      if (pressed(gp, 0, 'r0')) { k.fit = !k.fit; arrange(); }   // trigger: fit to read
       if (Math.abs(x) > 0.2) { rig.rotation.y += x * dt * 1.2; }        // turn the room
       if (Math.abs(y) > 0.2) { k.distance = clamp(k.distance - y * dt * 0.6, 0.4, 3); arrange(); }
     } else {
@@ -312,6 +318,7 @@ function handleDesktopKey(e) {
   const map = { '1': 0, '2': 1, '3': 2, '4': 3 };
   if (e.key in map) { k.layout = map[e.key]; arrange(); return true; }
   if (e.key === 't') { k.allText = !k.allText; hudDirty = true; return true; }
+  if (e.key === 'f') { k.fit = !k.fit; arrange(); return true; }
   if (e.key === '[') { k.scale = clamp(k.scale * 0.9, 0.3, 4); arrange(); return true; }
   if (e.key === ']') { k.scale = clamp(k.scale * 1.1, 0.3, 4); arrange(); return true; }
   if (e.key === '-') { k.distance = clamp(k.distance * 1.1, 0.4, 3); arrange(); return true; }
@@ -332,18 +339,44 @@ window.addEventListener('pointermove', (e) => {
 
 // ---------- entering ----------
 
+// A phone has no headset and no keyboard, and pressing a button that quietly
+// does nothing reads as a broken page. So the gate says what it can do here,
+// and where there is no immersive session it gets out of the way and hands over
+// the flat room instead of refusing.
+const gate = document.getElementById('gate');
+const bar = document.getElementById('bar');
+
 async function enter() {
-  if (!navigator.xr) { say('this browser has no WebXR — the flat view still works'); return; }
+  const flat = (why) => { say(why); gate.hidden = true; bar.hidden = false; };
+  if (!navigator.xr) return flat('no WebXR in this browser — flat view, drag to look');
   const ok = await navigator.xr.isSessionSupported('immersive-vr').catch(() => false);
-  if (!ok) { say('no immersive-vr here (an immersive session needs https)'); return; }
-  const session = await navigator.xr.requestSession('immersive-vr', {
-    optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
-  });
+  if (!ok) return flat('no headset here — flat view, drag to look');
+  let session;
+  try {
+    session = await navigator.xr.requestSession('immersive-vr', {
+      optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
+    });
+  } catch (e) { return flat('the headset refused the session: ' + ((e && e.message) || e)); }
   await renderer.xr.setSession(session);
-  document.getElementById('gate').hidden = true;
-  session.addEventListener('end', () => { document.getElementById('gate').hidden = false; });
+  gate.hidden = true;
+  bar.hidden = true;
+  session.addEventListener('end', () => { gate.hidden = false; bar.hidden = true; });
 }
 document.getElementById('enter').addEventListener('click', enter);
+
+// The same four arrangements and the same two toggles, for a thumb.
+bar.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.layout) {
+    k.layout = Number(b.dataset.layout);
+    for (const other of bar.querySelectorAll('[data-layout]')) other.classList.toggle('on', other === b);
+    arrange();
+    return;
+  }
+  if (b.id === 'b-alltext') { k.allText = !k.allText; b.classList.toggle('on', k.allText); hudDirty = true; }
+  if (b.id === 'b-fit') { k.fit = !k.fit; b.classList.toggle('on', k.fit); arrange(); }
+});
 
 // ---------- loop ----------
 

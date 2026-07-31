@@ -95,3 +95,15 @@ test('a pane with an unknown column still lands somewhere sensible', async () =>
   const [spot] = depth.place([{ target: { column: 'nonsense' } }], { distance: 1, scale: 1 });
   assert.ok(spot && Number.isFinite(spot.pos.z));
 });
+
+test('fit-to-read prices legibility honestly: a wide terminal needs an absurd wall', async () => {
+  // A Pane3d needs a DOM to construct, so only the constant comes across; the
+  // arithmetic it drives is restated here, because that arithmetic IS the
+  // finding — measured on a real frame, 240 columns came to 0.221°/char, which
+  // is about half of what a Quest can resolve comfortably.
+  const { READABLE } = await load('pane3d.js');
+  assert.ok(READABLE > 0.3 && READABLE < 0.6, "a glyph wants 8-10 of a headset's ~20 px per degree");
+  const degWide = (cols) => cols * READABLE;
+  assert.ok(degWide(240) > 90, 'a full-width tmux window eats the whole field of view');
+  assert.ok(degWide(100) < 50, 'a narrow pane fits beside its neighbours');
+});

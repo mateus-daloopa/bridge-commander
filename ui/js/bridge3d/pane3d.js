@@ -31,6 +31,10 @@ const MIN_ROWS = 8, MAX_ROWS = 60;
 // is visible before you would have thought to check.
 const DECAY_PER_SEC = 0.72;
 
+// Degrees of field of view one character has to occupy before reading it is
+// comfortable rather than possible. See fitWidth() for where it comes from.
+export const READABLE = 0.42;
+
 function labelTexture(text, color) {
   const c = document.createElement('canvas');
   const ctx = c.getContext('2d');
@@ -139,6 +143,20 @@ export class Pane3d {
   metrics(distance) {
     const deg = (2 * Math.atan((this.width / 2) / Math.max(0.2, distance))) * 180 / Math.PI;
     return { cols: this.cols, rows: this.rows, deg, degPerChar: deg / this.cols };
+  }
+
+  // fitWidth(distance) — how wide this pane would have to BE, in metres, for its
+  // characters to be comfortable rather than merely present.
+  //
+  // A Quest 3 resolves roughly twenty pixels per degree, and a monospace glyph
+  // wants eight to ten of them across before reading it stops being work. That
+  // is where READABLE comes from, and it is brutal arithmetic: a 240-column tmux
+  // window needs about a hundred degrees of the captain's field of view — the
+  // whole of it, for one pane. This is the single most important number the
+  // prototype produces, so it is a thing you can switch on and stand inside
+  // rather than a note in a report.
+  fitWidth(distance) {
+    return 2 * Math.max(0.2, distance) * Math.tan((this.cols * READABLE * Math.PI / 180) / 2);
   }
 
   draw(frame) {
