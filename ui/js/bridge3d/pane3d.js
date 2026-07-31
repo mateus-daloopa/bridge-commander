@@ -220,9 +220,13 @@ export class Pane3d {
     this.energy *= Math.pow(DECAY_PER_SEC, dt);
     if (this.energy < 0.001) this.energy = 0;
     const base = new THREE.Color(this.target.color || '#4cc2ff');
-    const lit = base.clone().multiplyScalar(0.10 + 0.90 * this.energy);
-    this.ambientMesh.material.color.copy(lit);
-    this.frame.material.color.copy(base.clone().multiplyScalar(0.35 + 0.65 * this.energy));
+    // The fill stays low: a lieutenant's colour at full strength across a whole
+    // panel is a lamp in the room, not a signal, and eight of them is a funfair.
+    // The EDGE carries the brightness instead — it reads as activity without
+    // lighting the place up, and it keeps the silhouette when the fill is nearly
+    // black, which is what a stalled worker is supposed to look like.
+    this.ambientMesh.material.color.copy(base.clone().multiplyScalar(0.05 + 0.30 * this.energy));
+    this.frame.material.color.copy(base.clone().multiplyScalar(0.30 + 0.70 * this.energy));
     const breathe = 1 + 0.015 * this.energy;
     this.ambientMesh.scale.set(this.width * breathe, this.height * breathe, 1);
   }
