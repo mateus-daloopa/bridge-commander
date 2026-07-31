@@ -1110,6 +1110,9 @@ a.a-uri { color: var(--accent); }
 .fe-edit { flex: 1; min-height: 0; overflow: hidden; padding: 0; color: var(--dim); }
 .fe-edit .CodeMirror { height: 100%; }
 .fe-prev { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px; }
+/* the drawing surface — Excalidraw sizes itself to this box, so it needs one */
+.fe-draw { flex: 1; min-height: 0; position: relative; color: var(--dim); }
+.fe-draw .excalidraw { height: 100%; }
 /* ✎ in the viewer head — same weight as its ⇄ source neighbour */
 #av-edit { flex: none; color: var(--dim); font-size: 14px; padding: 2px 6px; border: 1px solid transparent; border-radius: 6px; }
 #av-edit:hover { color: var(--text); }

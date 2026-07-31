@@ -21,13 +21,12 @@ content actually contains a fenced code block / a ```mermaid fence. CodeMirror i
 the same way by `ui/js/fileedit.js`, on the first file editor opened — and its language modes
 one at a time after that.
 
-React + Excalidraw are loaded by nothing the board ships. They exist only for the spike page
-`ui/excalidraw-spike.html`, which answers whether a React component can run here without a
-build step. If that spike is not taken forward, delete `react*.js`, `react*.LICENSE`,
-`excalidraw/` and `excalidraw.LICENSE` — nothing else references them.
+React + Excalidraw are lazy-loaded by `ui/js/draw.js` alone, on the first `.excalidraw`
+artifact opened — the only file in `ui/js/` that knows React exists. Nothing else imports
+them, and a board that never opens a drawing never fetches them.
 
-three.js is the same shape of bet, one page further out: only `ui/bridge3d.html` loads it, and
-that page is a prototype of the board inside a headset — four spatial arrangements, live panes
-on surfaces, meant to have three of its four ideas killed by an evening of wearing it. If the
-room turns out not to be worth building, delete `three/`, `three.LICENSE`, `ui/bridge3d.html`,
+three.js is a bet the board has not taken yet: only `ui/bridge3d.html` loads it, and that page
+is a prototype of the board inside a headset — four spatial arrangements, live panes on
+surfaces, meant to have three of its four ideas killed by an evening of wearing it. If the room
+turns out not to be worth building, delete `three/`, `three.LICENSE`, `ui/bridge3d.html`,
 `ui/js/bridge3d/` and `test/bridge3d.test.js`; nothing else references any of it.

@@ -14,6 +14,7 @@
 // doesn't get a home of its own.
 import { S } from './state.js';
 import { mountFileEditor } from './fileedit.js';
+import { mountDrawing, saveDue } from './draw.js';
 import { refreshQuote } from './chat.js';
 import { changedLines } from './util.js';
 
@@ -34,11 +35,34 @@ export function fileName() { return open ? open.name : ''; }
 // earlier visit, and it has to keep counting as unsaved.
 export function fileKey() { return open ? open.key : ''; }
 export function fileDirty() { return !!(open && handle && handle.getValue() !== open.saved); }
+// Does what is open merge an outside write instead of choosing between it and
+// the captain's? A drawing does — shape by shape, which is why it can take one
+// while he is still drawing. Text cannot, so text still asks.
+export function fileMerges() { return !!(open && open.draw); }
+// A write was REFUSED and the host handed back what is on disk. On a screen
+// that merges, that is not a dead end: this returns the text to write instead —
+// theirs and his, merged — and the canvas takes theirs too. null when it cannot
+// be merged, and then the refusal stands, which is the point of it.
+export function fileResolve(disk) {
+  if (!open || !handle || !handle.resolve) return null;
+  return handle.resolve(disk);
+}
 // The file changed underneath us and the host decided we follow: swap the text
 // in place, mark the lines that moved, and say so in the note. No reload, no
 // button — the captain keeps his cursor and sees what the other hand did.
 export function fileUpdate(text, note) {
   if (!open) return;
+  if (open.draw) {
+    // A canvas has no lines to mark: the shapes are merged in, and what he has
+    // his hands on is left alone. Mid-gesture the merge is parked until the hand
+    // comes off the mouse — so say which of the two happened, and never claim a
+    // merge that is still minutes away because he is typing a label.
+    open.saved = text;
+    if (handle) handle.replace(text);
+    return say((note || 'updated on disk') + (parked()
+      ? ' — merging into the canvas as soon as your hands are free'
+      : ' — merged into the canvas'), 'live');
+  }
   const changed = changedLines(open.saved, text);
   open.saved = text;
   if (handle) handle.replace(text, changed);
@@ -83,6 +107,7 @@ export function closeFile() {
 export function forgetFile() { if (open) drop(); }
 
 function drop() {
+  clearTimeout(autoTimer);
   if (handle) { handle.destroy(); handle = null; }
   el.textContent = '';
   noteEl = null;
@@ -129,11 +154,15 @@ function build() {
   el.append(head, note, body);
   noteEl = note;
 
-  handle = mountFileEditor(body, {
+  handle = (open.draw ? mountDrawing : mountFileEditor)(body, {
     name: open.name,
     markdown: open.markdown,
     content: open.content,
-    onChange: () => { if (open.onChange) open.onChange(handle.getValue()); },
+    onChange: () => {
+      if (!handle) return; // the canvas reports its first render before we hold it
+      if (open.onChange) open.onChange(handle.getValue());
+      if (open.draw) autosave(); // nobody hits ⌘S per stroke — the canvas saves itself
+    },
     onSelection: () => refreshQuote(), // the chip follows the cursor
     actions: [{
       label: '💾 save',
@@ -141,6 +170,26 @@ function build() {
       onClick: save,
     }],
   });
+}
+
+// Is somebody else's write still parked behind a gesture on this screen?
+function parked() { return !!(handle && handle.parked && handle.parked()); }
+// Nobody saves a drawing by hand every few seconds, so the canvas saves itself
+// — on a debounce, not per stroke. What it may write, and when, is saveDue's
+// call: nothing while the disk already has this scene, and nothing at all while
+// a merge is parked, or this timer would put the unmerged canvas on disk and
+// take the other hand's shape off it with a 200.
+let autoTimer = null;
+function autosave() {
+  clearTimeout(autoTimer);
+  autoTimer = setTimeout(() => {
+    if (!open || !handle) return;
+    const due = saveDue(handle.getValue(), open.saved, saving, parked());
+    if (due === 'wait') return autosave(); // come back when the way is clear
+    if (due !== 'write') return;
+    const btn = el.querySelector('.fe-bar button[title^="write this file"]');
+    if (btn) save(handle, btn);
+  }, 1500);
 }
 
 // Save through the host's writer, saying what happened either way. The screen
@@ -173,8 +222,20 @@ function save(h, btn) {
   const was = btn.textContent;
   btn.textContent = '💾 saving…';
   btn.disabled = true;
-  Promise.resolve(open.onSave(text)).then(
-    (msg) => { if (open) open.saved = text; say(msg || 'saved', 'ok'); },
+  // A drawing also hands over the means to take its own picture — called by the
+  // host once it knows what actually landed (today: a .svg beside the file, so
+  // the drawing is visible where mermaid already is).
+  //
+  // The host may answer with a line, or with { note, saved } when what landed is
+  // not what we handed it — a refused save that resolved itself into a merge
+  // wrote something else, and this screen has to believe the disk over its own
+  // snapshot or it will save the same stale text again.
+  Promise.resolve(open.onSave(text, h.svg || null)).then(
+    (r) => {
+      const msg = r && r.note !== undefined ? r.note : r;
+      if (open) open.saved = r && r.saved != null ? r.saved : text;
+      say(msg || 'saved', 'ok');
+    },
     (e) => { say('⚠ ' + (e && e.message ? e.message : 'save failed'), 'err'); },
   ).then(() => {
     saving = false;
