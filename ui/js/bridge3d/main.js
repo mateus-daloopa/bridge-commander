@@ -1,35 +1,36 @@
-// main.js — the bridge, in a headset. A prototype, and it is meant to be torn up.
+// main.js — the board, as a room you work in.
 //
-// The captain cannot judge a room he has not stood in, so this exists to be
-// worn and disliked in specific ways. Everything in here is arranged so that a
-// single session can kill three of the four ideas.
+// This is the second design. The first one was a wall of live terminals, and
+// the captain killed it in one sentence: a terminal is the LAST thing that
+// matters, a thing he opens for two seconds to confirm something is really
+// running. I had built the easy surface and mistaken that for a reason.
 //
-// The thesis it is testing, in one line: NEAR IS READABLE, FAR IS ALIVE. On a
-// monitor every pane must be a terminal because there is only one distance. In
-// a room there are many, and text you cannot read is not waste — it is
-// peripheral vision.
+// What the room is now, in his order:
 //
-// It reads the board's ordinary endpoints and opens the board's ordinary pane
-// streams. There is no server code behind this page, deliberately: if the idea
-// survives, it survives on the machinery that already exists.
+//   the LIEUTENANTS are always in front and never close — talking to one is the
+//   interaction itself;
+//   the BOARD is the remembering surface: what is in flight, and where his
+//   attention should go next. One button pushes it back so something else can
+//   take the front;
+//   the WINDOWS are the work. Click a card, it comes forward with its chat
+//   beside it, and he moves it, sizes it and closes it. Several at once, of
+//   different agents or the same one twice, as many as attention allows.
+//
+// Everything on a surface is painted by us onto a canvas, because inside an
+// immersive session the browser stops drawing HTML and none of the board's own
+// screens come across. That is the real cost of the room and it is paid here.
 
 import * as THREE from '../../vendor/three/three.module.min.js';
-import { Pane3d } from './pane3d.js';
-import { LAYOUTS, cardSlots, EYE } from './layouts.js';
-import { targetsFrom } from './targets.js';
+import { BoardPanel, LieutenantBar, CardWindow, ChatWindow } from './panels.js';
+import { EYE, FRONT, BACK, BAR, placeWindow, nextFront, openWindows } from './room.js';
 import { keyForEvent } from '../panekeys.js';
 
-const PANE_MAX = 8;                    // the server's cap; see server.js
 const say = (m) => { const el = document.getElementById('status'); if (el) el.textContent = m; };
-
-// ---------- scene ----------
 
 let renderer;
 try {
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
 } catch (e) {
-  // A browser with no WebGL used to sit on "loading…" forever, which reads as a
-  // broken page rather than an unsupported one. Say which it is.
   say('no WebGL in this browser — ' + ((e && e.message) || e));
   throw e;
 }
@@ -43,22 +44,18 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color('#05070b');
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 100);
 camera.position.set(0, EYE, 0);
+scene.add(camera);
 
-// The rig is what the thumbstick turns. Turning the world instead of the head
-// is the only comfortable way to reach a station behind you in a chair.
-const rig = new THREE.Group();
+const rig = new THREE.Group();      // what the thumbstick turns
 scene.add(rig);
 
-// A floor, faintly. Without one, distance stops reading at all — which would
-// quietly sabotage the layout whose entire idea is distance.
 const floor = new THREE.Mesh(
-  new THREE.RingGeometry(0.4, 12, 48),
-  new THREE.MeshBasicMaterial({ color: '#0f1622', side: THREE.DoubleSide, transparent: true, opacity: 0.55 }),
+  new THREE.RingGeometry(0.5, 9, 40),
+  new THREE.MeshBasicMaterial({ color: '#0d141e', side: THREE.DoubleSide, transparent: true, opacity: 0.5 }),
 );
 floor.rotation.x = -Math.PI / 2;
 scene.add(floor);
-const grid = new THREE.GridHelper(12, 24, 0x1d2a3d, 0x121b28);
-scene.add(grid);
+scene.add(new THREE.GridHelper(10, 20, 0x182436, 0x101823));
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -66,191 +63,153 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// ---------- knobs the captain turns while wearing it ----------
-// These exist so a session produces a NUMBER rather than an impression: he
-// tunes until it is readable and the HUD tells us the angle it took.
-const k = { distance: 1, scale: 1, layout: 0, allText: false, fit: false };
+// ---------- the room's contents ----------
 
-// ---------- panes ----------
+let doc = { cards: [], lieutenants: [], columns: [] };
+const bar = new LieutenantBar();
+const board = new BoardPanel();
+const windows = new Map();          // id -> Surface  ('card:<id>' | 'lt:<id>')
+const state = { open: [], front: 'board' };
 
-const anisotropy = renderer.capabilities.getMaxAnisotropy();
-const panes = [];
-let slabs = [];
+rig.add(bar.group, board.group);
+bar.group.position.set(BAR.x, BAR.y, BAR.z);
+bar.group.lookAt(0, EYE, 0);
 
-async function build() {
-  say('reading the board…');
-  const doc = await fetch('/api/board').then((r) => r.json());
-  const targets = targetsFrom(doc);
-  if (!targets.length) { say('nothing is running — start a worker and reload'); return; }
+function surfaceFor(id) {
+  if (id === 'board') return board;
+  return windows.get(id) || null;
+}
 
-  for (const t of targets) {
-    const p = new Pane3d(t, anisotropy);
-    panes.push(p);
-    rig.add(p.group);
+function open(id) {
+  if (!windows.has(id)) {
+    const s = id.startsWith('card:') ? new CardWindow(id.slice(5)) : new ChatWindow(id.slice(3));
+    windows.set(id, s);
+    rig.add(s.group);
   }
-  // PANE_MAX is a real server cap and a wall of panes is exactly what it exists
-  // for. Over the line, a pane still takes its place in the room — it simply
-  // never connects, and says so on its own face.
-  panes.slice(0, PANE_MAX).forEach((p) => p.connect());
-  panes.slice(PANE_MAX).forEach((p) => p.draw('over PANE_MAX (' + PANE_MAX + ') — not connected'));
+  state.open = openWindows(state.open, id);
+  state.front = nextFront(state, { kind: 'open', id });
+  layout();
+}
 
-  // Layout 4's slabs: one per card on the board, live only in that layout.
-  const cards = (doc.cards || []).slice(0, 18);
-  slabs = cards.map((c) => {
-    const lt = (doc.lieutenants || []).find((l) => l.id === c.owner);
-    const m = new THREE.Mesh(
-      new THREE.BoxGeometry(0.19, 0.13, 0.012),
-      new THREE.MeshBasicMaterial({ color: new THREE.Color((lt && lt.color) || '#8ea2c0') }),
-    );
-    m.userData.card = c;
-    m.visible = false;
-    rig.add(m);
-    return m;
+function close(id) {
+  const s = windows.get(id);
+  if (!s) return;
+  state.front = nextFront(state, { kind: 'close', id });
+  state.open = state.open.filter((x) => x !== id);
+  rig.remove(s.group);
+  s.dispose();
+  windows.delete(id);
+  layout();
+}
+
+// Placement only moves what the captain has not moved himself: once he has
+// picked a window up and put it somewhere, that is where it lives. A room that
+// tidies itself behind your back is a room you cannot arrange.
+function layout() {
+  const ids = state.open;
+  ids.forEach((id, i) => {
+    const s = windows.get(id);
+    if (!s || s.placed) return;
+    const p = placeWindow(i, ids.length);
+    s.group.position.set(p.x, p.y, p.z);
+    s.group.lookAt(0, EYE, 0);
   });
-
-  arrange();
-  say('');
-  document.getElementById('gate').classList.add('ready');
+  const boardBack = state.front !== 'board';
+  const at = boardBack ? BACK : FRONT;
+  board.group.position.set(0, at.y, at.z);
+  board.group.lookAt(0, EYE, 0);
+  board.setFront(!boardBack);
+  for (const [id, s] of windows) s.setFront(id === state.front);
+  repaint();
 }
 
-function arrange() {
-  const L = LAYOUTS[k.layout];
-  const spots = L.place(panes, k);
-  panes.forEach((p, i) => {
-    const s = spots[i];
-    if (!s) return;
-    // Fit mode sizes every pane so its characters are actually readable at the
-    // distance the layout put it. It is meant to be shocking: a 240-column tmux
-    // window turns into a four-metre wall, which is the honest cost of reading
-    // a full-width terminal in a headset and the argument for narrow panes.
-    const dist = Math.hypot(s.pos.x, s.pos.z, s.pos.y - EYE);
-    p.setSize(k.fit ? p.fitWidth(dist) * k.scale : s.size);
-    p.group.position.set(s.pos.x, s.pos.y, s.pos.z);
-    p.group.lookAt(0, EYE, 0);
-  });
-  const slots = cardSlots(slabs.length, k);
-  slabs.forEach((m, i) => {
-    m.visible = L.objects && !m.userData.held;
-    if (!m.userData.held && slots[i]) {
-      m.position.set(slots[i].x, slots[i].y, slots[i].z);
-      m.lookAt(0, EYE - 0.3, 0);
-    }
-  });
-  hudDirty = true;
+function repaint() {
+  bar.paint(doc);
+  board.paint(doc);
+  for (const s of windows.values()) s.paint(doc);
 }
 
-// ---------- focus: what the head is pointed at ----------
-
-const fwd = new THREE.Vector3();
-const toPane = new THREE.Vector3();
-const headPos = new THREE.Vector3();
-let focused = null;
-
-function updateFocus() {
-  camera.getWorldPosition(headPos);
-  camera.getWorldDirection(fwd);
-  let best = null, bestDot = -1;
-  for (const p of panes) {
-    p.group.getWorldPosition(toPane);
-    toPane.sub(headPos).normalize();
-    const d = toPane.dot(fwd);
-    if (d > bestDot) { bestDot = d; best = p; }
-  }
-  // ~28° half-angle. Wide enough that you do not have to aim, narrow enough
-  // that exactly one thing is ever the terminal.
-  const hit = bestDot > Math.cos(28 * Math.PI / 180) ? best : null;
-  if (hit !== focused) { focused = hit; hudDirty = true; }
-  for (const p of panes) p.setDetail(k.allText || p === focused ? 'text' : 'ambient');
+async function refresh() {
+  try {
+    doc = await fetch('/api/board').then((r) => r.json());
+    repaint();
+    say('');
+  } catch (e) { say('the board did not answer: ' + ((e && e.message) || e)); }
 }
 
-// ---------- hud: the session has to produce a number ----------
+// ---------- pointing at things ----------
 
-const hudCanvas = document.createElement('canvas');
-hudCanvas.width = 1024; hudCanvas.height = 256;
-const hudTex = new THREE.CanvasTexture(hudCanvas);
-hudTex.colorSpace = THREE.SRGBColorSpace;
-hudTex.minFilter = THREE.LinearFilter;
-hudTex.generateMipmaps = false;
-const hud = new THREE.Mesh(
-  new THREE.PlaneGeometry(0.42, 0.105),
-  new THREE.MeshBasicMaterial({ map: hudTex, transparent: true, toneMapped: false }),
-);
-hud.position.set(0, -0.17, -0.62);
-camera.add(hud);
-scene.add(camera);
-let hudDirty = true;
+const raycaster = new THREE.Raycaster();
+const tmpMat = new THREE.Matrix4();
 
-function drawHud() {
-  const g = hudCanvas.getContext('2d');
-  g.clearRect(0, 0, 1024, 256);
-  g.fillStyle = 'rgba(6,10,16,.82)';
-  g.fillRect(0, 0, 1024, 256);
-  g.fillStyle = '#4cc2ff';
-  g.font = '600 46px ui-monospace, monospace';
-  g.fillText(LAYOUTS[k.layout].name, 24, 62);
-  g.font = '38px ui-monospace, monospace';
-  g.fillStyle = '#c8d2e0';
-  if (focused) {
-    focused.group.getWorldPosition(toPane);
-    camera.getWorldPosition(headPos);
-    const m = focused.metrics(toPane.distanceTo(headPos));
-    g.fillText(focused.target.label, 24, 122);
-    g.fillStyle = '#8ea2c0';
-    g.fillText(m.cols + '×' + m.rows + '   ' + m.deg.toFixed(0) + '° wide   '
-      + m.degPerChar.toFixed(2) + '°/char', 24, 178);
-  } else {
-    g.fillStyle = '#8ea2c0';
-    g.fillText('look at a pane to read it', 24, 122);
-  }
-  g.fillStyle = '#5b6b82';
-  g.font = '32px ui-monospace, monospace';
-  g.fillText('dist ' + k.distance.toFixed(2) + '   size ' + k.scale.toFixed(2)
-    + (k.allText ? '   ALL TEXT' : '') + (k.fit ? '   FIT TO READ' : ''), 24, 230);
-  hudTex.needsUpdate = true;
-  hudDirty = false;
+function pick(origin, direction) {
+  raycaster.ray.origin.copy(origin);
+  raycaster.ray.direction.copy(direction);
+  const meshes = [bar.mesh, board.mesh, ...[...windows.values()].map((s) => s.mesh)];
+  const hit = raycaster.intersectObjects(meshes, false)[0];
+  if (!hit || !hit.uv) return null;
+  const s = hit.object.userData.surface;
+  return { surface: s, action: s.hitTest(hit.uv), point: hit.point, distance: hit.distance };
 }
 
-// ---------- controllers ----------
+function idOf(surface) {
+  if (surface === board) return 'board';
+  for (const [id, s] of windows) if (s === surface) return id;
+  return null;
+}
+
+// A click is the ordinary verb: it opens, it closes, it brings forward.
+function activate(hit) {
+  if (!hit) return;
+  const { surface, action } = hit;
+  const id = idOf(surface);
+  if (action && action.kind === 'close' && id) return close(id);
+  if (action && action.kind === 'card') return open('card:' + action.id);
+  if (action && action.kind === 'lieutenant') return open('lt:' + action.id);
+  if (id) { state.front = nextFront(state, { kind: 'focus', id }); layout(); }
+}
+
+// ---------- controllers: point, squeeze to carry, stick to size ----------
 
 const controllers = [];
+const held = new Map();             // controller -> { surface, w, h }
 for (let i = 0; i < 2; i++) {
   const c = renderer.xr.getController(i);
   const ray = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]),
     new THREE.LineBasicMaterial({ color: 0x4cc2ff }),
   );
-  ray.scale.z = 3;
+  ray.scale.z = 2.5;
   c.add(ray);
   scene.add(c);
   controllers.push(c);
+
+  const aim = () => {
+    tmpMat.identity().extractRotation(c.matrixWorld);
+    const o = new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
+    const d = new THREE.Vector3(0, 0, -1).applyMatrix4(tmpMat).normalize();
+    return pick(o, d);
+  };
+
+  c.addEventListener('selectstart', () => activate(aim()));
+  c.addEventListener('squeezestart', () => {
+    const hit = aim();
+    // The bar is furniture: it does not get carried off, and neither does the
+    // board — the board has a place and a button that moves it.
+    if (!hit || hit.surface === bar || hit.surface === board) return;
+    hit.surface.placed = true;
+    held.set(c, { surface: hit.surface, w: hit.surface.widthM, h: hit.surface.heightM });
+    c.attach(hit.surface.group);
+  });
+  c.addEventListener('squeezeend', () => {
+    const h = held.get(c);
+    if (!h) return;
+    rig.attach(h.surface.group);
+    held.delete(c);
+  });
 }
 
-const raycaster = new THREE.Raycaster();
-const tmpMat = new THREE.Matrix4();
-
-// Grab in layout 4: squeeze with the ray on a slab and it comes with your hand.
-// Deliberately the crudest possible version — the question is whether holding
-// work feels like anything, not whether the physics is good.
-function grab(controller) {
-  if (!LAYOUTS[k.layout].objects) return;
-  tmpMat.identity().extractRotation(controller.matrixWorld);
-  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tmpMat);
-  const hit = raycaster.intersectObjects(slabs.filter((s) => s.visible), false)[0];
-  if (!hit) return;
-  const m = hit.object;
-  m.userData.held = controller;
-  controller.attach(m);
-}
-function release(controller) {
-  for (const m of slabs) {
-    if (m.userData.held !== controller) continue;
-    m.userData.held = null;
-    rig.attach(m);
-  }
-}
-
-const edge = new Map();      // gamepad button edge detection, per controller
+const edge = new Map();
 function pressed(gp, i, id) {
   const now = !!(gp.buttons[i] && gp.buttons[i].pressed);
   const was = edge.get(id) || false;
@@ -261,96 +220,115 @@ function pressed(gp, i, id) {
 function readGamepads(dt) {
   const session = renderer.xr.getSession();
   if (!session) return;
-  let hand = 0;
   for (const src of session.inputSources) {
     const gp = src.gamepad;
     if (!gp) continue;
-    const side = src.handedness || ('h' + hand++);
+    const side = src.handedness || 'right';
     const ax = gp.axes || [];
     const x = ax.length > 2 ? ax[2] : (ax[0] || 0);
     const y = ax.length > 3 ? ax[3] : (ax[1] || 0);
+    const holding = [...held.entries()].find(([c]) => controllers.indexOf(c) === (side === 'left' ? 0 : 1));
 
-    if (side === 'right') {
-      if (pressed(gp, 4, 'r4')) { k.layout = (k.layout + 1) % LAYOUTS.length; arrange(); }
-      if (pressed(gp, 5, 'r5')) { k.allText = !k.allText; hudDirty = true; }
-      if (pressed(gp, 0, 'r0')) { k.fit = !k.fit; arrange(); }   // trigger: fit to read
-      if (Math.abs(x) > 0.2) { rig.rotation.y += x * dt * 1.2; }        // turn the room
-      if (Math.abs(y) > 0.2) { k.distance = clamp(k.distance - y * dt * 0.6, 0.4, 3); arrange(); }
-    } else {
-      if (pressed(gp, 4, 'l4')) { k.distance = 1; k.scale = 1; rig.rotation.y = 0; arrange(); }
-      if (pressed(gp, 5, 'l5')) { k.layout = (k.layout + LAYOUTS.length - 1) % LAYOUTS.length; arrange(); }
-      if (Math.abs(y) > 0.2) { k.scale = clamp(k.scale - y * dt * 0.7, 0.3, 4); arrange(); }
+    if (pressed(gp, 4, side + '4')) { state.front = nextFront(state, { kind: 'swap' }); layout(); }
+    if (pressed(gp, 5, side + '5')) { if (state.front !== 'board') close(state.front); }
+
+    // A held window sizes with the stick; an empty hand turns the room.
+    if (holding && Math.abs(y) > 0.2) {
+      const s = holding[1].surface;
+      const k = 1 - y * dt * 1.1;
+      s.resize(s.widthM * k, s.heightM * k);
+      s.paint(doc);
+    } else if (!holding && Math.abs(x) > 0.2) {
+      rig.rotation.y += x * dt * 1.1;
     }
   }
 }
-function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
-for (const c of controllers) {
-  c.addEventListener('squeezestart', () => grab(c));
-  c.addEventListener('squeezeend', () => release(c));
-}
+// ---------- the keyboard goes to the front window ----------
+// A paired keyboard is the input story for now. What is in front is what is
+// being worked on, so that is what typing belongs to.
 
-// ---------- keyboard: the pane you are facing is a real terminal ----------
-// A paired keyboard is the input story for now; voice is a later card. What
-// makes this a room you WORK in rather than a wall you watch is that the keys
-// land in the thing you are looking at.
-
-let sending = Promise.resolve();
+const composing = { text: '' };
 window.addEventListener('keydown', (e) => {
-  if (!focused) return;
-  if (handleDesktopKey(e)) return;
+  if (desktopKey(e)) return;
+  const id = state.front;
+  if (!id || id === 'board') return;
   const payload = keyForEvent(e);
   if (!payload) return;
   e.preventDefault();
-  const { input } = focused.streamUrl();
-  sending = sending.then(() => fetch(input, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  }).catch(() => {}));
+  if (payload.text) { composing.text += payload.text; return draftPaint(); }
+  if (payload.key === 'BSpace') { composing.text = composing.text.slice(0, -1); return draftPaint(); }
+  if (payload.key === 'Enter' && composing.text.trim()) return send(id, composing.text.trim());
 });
 
-// The same knobs from a desk, so this can be checked without a headset on.
-// Anything verified here is NOT evidence about legibility — that answer only
-// exists inside the device.
-function handleDesktopKey(e) {
+function draftPaint() {
+  const s = surfaceFor(state.front);
+  if (!s) return;
+  s.draft = composing.text;
+  s.paint(doc);
+  const g = s.ctx;
+  const h = s.canvas.height, w = s.canvas.width;
+  g.fillStyle = '#111a24';
+  g.fillRect(0, h - 44, w, 44);
+  g.fillStyle = '#4cc2ff';
+  g.font = '22px system-ui, sans-serif';
+  g.fillText('› ' + composing.text, 18, h - 15);
+  s.texture.needsUpdate = true;
+}
+
+// Sending is the board's own feedback route — the same one the composer uses.
+async function send(id, text) {
+  const target = id.startsWith('card:') ? 'card:' + id.slice(5) : 'lieutenant:' + id.slice(3);
+  composing.text = '';
+  try {
+    await fetch('/api/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actor: 'user', target, text }),
+    });
+  } catch (e) { /* the next refresh tells the truth either way */ }
+  await refresh();
+}
+
+function desktopKey(e) {
   if (renderer.xr.isPresenting) return false;
-  const map = { '1': 0, '2': 1, '3': 2, '4': 3 };
-  if (e.key in map) { k.layout = map[e.key]; arrange(); return true; }
-  if (e.key === 't') { k.allText = !k.allText; hudDirty = true; return true; }
-  if (e.key === 'f') { k.fit = !k.fit; arrange(); return true; }
-  if (e.key === '[') { k.scale = clamp(k.scale * 0.9, 0.3, 4); arrange(); return true; }
-  if (e.key === ']') { k.scale = clamp(k.scale * 1.1, 0.3, 4); arrange(); return true; }
-  if (e.key === '-') { k.distance = clamp(k.distance * 1.1, 0.4, 3); arrange(); return true; }
-  if (e.key === '=') { k.distance = clamp(k.distance * 0.9, 0.4, 3); arrange(); return true; }
+  if (e.key === 'b') { state.front = nextFront(state, { kind: 'swap' }); layout(); return true; }
   return false;
 }
 
-// Desktop mouse-look, so the scene can be walked through on a flat screen.
-let dragging = false, yaw = 0, pitch = 0;
-renderer.domElement.addEventListener('pointerdown', () => { dragging = true; });
-window.addEventListener('pointerup', () => { dragging = false; });
+// ---------- a desk, so this can be driven without a headset ----------
+
+let dragging = false, moved = false, yaw = 0, pitch = 0;
+renderer.domElement.addEventListener('pointerdown', () => { dragging = true; moved = false; });
 window.addEventListener('pointermove', (e) => {
   if (!dragging || renderer.xr.isPresenting) return;
+  if (Math.abs(e.movementX) + Math.abs(e.movementY) > 2) moved = true;
   yaw -= e.movementX * 0.003;
-  pitch = clamp(pitch - e.movementY * 0.003, -1.2, 1.2);
+  pitch = Math.max(-1.2, Math.min(1.2, pitch - e.movementY * 0.003));
   camera.rotation.set(pitch, yaw, 0, 'YXZ');
+});
+window.addEventListener('pointerup', (e) => {
+  const wasDragging = dragging;
+  dragging = false;
+  if (!wasDragging || moved || renderer.xr.isPresenting) return;   // a look is not a click
+  const ndc = new THREE.Vector2(
+    (e.clientX / window.innerWidth) * 2 - 1,
+    -(e.clientY / window.innerHeight) * 2 + 1,
+  );
+  raycaster.setFromCamera(ndc, camera);
+  activate(pick(raycaster.ray.origin, raycaster.ray.direction));
 });
 
 // ---------- entering ----------
 
-// A phone has no headset and no keyboard, and pressing a button that quietly
-// does nothing reads as a broken page. So the gate says what it can do here,
-// and where there is no immersive session it gets out of the way and hands over
-// the flat room instead of refusing.
 const gate = document.getElementById('gate');
-const bar = document.getElementById('bar');
+const uibar = document.getElementById('bar');
 
 async function enter() {
-  const flat = (why) => { say(why); gate.hidden = true; bar.hidden = false; };
-  if (!navigator.xr) return flat('no WebXR in this browser — flat view, drag to look');
+  const flat = (why) => { say(why); gate.hidden = true; uibar.hidden = false; };
+  if (!navigator.xr) return flat('no WebXR in this browser — flat view, drag to look, click to open');
   const ok = await navigator.xr.isSessionSupported('immersive-vr').catch(() => false);
-  if (!ok) return flat('no headset here — flat view, drag to look');
+  if (!ok) return flat('no headset here — flat view, drag to look, click to open');
   let session;
   try {
     session = await navigator.xr.requestSession('immersive-vr', {
@@ -359,23 +337,16 @@ async function enter() {
   } catch (e) { return flat('the headset refused the session: ' + ((e && e.message) || e)); }
   await renderer.xr.setSession(session);
   gate.hidden = true;
-  bar.hidden = true;
-  session.addEventListener('end', () => { gate.hidden = false; bar.hidden = true; });
+  uibar.hidden = true;
+  session.addEventListener('end', () => { gate.hidden = false; uibar.hidden = true; });
 }
 document.getElementById('enter').addEventListener('click', enter);
 
-// The same four arrangements and the same two toggles, for a thumb.
-bar.addEventListener('click', (e) => {
+uibar.addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b) return;
-  if (b.dataset.layout) {
-    k.layout = Number(b.dataset.layout);
-    for (const other of bar.querySelectorAll('[data-layout]')) other.classList.toggle('on', other === b);
-    arrange();
-    return;
-  }
-  if (b.id === 'b-alltext') { k.allText = !k.allText; b.classList.toggle('on', k.allText); hudDirty = true; }
-  if (b.id === 'b-fit') { k.fit = !k.fit; b.classList.toggle('on', k.fit); arrange(); }
+  if (b.id === 'b-swap') { state.front = nextFront(state, { kind: 'swap' }); layout(); }
+  if (b.id === 'b-close' && state.front !== 'board') close(state.front);
 });
 
 // ---------- loop ----------
@@ -385,16 +356,10 @@ renderer.setAnimationLoop((t) => {
   const dt = last ? Math.min(0.1, (t - last) / 1000) : 0.016;
   last = t;
   readGamepads(dt);
-  updateFocus();
-  for (const p of panes) p.tick(dt);
-  if (hudDirty) drawHud();
   renderer.render(scene, camera);
 });
-setInterval(() => { hudDirty = true; }, 250);   // the metrics move with your head
 
-// A prototype is a thing you poke at from the console while wearing nothing.
-// Deliberately exposed: `__bridge.k` is every knob, `__bridge.arrange()` applies
-// them, `__bridge.panes` is the room.
-window.__bridge = { k, panes, LAYOUTS, arrange, camera, get focused() { return focused; } };
+window.__bridge = { state, windows, board, bar, open, close, layout, get doc() { return doc; } };
 
-build().catch((e) => say('could not build the room: ' + (e && e.message ? e.message : e)));
+refresh().then(() => { layout(); document.getElementById('gate').classList.add('ready'); });
+setInterval(refresh, 5000);
