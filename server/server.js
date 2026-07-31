@@ -1114,6 +1114,56 @@ function harnessCommands(ref) {
   try { impl = getHarness(ref.harness); } catch { return []; }
   return typeof impl.commands === 'function' ? impl.commands(ref) : [];
 }
+
+// Commands the BOARD answers, not the harness — because the harness does not
+// know what a lieutenant is. /reset needs the charter and the board digest,
+// which live here.
+//
+// Lieutenants only. A worker's session belongs to its card and to whatever
+// started it; resetting one would hand it a lieutenant's doctrine and no idea
+// what it was building.
+const BOARD_COMMANDS = [
+  { name: '/reset', description: 'start this lieutenant over: same identity, no memory of the conversation' },
+];
+function boardCommands(target) {  // MUTATION-TEST ME
+  return /^lieutenant:/.test(target || '') ? BOARD_COMMANDS : [];
+}
+
+// /reset — kill the session and bring it back on the launch prompt: doctrine,
+// its charter, and the digest of what it owns. Deliberately the SAME path
+// supervision takes for a lieutenant whose memory could not be recovered, so
+// there is one way a lieutenant comes back from nothing, not two.
+//
+// The conversation is gone and cannot be undone from here. It is not destroyed:
+// the transcript stays on disk under ~/.claude/projects, so a human can still
+// read it. The agent cannot.
+async function resetLieutenant(id) {
+  const lt = findLieutenant(id);
+  if (!lt) return { error: 'unknown lieutenant: ' + id };
+  if (!isHarnessRef(lt.ref)) return { error: 'lieutenant ' + id + ' has no session to reset' };
+  let impl;
+  try { impl = getHarness(lt.ref.harness); } catch (e) { return { error: String((e && e.message) || e) }; }
+  const session = /^bc-[A-Za-z0-9_-]+$/.test(lt.ref.session)
+    ? lt.ref.session : names.lieutenantSession(WORKSPACE, id);
+  const window = lt.ref.window || names.LIEUTENANT_WINDOW;
+  const opts = { stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL, installHooks: false };
+  try {
+    await impl.kill({ ...lt.ref, window });
+    lt.ref = await impl.spawn(lt.ref.cwd, respawnPrompt(lt), Object.assign({ session, window }, opts));
+  } catch (e) {
+    return { error: 'reset failed: ' + String((e && e.message) || e) };
+  }
+  respawnAttempts.delete(id);
+  nudged.delete(id); // the new session owes a drain — the queue is truth, its memory was a cache
+  board.events.push(mkEvent({
+    text: 'lieutenant ' + lt.name + ' was reset by the captain — new session on the launch prompt',
+    actor: 'user',
+  }, { kind: 'reset', level: 1 }));
+  saveBoard();
+  broadcast();
+  if (pendingItems(id).length) scheduleWake(id);
+  return { ok: true, session: lt.ref.session };
+}
 // A captain chat message starting with "/" routes HERE instead of becoming a
 // say: the command runs against the target session's harness and both the
 // command and its reply land in the thread — nothing rides the delivery queue
@@ -1138,11 +1188,21 @@ async function runChatCommand(target, thread, text) {
   stamp('user', text, { name });
   const r = commandTargetRef(target);
   if (r.error) return r; // unknown target — the normal 404, same as a say
+  // Board commands are answered here, and BEFORE the live-session check: the
+  // harness has no idea what a lieutenant is, and /reset is at its most useful
+  // on one whose session has died — bringing it back is the whole point.
+  if (boardCommands(target).some((c) => c.name === name)) {
+    const id = /^lieutenant:(.+)$/.exec(target)[1];
+    const out = await resetLieutenant(id);
+    if (out.error) reply('bridge', '⚠ ' + name + ' — ' + out.error);
+    else reply('bridge', 'reset — ' + id + ' is a new session on the launch prompt (doctrine, charter, and what it owns). The conversation before this one is gone.');
+    return { ok: true, command: name };
+  }
   if (!r.ref) {
     reply('bridge', '⚠ ' + name + ' — ' + r.why);
     return { ok: true, command: name };
   }
-  const cmds = harnessCommands(r.ref);
+  const cmds = harnessCommands(r.ref).concat(boardCommands(target));
   if (!cmds.length) {
     reply('bridge', '⚠ ' + name + ' — the ' + r.ref.harness + ' harness has no slash commands');
     return { ok: true, command: name };
@@ -2820,8 +2880,15 @@ const server = http.createServer(async (req, res) => {
       const target = String(url.searchParams.get('target') || '');
       const r = commandTargetRef(target);
       if (r.error) return sendJson(res, r.code || 400, { error: r.error });
-      if (!r.ref) return sendJson(res, 200, { target, commands: [] });
-      return sendJson(res, 200, { target, harness: r.ref.harness, commands: harnessCommands(r.ref) });
+      // A board command is offered even with no live session — /reset is how a
+      // dead lieutenant comes back, so hiding it exactly when it is needed
+      // would be the wrong way round.
+      if (!r.ref) return sendJson(res, 200, { target, commands: boardCommands(target) });
+      return sendJson(res, 200, {
+        target,
+        harness: r.ref.harness,
+        commands: harnessCommands(r.ref).concat(boardCommands(target)),
+      });
     }
 
     // ----- chat -----

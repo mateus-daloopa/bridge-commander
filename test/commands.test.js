@@ -47,12 +47,15 @@ test('GET /api/commands: target harness list; no session / no worker → empty; 
     let r = await s.api('GET', '/api/commands?target=lieutenant:fk1');
     assert.strictEqual(r.status, 200);
     assert.strictEqual(r.body.harness, 'fake');
-    assert.deepStrictEqual(r.body.commands.map((c) => c.name), ['/status', '/compact', '/help']);
+    // …plus the board's own, which no harness supplies
+    assert.deepStrictEqual(r.body.commands.map((c) => c.name), ['/status', '/compact', '/help', '/reset']);
 
-    // a ref-less lieutenant (Ada) has no session to address — empty, not an error
+    // a ref-less lieutenant (Ada) has no session to address, so the harness
+    // offers nothing — but /reset is precisely how a lieutenant with no live
+    // session comes back, so the board still offers that one.
     r = await s.api('GET', '/api/commands?target=lieutenant:' + LT);
     assert.strictEqual(r.status, 200);
-    assert.deepStrictEqual(r.body.commands, []);
+    assert.deepStrictEqual(r.body.commands.map((c) => c.name), ['/reset']);
 
     // a card without a worker — empty too (the composer just shows nothing)
     await s.api('POST', '/api/cards', withOwner({ title: 'Bare' }));
@@ -69,16 +72,20 @@ test('GET /api/commands: target harness list; no session / no worker → empty; 
   }
 });
 
-test('a harness without the capability (BC_FAKE_NO_COMMANDS) degrades to an empty list + in-thread notice', async () => {
+test('a harness without the capability (BC_FAKE_NO_COMMANDS) degrades to the board list + an in-thread notice', async () => {
   const { s, teardown } = await bootWithFakeLt({ BC_FAKE_NO_COMMANDS: '1' });
   try {
+    // the harness contributes nothing; the board's own command is still there
     const r = await s.api('GET', '/api/commands?target=lieutenant:fk1');
     assert.strictEqual(r.status, 200);
-    assert.deepStrictEqual(r.body.commands, []);
+    assert.deepStrictEqual(r.body.commands.map((c) => c.name), ['/reset']);
     assert.strictEqual((await s.api('POST', '/api/feedback', { target: 'lieutenant:fk1', text: '/status' })).status, 200);
     const chat = await chatOf(s, 'fk1');
     assert.strictEqual(chat.length, 2);
-    assert.match(chat[1].text, /no slash commands/);
+    // Still a graceful in-thread notice rather than an HTTP failure — and now
+    // it names what IS available instead of only what is not.
+    assert.match(chat[1].text, /unknown command \/status/);
+    assert.match(chat[1].text, /available: \/reset/);
   } finally {
     await teardown();
   }
