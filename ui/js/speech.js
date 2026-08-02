@@ -34,7 +34,7 @@
    are arguments; neither has a default. When the engine refuses, the refusal is
    thrown to the caller — this module never quietly finds another way to speak. */
 
-let ctx;              // the AudioContext, made once and kept
+let ctx;              // the AudioContext, kept until it dies (see audio())
 let sink;             // MediaStreamAudioDestinationNode — null once the browser refuses
 let el;               // the <audio> the sound leaves through
 let live = null;      // the speech in flight, or null
@@ -81,6 +81,55 @@ function transport(on, title) {
 }
 
 /* ── the route to the speakers ───────────────────────────────────────── */
+
+// The context, alive. An iOS audio-session interruption — the microphone taken
+// by a Siri Shortcut, a call — can leave it PERMANENTLY dead: resume() resolves,
+// state reads 'running', and nothing is ever heard from it again. The state
+// field lies, so ask the clock instead: a running context whose currentTime did
+// not move across real time is a corpse, and only a new one cures it. The sink
+// is a node of the dead context and goes with it — openSink() then makes a fresh
+// one and hands the element its stream again, which is what re-arms the element
+// after the same interruption paused it.
+// The window has to be SHORT and it has to be fresh. Sampling only inside
+// speak() makes the baseline "the previous message", and a dictation happens
+// exactly in that gap: the clock moved since the last message, so the verdict is
+// "alive" and the first message back is silent. A heartbeat owns the sample
+// instead, so the answer is never more than one beat old.
+// sound.js holds the same rule in needsRebuild(); the numbers and the shape are
+// deliberately identical, and the two have to be changed together. It is not
+// imported because this file is a copy of chatterbox_server's (see the header)
+// and must not grow a dependency on the board.
+const BEAT_MS = 500;
+let ctxTime = 0, ctxWall = 0, dead = false;
+function beat() {
+  if (!ctx) return;
+  const wall = performance.now();
+  dead = ctx.state === 'running' && wall - ctxWall >= 200 && ctx.currentTime - ctxTime <= 0;
+  ctxTime = ctx.currentTime; ctxWall = wall;
+}
+setInterval(beat, BEAT_MS)?.unref?.();   // a timer is no reason to hold a process open
+
+function audio() {
+  if (ctx && dead) {
+    try { ctx.close(); } catch {}
+    ctx = undefined; sink = undefined;   // the sink is a node of the dead context
+  }
+  if (!ctx) {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    ctxTime = ctx.currentTime; ctxWall = performance.now(); dead = false;
+  }
+  return ctx;
+}
+
+// A fresh context is born suspended and iOS wants an activation to start it, so
+// a gesture replaces the corpse too, not only speak(): a board message arrives
+// with no tap behind it and has to find a context that is already alive. Capture
+// phase and passive, the way sound.js primes its own; a no-op unless the last
+// beat found the context dead. Optional call so the module still imports where
+// there is no window to listen on.
+for (const ev of ['click', 'pointerdown', 'touchstart', 'keydown'])
+  window.addEventListener?.(ev, () => { if (ctx && dead) audio().resume().catch(() => {}); },
+    { capture: true, passive: true });
 
 // It renders nothing and has no controls of its own: the transport above is the
 // player people see. This one is the player the OS sees.
@@ -218,7 +267,7 @@ export async function speak({url, voice, input, params, title, artist, onFirstSo
   if (!url) throw new Error('speak() needs the engine url — there is no default');
   if (!voice) throw new Error('speak() needs a voice — there is no default');
   stop();                     // one voice at a time
-  ctx ??= new (window.AudioContext || window.webkitAudioContext)();
+  audio();                    // a corpse from an interruption is replaced here
   openSink();                 // before any await: iOS only allows play() inside the tap
   announce(title, artist);
   transport(true, title);
