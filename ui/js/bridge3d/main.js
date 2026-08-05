@@ -33,7 +33,7 @@ import { BoardPanel, CardPanel } from './board.js';
 import { Grabs } from './grab.js';
 import { Sound } from './sound.js';
 import { installSky, installToneMapping } from './sky.js';
-import { buildTerrace, crewInlay } from './place.js';
+import { buildTerrace, crewInlay, setAnisotropy } from './place.js';
 import { updateRoots, sortTransparent, rootCount, COL } from './kit.js';
 
 const say = (m) => { const el = document.getElementById('status'); if (el) el.textContent = m; };
@@ -85,6 +85,7 @@ const sky = installSky(renderer, scene);
 // Non-negotiable for orientation, and free: the session is `local-floor`, so
 // y = 0 IS the floor he is standing on — and the terrace is built on it rather
 // than floating over it.
+setAnisotropy(renderer);
 const terrace = buildTerrace(scene);
 scene.add(crewInlay());
 

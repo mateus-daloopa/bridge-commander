@@ -2415,6 +2415,11 @@ const MIME = {
   // what this said — but a captain auditioning one before he merges it opens
   // the URL, and a browser plays audio/mp4 where it downloads octet-stream.
   '.m4a': 'audio/mp4',
+  // The room's environment assets. A browser will sniff an image whatever this
+  // says, but an HDR arrives through fetch() as bytes and a wrong type is the
+  // kind of thing that works everywhere until it does not.
+  '.webp': 'image/webp', '.hdr': 'image/vnd.radiance',
+  '.glb': 'model/gltf-binary', '.gltf': 'model/gltf+json', '.ktx2': 'image/ktx2',
 };
 function serveStatic(res, rel) {
   const file = path.normalize(path.join(UI_DIR, rel));
@@ -2435,7 +2440,13 @@ function serveStatic(res, rel) {
   // Anchored at the start and cut at a separator: `ui/vendor/…` is vendored,
   // anything merely spelled like it is ours. No file exercises that difference
   // today, which is why it is written strictly here rather than pinned below.
-  const vendored = /^vendor([/\\]|$)/.test(rel);
+  // `ui/env/` is the same population as `ui/vendor/`: fetched-once assets that
+  // are replaced by editing the manifest rather than by mutating a file. One of
+  // them is a 5.4 MB sky, and re-downloading it on every open — over a headset's
+  // wifi — is the difference between a room that appears and one he gives up
+  // waiting for. `no-store` on that would have been a real bug in the field and
+  // never once in a test.
+  const vendored = /^(vendor|env|audio)([/\\]|$)/.test(rel);
   res.writeHead(200, {
     'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
     'Cache-Control': vendored ? 'public, max-age=31536000, immutable' : 'no-store',

@@ -217,6 +217,9 @@ async function main() {
       if (errors.length) console.error('the page complained:\n  ' + errors.join('\n  '));
       throw e;
     };
+    // The sky is 5.4 MB and arrives after the first frame. Shooting before it
+    // lands photographs the holding colour, which looks exactly like a
+    // regression and is not one.
     await waitFor(cdp, 'window.__bridge && document.getElementById("gate").classList.contains("ready")',
       'the room to load and the board to answer').catch(complain);
     await waitFor(cdp, 'window.__xr', 'the emulated headset to install').catch(complain);

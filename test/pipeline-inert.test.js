@@ -47,12 +47,22 @@ const ALLOWED = [
   { file: 'ui/js/ltswitcher.js', re: /the stage themselves/, why: 'prose about a UI element, not a pipeline stage' },
 ];
 
+// What the board is WRITTEN in. This scan is about the words the board's source
+// uses, and `ui/env/` holds a 5 MB Radiance sky and a pile of WebP — binary
+// whose bytes happily spell any short pattern you care to grep for if you read
+// them as text, which is exactly what happened the first time an asset landed
+// in the tree. Scanning source means scanning source.
+const TEXTUAL = new Set([
+  '.js', '.mjs', '.cjs', '.ts', '.json', '.html', '.css', '.md', '.txt', '.sh', '.yml', '.yaml',
+]);
+
 function walk(dir, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     if (SKIP_DIRS.has(e.name)) continue;
     const p = path.join(dir, e.name);
     if (e.isDirectory()) walk(p, out);
-    else out.push(p);
+    // No extension at all is a CLI entry point (cli/bc-axi), which is text.
+    else if (!path.extname(e.name) || TEXTUAL.has(path.extname(e.name).toLowerCase())) out.push(p);
   }
   return out;
 }

@@ -30,47 +30,49 @@ export const TERRACE = { deckR: 5.0, wallR: 4.90, wallH: 1.05, copingR: 0.075 };
 
 // ---- surfaces --------------------------------------------------------------
 
-// A stone deck: large slabs, a little grain, a little variation slab to slab.
-// Drawn rather than fetched, like the sky — this repo has no build step and no
-// business growing a texture folder for two surfaces.
-function deckTexture(size = 512) {
-  const c = document.createElement('canvas');
-  c.width = c.height = size;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#9a958c';
-  ctx.fillRect(0, 0, size, size);
+// Real photographed materials, CC0, from ambientCG — see ui/env/README.md.
+//
+// Colour, normal and a packed ORM in the glTF convention (R = ambient
+// occlusion, G = roughness, B = metalness). Packed rather than three separate
+// greyscale files because three reads the channel it wants out of each slot, so
+// one image feeds aoMap, roughnessMap and metalnessMap for one texture fetch.
+//
+// **The normal map is the reason this is worth downloading at all.** It does
+// more for how a surface reads than any amount of extra geometry — the deck is
+// still one flat circle and it now has stones in it that catch the sun.
+const TEX = new THREE.TextureLoader();
 
-  // Grain first, under everything, so the joints sit on top of it.
-  const img = ctx.getImageData(0, 0, size, size);
-  for (let i = 0; i < img.data.length; i += 4) {
-    const n = (Math.random() - 0.5) * 18;
-    img.data[i] += n; img.data[i + 1] += n; img.data[i + 2] += n;
-  }
-  ctx.putImageData(img, 0, 0);
+// Set once, from the renderer, before anything is built. A ground plane seen at
+// a grazing angle is the worst case anisotropic filtering exists for, and this
+// room is mostly a ground plane seen at a grazing angle: at 8 the deck breaks
+// into metre-wide radial bands the moment he looks level, which reads as a
+// texture bug and is a sampling one.
+let MAX_ANISO = 8;
+export function setAnisotropy(renderer) {
+  MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
+  return MAX_ANISO;
+}
 
-  // Four slabs across, each very slightly its own colour — a floor of
-  // identical tiles reads as a texture, a floor of nearly-identical ones reads
-  // as a floor.
-  const n = 4, s = size / n;
-  for (let y = 0; y < n; y++) {
-    for (let x = 0; x < n; x++) {
-      const k = ((x * 7 + y * 13) % 5) - 2;
-      ctx.fillStyle = `rgba(${150 + k * 6},${146 + k * 6},${138 + k * 6},0.35)`;
-      ctx.fillRect(x * s + 1, y * s + 1, s - 2, s - 2);
-    }
-  }
-  ctx.strokeStyle = 'rgba(70,66,60,0.5)';
-  ctx.lineWidth = 2;
-  for (let i = 0; i <= n; i++) {
-    ctx.beginPath(); ctx.moveTo(i * s, 0); ctx.lineTo(i * s, size); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0, i * s); ctx.lineTo(size, i * s); ctx.stroke();
-  }
-
-  const tex = new THREE.CanvasTexture(c);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.repeat.set(4, 4);
-  return tex;
+function pbr(name, { repeat = 1, repeatY = null, colorSpace = true } = {}) {
+  const load = (suffix, srgb) => {
+    const t = TEX.load(`/ui/env/${name}-${suffix}.webp`);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(repeat, repeatY == null ? repeat : repeatY);
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = MAX_ANISO;
+    return t;
+  };
+  // Only the colour map is sRGB. A normal or a roughness read through the sRGB
+  // curve is a normal or a roughness that is quietly wrong, and it looks like
+  // "the lighting is a bit off" rather than like a bug.
+  const orm = load('orm', false);
+  return {
+    map: load('color', colorSpace),
+    normalMap: load('normal', false),
+    aoMap: orm,
+    roughnessMap: orm,
+    metalnessMap: orm,
+  };
 }
 
 // The soft dark patch a thing sitting on the ground puts under itself. One
@@ -98,9 +100,25 @@ export function buildTerrace(scene) {
   const contact = contactTexture();
 
   // The deck.
+  // 5 repeats across a 10 m circle puts a concrete panel joint every 2 m, which
+  // is what a poured terrace looks like. A texture whose scale disagrees with
+  // the props standing on it is the fastest way to make a room feel like a model.
+  //
+  // It is smooth concrete rather than the cobbles this started with, and the
+  // reason is measured: a texture with strong LARGE-SCALE colour variation —
+  // mossy joints — bands into metre-wide stripes when the deck is seen at a
+  // grazing angle, because the mip level the sampler picks is averaging whole
+  // tiles. Swapping the deck for a plain colour made the bands vanish, which is
+  // how I know it was the texture and not the geometry. A uniform surface has
+  // nothing to band INTO.
+  const deckGeo = new THREE.CircleGeometry(TERRACE.deckR, 64);
+  // aoMap reads uv1, which CircleGeometry does not ship — so it is the same
+  // coordinates as everything else rather than absent, which would render the
+  // occlusion as a flat grey wash over the whole deck.
+  deckGeo.setAttribute('uv1', deckGeo.getAttribute('uv'));
   const deck = new THREE.Mesh(
-    new THREE.CircleGeometry(TERRACE.deckR, 64),
-    new THREE.MeshStandardMaterial({ map: deckTexture(), roughness: 0.92, metalness: 0.0 }),
+    deckGeo,
+    new THREE.MeshStandardMaterial({ ...pbr('deck', { repeat: 5 }), roughness: 1.0, metalness: 1.0 }),
   );
   deck.rotation.x = -Math.PI / 2;
   group.add(deck);
@@ -117,11 +135,20 @@ export function buildTerrace(scene) {
 
   // The parapet: the visible bound. Pale, so it catches the sun and reads
   // against both the sky above it and the deck below.
-  const wallMat = new THREE.MeshStandardMaterial({ color: '#d9d5cc', roughness: 0.75, metalness: 0.02, side: THREE.DoubleSide });
-  const wall = new THREE.Mesh(
-    new THREE.CylinderGeometry(TERRACE.wallR, TERRACE.wallR, TERRACE.wallH, 64, 1, true),
-    wallMat,
-  );
+  // Roughness and metalness are left at 1 and multiplied DOWN by the ORM map —
+  // that is how the packed workflow is meant to be driven, and setting them to
+  // taste here would silently scale the measured values in the texture.
+  const wallMat = new THREE.MeshStandardMaterial({
+    // A cylinder's u runs the whole 30.8 m circumference and its v runs 1.05 m,
+    // so one repeat count for both stretches the texture into horizontal
+    // streaks. 30 across and 1 down puts a roughly square metre of concrete on
+    // a square metre of wall, which is the only scale that ever looks right.
+    ...pbr('wall', { repeat: 30, repeatY: 1 }), color: '#e6e2d8',
+    roughness: 1.0, metalness: 1.0, side: THREE.DoubleSide,
+  });
+  const wallGeo = new THREE.CylinderGeometry(TERRACE.wallR, TERRACE.wallR, TERRACE.wallH, 64, 1, true);
+  wallGeo.setAttribute('uv1', wallGeo.getAttribute('uv'));
+  const wall = new THREE.Mesh(wallGeo, wallMat);
   wall.position.y = TERRACE.wallH / 2;
   group.add(wall);
 
