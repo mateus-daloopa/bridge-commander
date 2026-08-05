@@ -188,6 +188,11 @@ export class CardPanel extends ChatPanel {
   }
 
   paintCard(card, lt, columnTitle) {
+    // A card he has just opened starts at the TOP: the body is the deliverable
+    // and he came to read it from the beginning. A chat starts at the bottom
+    // because the newest line is the point of it. Same panel, opposite ends,
+    // and only on the first paint — after that the scroll is his.
+    if (this.card !== card || !this._seen) { this._toTop = 3; this._seen = true; }
     this.card = card;
     this.setTitle(card.title || card.id, [columnTitle, lt && (lt.name || lt.id), card.type].filter(Boolean).join('  -  '));
     this._lastPainted = '';       // the body changed, so the tail has to repaint
@@ -218,7 +223,16 @@ export class CardPanel extends ChatPanel {
         this.addText(m.text || '', { color: mine ? COL.dim : COL.text });
       }
     }
-    this.scrollToEnd();
+    if (!this._toTop) this.scrollToEnd();
+  }
+
+  tick(now) {
+    super.tick(now);
+    if (!this._toTop) return;
+    if (this.body.maxScrollPosition && this.body.maxScrollPosition.value) {
+      this.body.scrollPosition.value = [0, 0];
+      this._toTop--;
+    }
   }
 }
 

@@ -19,8 +19,9 @@ node dev/room-shots.js
 ```
 
 Starts the frontend playground, drives a headless Chrome at the room, enters a
-real immersive session through an emulated headset, poses the head at each named
-viewpoint and writes:
+real immersive session through an emulated headset, opens the surfaces that do
+not exist until somebody asks for them (the board, a chat, a card), poses the
+head at each named viewpoint and writes:
 
 ```
 dev/shots/<viewpoint>.png     one per viewpoint in viewpoints.js
@@ -29,9 +30,15 @@ dev/shots/manifest.json       yaw, pitch, why the shot exists, frame and draw st
 
 Then it **points at things**. A photograph proves the room did not go blank; it
 says nothing about whether the ray reaches anything, and the ways that break are
-all invisible in a PNG. So the run finishes by aiming the head at one of each
-kind of thing — a card slot, a lieutenant, the mat that opens the list — and
-fails if any of them does not light up.
+all invisible in a PNG. So the run aims the head at one of each kind of thing —
+a lieutenant, the mat that opens the board — and fails if any of them does not
+light up.
+
+And it **grabs a window**: opens a chat, aims at its title bar, squeezes, turns
+its head, releases, and checks the panel came along. Moving a window is the one
+interaction he named as a requirement rather than a nicety, and it is invisible
+in every screenshot — a panel that never budges looks exactly like a panel
+nobody has tried to move.
 
 No display, no headset, no `npm install` — Node built-ins and whatever Chrome is
 on the machine. It exits non-zero if a frame came back blank or the ray landed on
@@ -46,9 +53,9 @@ nothing.
 CHROME=/path   which browser to drive, if it is not google-chrome on PATH
 ```
 
-The fixture board is small — ten cards, four lieutenants — so nothing on it ever
-overflows a shelf. Point `--url` at the real board to photograph the room at real
-density, which is the only place the overflow count and a crewed arc show up.
+The fixture board is small — ten cards, four lieutenants. Point `--url` at the
+real board to photograph the room at real density, which is the only place a
+full crew, a long card body and a filter with something to filter show up.
 
 ## The flags
 
@@ -72,19 +79,23 @@ press *enter the bridge*. You are in an immersive session with an emulated Quest
 - **click** — pulls the trigger. The ray rides the head, so what a click lands on
   is whatever is under the dot in the middle of the view; a plain mouse click
   reaches nobody inside a session, which is why it is wired to `selectstart`
-- **l** — the flat list, the same thing the mat on the floor opens
+- **b** — the board · **c** — a chat · **x** — close the front window
 
 The emulated hand is held below and to the right of the head and aimed at a
-point 1.75 m out — the shelf radius — so it reproduces some of the scatter a real
-hand has instead of firing a ray from the exact centre of the eye. That is what
+point 1.75 m out by default — `__xr.reach(m)` moves it — so it reproduces some
+of the scatter a real hand has instead of firing a ray from the exact centre of
+the eye. That is what
 the 6° colliders exist for, and a ray that started at the eye would never test
 them.
 
-From a console, `window.__xr` gives you `look('shelves')`, `aim(yaw, pitch)`,
+From a console, `window.__xr` gives you `look('board')`, `aim(yaw, pitch)`,
+`reach(m)` — how far out the hand and the gaze converge, which matters because a
+hand converging at 1.75 m sails past a panel standing at 1.10 m —
 `press('trigger')`, `frames(n)`, `frameStats()` and the live `device`.
-`window.__bridge` gives you the room — `openList(true)`, `search('oauth')`,
-`lit()` for whatever the ray is currently on, `stats()` for draw calls, roots and
-target count, and the `shelves` / `agents` / `list` themselves.
+`window.__bridge` gives you the room — `openBoard()`, `openChat(id)`,
+`openCard(id)`, `panels()` for where each one is standing, `lit()` for whatever
+the ray is currently on, `stats()` for draw calls, roots and target count, and
+the `agents` / `windows` / `grabs` / `sound` themselves.
 
 The `?capture=1` is only needed if you intend to screenshot; the emulated session
 works on its own.
@@ -143,10 +154,15 @@ emulate; `window.__bridge` is not, so the room can still be driven by hand.
 | | |
 |---|---|
 | `world.js` | where everything stands and what standing there means — pure, no three.js, no DOM. Every angular figure in the room comes from here |
-| `main.js` | the room: renderer, session, ground, lights, the loop, the desk fallback |
-| `shelves.js` | the four bounded planes, their slots, the slabs standing in them, and the floor decals under them |
+| `main.js` | the room: renderer, session, ground, horizon, the loop, the desk fallback, and what each thing does when it is pressed |
 | `agents.js` | the eight fixed berths and the lieutenants in them |
-| `list.js` | the flat list of every card, and the mat on the floor that opens it |
+| `panel.js` | a surface with prose on it he can read, move and put down — the bar is the handle, the body scrolls, the foot holds a composer |
+| `chat.js` | a conversation on a panel: the thread, and a composer that really sends |
+| `board.js` | the board (every card, filterable, each row one press deep) and the card it opens |
+| `windows.js` | how many panels are open, where they land, and the rule that the room never moves one he has placed |
+| `grab.js` | squeeze to pick a window up, and what happens when he lets go |
+| `sound.js` | the music bed, and the sound a press, a grab and a release make |
+| `list.js` | the mat on the floor that opens the board |
 | `hover.js` | the ray, and the six states a thing goes through when it is pointed at |
 | `kit.js` | uikit wired in once: layout, MSDF text, the palette, and what the font can actually draw |
 | `viewpoints.js` | the places the room is photographed from, and the things the ray must reach — pure |

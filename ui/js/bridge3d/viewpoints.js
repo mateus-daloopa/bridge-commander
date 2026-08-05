@@ -6,8 +6,8 @@
 // they are a module rather than six literals inside a script.
 //
 // A viewpoint is a place to STAND and a thing to LOOK AT, never a raw
-// quaternion: the point of a named shot is "this is what the shelves look like
-// from where he reads them", and that survives the shelves moving. Every target
+// quaternion: the point of a named shot is "this is what the crew look like
+// from where he reads them", and that survives the crew moving. Every target
 // is read out of world.js, so a thing that gets repositioned drags its
 // photograph along with it instead of quietly becoming a picture of the floor.
 
@@ -44,15 +44,6 @@ const HERE = [0, W.EYE, 0];
 
 const at = (p) => [p.x, p.y, p.z];
 
-// The two shelves worth photographing on their own: the one straight ahead of
-// his left shoulder, and the far one out at 33.75°, which is where a panel
-// turned to face the eye stops facing it and where foveation blurs what it
-// should not.
-const NEAR_SHELF = W.shelfPlane(1);
-const FAR_SHELF = W.shelfPlane(3);
-const nearExtent = W.shelfExtent(1);
-const farExtent = W.shelfExtent(3);
-
 // The arc of spheres, as one thing: eight of them 11.25° apart, so the set is
 // 78.75° across at 2.0 m plus a sphere at each end.
 const ARC = {
@@ -61,9 +52,20 @@ const ARC = {
 };
 
 const BOARD = W.pointAt(0, W.BOARD.elevDeg, W.BOARD.distM);
+// Dead ahead at the board's own distance — where a surface stands when he opens
+// one, and so what an empty room has to look right without.
+const AHEAD = { x: 0, y: W.EYE, z: -W.BOARD.distM };
+
+// The middle pair of berths, as one thing. A shot of the room at rest is framed
+// on these rather than on the whole arc: the arc is 68.5° wide at 2 m and does
+// not fit in a 90° frame with any margin left, so framing it would only ever
+// assert that the shot is too small.
+const CORE = {
+  widthM: 2 * W.AGENT.distM * Math.sin((W.AGENT.pitchDeg / 2) * Math.PI / 180) + W.AGENT.diaM,
+  heightM: W.sizeForArc(W.AGENT.riseDeg, W.AGENT.distM) + W.AGENT.diaM,
+};
 const BOARD_SIZE = W.boardSize();
 const PLATE = W.plate();
-const DECAL = W.decalAt(1);
 
 // The first panel slot, which is where a chat opened from a cold room lands.
 const CHAT = W.panelAt(W.PANEL_SLOTS[0]);
@@ -73,42 +75,29 @@ const CHAT = W.panelAt(W.PANEL_SLOTS[0]);
 // photograph is a substitute for wearing it.
 //
 // `scene` is what has to be true for the shot to be of anything: 'world' is the
-// room standing still, 'list' is the flat panel up in front of it.
+// room standing still; 'board', 'chat' and 'card' each open a surface that does
+// not exist until somebody asks for it.
 export const VIEWPOINTS = [
   {
     name: 'resting', scene: 'world',
-    why: 'head level, dead ahead — what he sees when he stops moving, and the shot that catches anything drifting up over the horizon',
+    why: 'head level, dead ahead — the room with nothing open in it: the crew, the floor they stand on, the mat, and a horizon rather than a void. The shot that catches anything drifting up over the eyeline',
     eye: HERE,
-    look: [0, W.EYE, -W.SHELF.radius],
-    frames: { panel: nearExtent, at: NEAR_SHELF.centre },
-  },
-  {
-    name: 'shelves', scene: 'world',
-    why: 'the working shelf read straight on: are the slots a lattice, is a card a slab standing in one, and is the padding around it visible as air rather than as a gap in the drawing',
-    eye: HERE,
-    look: at(NEAR_SHELF.centre),
-    frames: { panel: nearExtent, at: NEAR_SHELF.centre },
-  },
-  {
-    name: 'far-shelf', scene: 'world',
-    why: 'the outermost shelf, 33.75° off centre — where a flat plane turned to face the eye stops facing it, and where three.js would have blurred the type if foveation had been left at its default',
-    eye: HERE,
-    look: at(FAR_SHELF.centre),
-    frames: { panel: farExtent, at: FAR_SHELF.centre },
+    look: [0, W.EYE, -W.AGENT.distM],
+    frames: { panel: CORE, at: W.agentAt(4).pos },
   },
   {
     name: 'lieutenants', scene: 'world',
-    why: 'the arc above the shelves: eight fixed berths, the crewed ones in their own colours with their names under them, and nothing of it above +10°',
+    why: 'the arc: eight fixed berths, the crewed ones in their own colours with their names under them, nothing of it above +5°, and the ring on the floor that says where they live',
     eye: HERE,
     look: at(W.agentAt(3).pos),
     frames: { panel: ARC, at: W.agentAt(3).pos },
   },
   {
     name: 'landmarks', scene: 'world',
-    why: 'the floor: a baked decal under each shelf carrying its column name, and the mat that opens the board. The layout that lost in the research lost for lacking exactly these',
+    why: 'the floor: the mat that opens the board, and the ring under the crew. The layout that lost in the research lost for lacking exactly these',
     eye: HERE,
-    look: at(DECAL.pos), floor: true,
-    frames: { panel: { widthM: DECAL.widthM, heightM: DECAL.depthM }, at: DECAL.pos },
+    look: at(PLATE.pos), floor: true,
+    frames: { panel: { widthM: PLATE.widthM, heightM: PLATE.depthM }, at: PLATE.pos },
   },
   {
     name: 'board', scene: 'board',
@@ -120,6 +109,13 @@ export const VIEWPOINTS = [
   {
     name: 'chat', scene: 'chat',
     why: 'a lieutenant\'s conversation, open where a chat opens: is the prose readable at 1.10 m, does the composer sit at the bottom, and is the title bar a bar he could actually grab',
+    eye: HERE,
+    look: at(CHAT.pos),
+    frames: { panel: { widthM: CHAT.widthM, heightM: CHAT.heightM }, at: CHAT.pos },
+  },
+  {
+    name: 'card', scene: 'card',
+    why: 'a card brought forward: its id, its PR state, the body that IS the deliverable, and the thread under it — the surface he came into the room to read',
     eye: HERE,
     look: at(CHAT.pos),
     frames: { panel: { widthM: CHAT.widthM, heightM: CHAT.heightM }, at: CHAT.pos },
@@ -139,12 +135,10 @@ export const byName = (name) => VIEWPOINTS.find((v) => v.name === name) || null;
 // So the capture run also POINTS at one of each kind of thing and checks it
 // lights up. Aim is a head pose, in the same degrees everything else here
 // speaks: yaw is the opposite sign of world.js's azimuth.
-const slot = W.slotAt(1, 0, 0);
 const agent = W.agentAt(4);
 const mat = W.plate();
 
 export const PROBES = [
-  { name: 'a card slot', yaw: -slot.az, pitch: slot.el, expect: 'slot' },
   { name: 'a lieutenant', yaw: -agent.az, pitch: agent.el, expect: 'lieutenant' },
   { name: 'the board mat', yaw: -mat.azimuth, pitch: mat.elevation, expect: 'list-plate' },
 ];
@@ -152,14 +146,10 @@ export const PROBES = [
 // Everywhere the room actually stands something — what a viewpoint is allowed to
 // be aimed at. A viewpoint pointed anywhere else is a photograph of the floor.
 export function places() {
-  const out = [BOARD, PLATE.pos, { x: 0, y: W.EYE, z: -W.SHELF.radius }];
+  const out = [BOARD, PLATE.pos, AHEAD];
   // The panel slots. Nothing stands in them until he opens something, but they
   // are where a window lands, so a shot aimed at one is a shot of the room.
   for (const az of W.PANEL_SLOTS) out.push(W.panelAt(az).pos);
-  for (let i = 0; i < W.SHELF.azimuths.length; i++) {
-    out.push(W.shelfPlane(i).centre, W.decalAt(i).pos);
-    for (const s of W.slots(i)) out.push(s.pos);
-  }
   for (let i = 0; i < W.AGENT.slots; i++) out.push(W.agentAt(i).pos);
   return out;
 }

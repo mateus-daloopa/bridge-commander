@@ -1,11 +1,15 @@
 // main.js — the board as a world you stand inside.
 //
 // The first room was a wall of live terminals and the captain killed it in one
-// sentence. The second was panels — better, and still 2D inside 3D: pictures of
-// the board hanging in the air. This is the third, and the difference is that
-// the things in it are THINGS. Four bounded shelves with their names on the
-// floor beneath them, cards as slabs standing in slots, eight lieutenants as
-// spheres at positions that never move, and a ray that lands on any of it.
+// sentence. The second was panels — pictures of the board hanging in the air.
+// The third was shelves of card-shaped slabs, and he could point at them but
+// could not read a word: they were 1.19:1 against the surface they stood on,
+// which is not "small", it is invisible.
+//
+// This is the fourth, and the difference is that it is a room he can WORK in.
+// What is permanently there is small and legible: the crew, an aligned floor,
+// and a mat. Everything else arrives when he asks for it and leaves when he is
+// done — a chat, the board, a card — and lives wherever he puts it.
 //
 // It is now a room he can work in rather than look at. The lieutenants are the
 // arc above: point at one and its conversation opens as a panel he can read,
@@ -20,7 +24,6 @@
 
 import * as THREE from 'three';
 import * as W from './world.js';
-import { Shelf, Decal } from './shelves.js';
 import { Agents } from './agents.js';
 import { ListPlate } from './list.js';
 import { Rays, setVoice } from './hover.js';
@@ -52,9 +55,9 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
 // three.js ships foveation at 1.0 — MAXIMUM — which renders the edges of the
-// view at reduced resolution. This room parks two whole shelves out past 30° on
-// purpose, for a head turn to find, so the default blurs exactly the things it
-// was told to keep readable. A room of small type pays the GPU instead.
+// view at reduced resolution. The board runs out to ±28° and a window he has
+// placed himself can be anywhere, so the default would blur exactly the prose
+// he is reading. A room of small type pays the GPU instead.
 renderer.xr.setFoveation(0);
 sortTransparent(renderer);
 document.body.appendChild(renderer.domElement);
@@ -88,19 +91,40 @@ grid.material.opacity = 0.5;
 grid.material.transparent = true;
 scene.add(grid);
 
+// A horizon. Flat black in every direction reads as a void rather than as a
+// room, and a void gives the eye nothing to rest at — which is the difference
+// between a dark room and no room. One inverted sphere with a vertical
+// gradient baked into its vertex colours: no texture, no light, one draw call,
+// and it fades to the floor's own colour at the bottom so the two meet without
+// a seam. It is deliberately almost featureless, because anything with detail
+// in it out there is something the eye will keep going back to.
+const sky = new THREE.SphereGeometry(24, 24, 16);
+const cols = [];
+const pos = sky.getAttribute('position');
+const top = new THREE.Color('#070b12'), bottom = new THREE.Color('#0a1018');
+for (let i = 0; i < pos.count; i++) {
+  const k = Math.min(1, Math.max(0, (pos.getY(i) / 24) * 0.5 + 0.5));
+  const c = bottom.clone().lerp(top, k);
+  cols.push(c.r, c.g, c.b);
+}
+sky.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+scene.add(new THREE.Mesh(sky, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
+
+// The landmark under the crew. People build accurate mental maps from passive
+// landmarks with no labels at all and cannot navigate abstract position
+// without one, so the arc of lieutenants gets a mark on the real floor beneath
+// it — a ring, drawn where they stand, going nowhere and doing nothing.
+const ring = new THREE.Mesh(
+  new THREE.RingGeometry(W.AGENT.distM - 0.06, W.AGENT.distM, 96, 1, Math.PI * 0.72, Math.PI * 1.56),
+  new THREE.MeshBasicMaterial({ color: COL.decal, transparent: true, opacity: 0.5, side: THREE.DoubleSide }),
+);
+ring.rotation.x = -Math.PI / 2;
+ring.position.y = 0.002;
+scene.add(ring);
+
 // ---- the room's contents ---------------------------------------------------
 
 let doc = { cards: [], lieutenants: [], columns: [] };
-
-const shelves = [];
-const decals = [];
-for (let i = 0; i < W.SHELF.azimuths.length; i++) {
-  const s = new Shelf(i);
-  const d = new Decal(i);
-  shelves.push(s);
-  decals.push(d);
-  scene.add(s.group, d.group);
-}
 
 const agents = new Agents();
 scene.add(agents.group);
@@ -180,10 +204,7 @@ function openCard(card) {
 }
 
 function repaint() {
-  const cols = W.columnsOf(doc);
   const lts = new Map((doc.lieutenants || []).map((l) => [l.id, l]));
-  shelves.forEach((s, i) => s.paint(doc, cols[i], lts));
-  decals.forEach((d, i) => d.paint(doc, cols[i]));
   agents.paint(doc);
   // An open chat follows the board: the refresh is what makes a reply arrive
   // while he is standing there, rather than on the next time he opens it.
@@ -301,7 +322,6 @@ renderer.setAnimationLoop((t) => {
   last = t;
   rays.update();
   const now = performance.now();
-  for (const s of shelves) s.tick(now);
   agents.tick(now);
   plate.tick(now);
   windows.tick(now);
@@ -312,7 +332,7 @@ renderer.setAnimationLoop((t) => {
 
 // The handle the capture script and a console drive the room through.
 window.__bridge = {
-  shelves, decals, agents, plate, scene, camera, rays, windows, grabs, sound,
+  agents, plate, scene, camera, rays, windows, grabs, sound,
   openBoard: () => !!openBoard(),
   // The capture script and a console drive the panels through these — a chat
   // that can only be reached by aiming a ray is a chat no test can photograph.
@@ -323,6 +343,14 @@ window.__bridge = {
     const lt = (id && lts.find((l) => l.id === id))
       || lts.slice().sort((a, b) => (b.chat || []).length - (a.chat || []).length)[0];
     return lt ? !!openChat(lt) : false;
+  },
+  // Named, or else the card with the most body on it — a photograph of an empty
+  // card proves the frame renders and nothing about the prose in it.
+  openCard: (id) => {
+    const cards = doc.cards || [];
+    const c = (id && cards.find((x) => x.id === id))
+      || cards.slice().sort((a, b) => (b.body || '').length - (a.body || '').length)[0];
+    return c ? !!openCard(c) : false;
   },
   panels: () => [...windows].filter((p) => p.open).map((p) => ({
     key: p.key, slot: p.slot, placed: p.placed,

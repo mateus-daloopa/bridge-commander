@@ -37,31 +37,6 @@ async function room() {
   const eye = [0, W.EYE, 0];
   const out = [];
 
-  // The slots. A cell lies ON its shelf plane, so its corners come from the
-  // plane's own two axes rather than from a rectangle facing the eye.
-  for (let s = 0; s < W.SHELF.azimuths.length; s++) {
-    const plane = W.shelfPlane(s);
-    const o = [plane.centre.x, plane.centre.y, plane.centre.z];
-    const on = (u, v) => [
-      o[0] + u * plane.right[0] + v * plane.up[0],
-      o[1] + u * plane.right[1] + v * plane.up[1],
-      o[2] + u * plane.right[2] + v * plane.up[2],
-    ];
-    for (let row = 0; row < W.SLOT.rows; row++) {
-      for (let col = 0; col < W.SLOT.cols; col++) {
-        const r = W.slotRegion(s, col, row);
-        const f = W.cardFace(s, col, row);
-        out.push({
-          kind: `slot ${s}.${col}.${row}`, eye, hit: true,
-          corners: [on(r.u - r.w / 2, r.v + r.h / 2), on(r.u + r.w / 2, r.v + r.h / 2),
-            on(r.u - r.w / 2, r.v - r.h / 2), on(r.u + r.w / 2, r.v - r.h / 2)],
-          mark: [on(f.u - f.w / 2, f.v + f.h / 2), on(f.u + f.w / 2, f.v + f.h / 2),
-            on(f.u - f.w / 2, f.v - f.h / 2), on(f.u + f.w / 2, f.v - f.h / 2)],
-        });
-      }
-    }
-  }
-
   // The lieutenants. A sphere's region is a sphere: it subtends 2·asin(r/d) in
   // every direction at once, so it is described by its own angular radius
   // rather than by four corners that would only ever approximate one.
@@ -77,11 +52,11 @@ async function room() {
     });
   }
 
-  // The plate that opens the list, lying flat on the floor.
+  // The mat that opens the board, lying flat on the floor.
   const p = W.plate();
   const pc = [p.pos.x, p.pos.y, p.pos.z];
   out.push({
-    kind: 'list plate', eye, hit: true, floor: true,
+    kind: 'board mat', eye, hit: true, floor: true,
     corners: [[pc[0] - p.widthM / 2, 0, pc[2] - p.depthM / 2], [pc[0] + p.widthM / 2, 0, pc[2] - p.depthM / 2],
       [pc[0] - p.widthM / 2, 0, pc[2] + p.depthM / 2], [pc[0] + p.widthM / 2, 0, pc[2] + p.depthM / 2]],
   });
@@ -175,7 +150,10 @@ function outline(r) {
 
 test('every responsive region is 6° where it sits — the padded hit box, not the mark', async () => {
   const { W, regions } = await room();
-  assert.ok(regions.length >= 40, `only ${regions.length} regions in the room`);
+  // Eight berths and the mat. The room's permanent furniture is deliberately
+  // small — everything else is a panel he opens, and a panel's own controls are
+  // measured against the distance IT stands at, not this one.
+  assert.ok(regions.length >= 9, `only ${regions.length} regions in the room`);
   for (const r of regions) {
     const a = arcOf(r, 'hit');
     assert.ok(a.w >= W.HIT, `${r.kind}: ${a.w.toFixed(2)}° wide, floor is ${W.HIT}°`);
@@ -243,12 +221,6 @@ test('everything he stands in front of is inside the comfort band', async () => 
   }
 });
 
-test('the shelves are centred where the eyes rest', async () => {
-  const W = await load('world.js');
-  const centre = -W.shelfCentreElev();
-  assert.ok(centre >= W.DROP[0] && centre <= W.DROP[1],
-    `the shelves are centred ${centre.toFixed(1)}° below the horizon, not ${W.DROP.join('–')}°`);
-});
 
 // ---- the panels, where prose is read ---------------------------------------
 //
@@ -360,48 +332,7 @@ test('arc and metres convert both ways', async () => {
 
 // ---- the discipline -------------------------------------------------------
 
-test('a shelf is a flat bounded plane, not a slice of a cylinder', async () => {
-  const W = await load('world.js');
-  const planes = W.SHELF.azimuths.map((_, i) => W.shelfPlane(i));
-  // Every slot on a shelf lies exactly on that shelf's plane — which is what
-  // makes it a surface objects are constrained to rather than a free volume.
-  for (let i = 0; i < planes.length; i++) {
-    const p = planes[i];
-    for (const s of W.slots(i)) {
-      const off = (s.pos.x - p.centre.x) * p.normal[0] + (s.pos.y - p.centre.y) * p.normal[1]
-        + (s.pos.z - p.centre.z) * p.normal[2];
-      assert.ok(Math.abs(off) < 1e-9, `slot ${i}.${s.col}.${s.row} is ${off.toFixed(4)} m off its own shelf`);
-    }
-    // Tilted 25° back from vertical: the normal rises by exactly that much.
-    const rise = Math.asin(p.normal[1]) * DEG;
-    assert.ok(Math.abs(rise - W.SHELF.tiltDeg) < 1e-9, `shelf ${i} is tilted ${rise.toFixed(2)}°, not ${W.SHELF.tiltDeg}°`);
-  }
-  // And they are four distinct planes with air between them, not one surface:
-  // adjacent shelves face measurably different directions.
-  for (let i = 1; i < planes.length; i++) {
-    const turn = between(planes[i - 1].normal, planes[i].normal);
-    assert.ok(turn > 15, `shelves ${i - 1} and ${i} face within ${turn.toFixed(1)}° of each other — that is a cylinder`);
-    const gap = (W.SHELF.azimuths[i] - W.SHELF.azimuths[i - 1])
-      - W.shelfHalfAngle(i - 1) - W.shelfHalfAngle(i);
-    assert.ok(gap > 1, `shelves ${i - 1} and ${i} have ${gap.toFixed(2)}° between their plates`);
-  }
-});
 
-test('depth into the shelf encodes nothing', async () => {
-  const W = await load('world.js');
-  const now = Date.UTC(2026, 7, 1);
-  const day = 86400000;
-  // Every card in a slot stands off its shelf by the same amount, whatever the
-  // card is: the third axis is deliberately left unspent, and the thickness that
-  // does vary grows forward from a common plane rather than sinking in.
-  assert.ok(W.CARD.standM > 0, 'a slab stands off the shelf');
-  const thin = W.slabThickness({ updated: new Date(now).toISOString() }, now);
-  const old = W.slabThickness({ updated: new Date(now - 90 * day).toISOString() }, now);
-  const mids = W.slabThickness({ updated: new Date(now - 7 * day).toISOString() }, now);
-  assert.ok(Math.abs(thin - W.CARD.thinM) < 1e-9, 'a brand new card is the thin end of the scale');
-  assert.ok(Math.abs(old - W.CARD.thickM) < 1e-9, 'and an ancient one is clamped to the thick end');
-  assert.ok(mids > thin && mids < old, 'age reads as thickness in between');
-});
 
 test('the lieutenants sit in fixed berths that never sort or reflow', async () => {
   const W = await load('world.js');
@@ -442,26 +373,15 @@ test('full white is clamped, and colour never travels alone', async () => {
   assert.strictEqual(W.agentColour('#ffffff'), '#ebebeb');
   assert.strictEqual(W.agentColour('#7c5cff'), '#7c5ceb');
   assert.strictEqual(W.agentColour(null), '#8aa0bb');
-  // The second channel on a lieutenant is the name under it, and on a card it is
-  // the label glyphs beside the owner's band. Both are drawn, in agents.js and
-  // in shelves.js, and neither is optional.
+  // The second channel on a lieutenant is the name under the sphere; on a card
+  // row it is the title beside the owner's colour bar; on a panel it is the name
+  // in the title bar beside the chip. None of the three is optional — a colour
+  // on its own names nobody.
   assert.match(fs.readFileSync(path.join(UI, 'agents.js'), 'utf8'), /label\.setProperties\(\{ text: safe\(lt\.name/);
-  assert.deepStrictEqual(W.glyphsFor({ labels: ['infra', 'ui', 'perf', 'extra'] }), ['IN', 'UI', 'PE']);
-  assert.deepStrictEqual(W.glyphsFor({}), []);
+  assert.match(fs.readFileSync(path.join(UI, 'board.js'), 'utf8'), /title\.setProperties\(\{ text: safe\(c\.title/);
+  assert.match(fs.readFileSync(path.join(UI, 'panel.js'), 'utf8'), /this\.chip = new Container/);
 });
 
-test('a shelf shows the active work and the tail goes to the list, in the board’s own order', async () => {
-  const W = await load('world.js');
-  const cards = Array.from({ length: 13 }, (_, i) => ({ id: 'c' + i, column: 'working' }));
-  const doc = { cards: [...cards, { id: 'x', column: 'review' }] };
-  const { visible, overflow, total } = W.shelfCards(doc, 'working');
-  assert.strictEqual(visible.length, W.PER_SHELF);
-  assert.strictEqual(overflow, 13 - W.PER_SHELF);
-  assert.strictEqual(total, 13);
-  assert.deepStrictEqual(visible.map((c) => c.id), cards.slice(0, W.PER_SHELF).map((c) => c.id),
-    'the room re-sorted the shelf, which is the one thing it must never do');
-  assert.strictEqual(W.PER_SHELF, W.SLOT.cols * W.SLOT.rows);
-});
 
 test('the board is the escape hatch: every card, filterable, and each row pressable', async () => {
   const W = await load('world.js');
@@ -634,7 +554,7 @@ test('every viewpoint is aimed at something the room really stands there', async
     const at = v.frames.at;
     assert.ok(where.some((p) => near(p.x || 0, at.x || 0) && near(p.y, at.y) && near(p.z, at.z)),
       `${v.name} frames (${at.x}, ${at.y}, ${at.z}) and nothing stands there`);
-    assert.ok(['world', 'board', 'chat'].includes(v.scene), `${v.name} wants an unknown scene`);
+    assert.ok(['world', 'board', 'chat', 'card'].includes(v.scene), `${v.name} wants an unknown scene`);
     assert.ok(v.why && v.why.length > 20, `${v.name} does not say what it is for`);
   }
   assert.ok(VIEWPOINTS.some((v) => v.scene === 'board'), 'nothing photographs the escape hatch');
@@ -685,8 +605,8 @@ test('aiming the head at a point really does point it at that point', async () =
   const W = await load('world.js');
   const cases = [
     [[0, W.EYE, 0], [0, 1.15, -1.55]],
-    [[0, W.EYE, 0], Object.values(W.shelfPlane(0).centre)],
-    [[0, W.EYE, 0], Object.values(W.shelfPlane(3).centre)],
+    [[0, W.EYE, 0], Object.values(W.panelAt(W.PANEL_SLOTS[0]).pos)],
+    [[0, W.EYE, 0], Object.values(W.agentAt(0).pos)],
     [[0, W.EYE, 0], Object.values(W.agentAt(7).pos)],
     [[0.2, 1.5, 0.3], [-1.0, 2.0, -2.0]],
   ];

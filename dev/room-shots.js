@@ -349,16 +349,17 @@ async function main() {
 // room's own handles (window.__bridge), so the photograph is of the room doing
 // its ordinary thing rather than of a rig posing it.
 //
-// 'world' is the room standing still. 'board' opens the board — every card,
-// filterable, one press deep. 'chat' opens a lieutenant's conversation. Both of
-// those are the one thing a camera pointed at the room cannot catch, because
-// they do not exist until somebody asks for them.
+// 'world' is the room standing still. 'board' opens the board, 'chat' a
+// lieutenant's conversation, 'card' a card brought forward. The last three are
+// what a camera pointed at the room can never catch on its own, because they do
+// not exist until somebody asks for them.
 function setScene(scene) {
   return `(() => {
     const b = window.__bridge;
     for (const p of [...b.windows]) if (p.open) b.windows.close(p);
     ${scene === 'board' ? 'b.openBoard();' : ''}
     ${scene === 'chat' ? 'b.openChat();' : ''}
+    ${scene === 'card' ? 'b.openCard();' : ''}
     return b.stats();
   })()`;
 }
