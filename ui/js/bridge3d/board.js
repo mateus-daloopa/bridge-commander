@@ -20,7 +20,8 @@
 // is why there is no second control for it.
 
 import * as W from './world.js';
-import { Container, Text, Input, COL, cm, fontFor, inert, safe } from './kit.js';
+import { Container, Text, Input, Image, COL, cm, fontFor, inert, safe } from './kit.js';
+import { avatarTexture } from './avatars3d.js';
 import { Panel } from './panel.js';
 import { ChatPanel } from './chat.js';
 import { Target } from './hover.js';
@@ -116,6 +117,13 @@ export class BoardPanel extends Panel {
       width: cm(W.sizeForArc(0.9, D)), height: '64%', flexShrink: 0,
       borderRadius: cm(0.003), backgroundColor: COL.faint,
     });
+    // The owner's face in the row itself. A glance down the board should say
+    // whose each card is without reading a word — which is the whole reason the
+    // owner was allowed to stop being a position on the deck.
+    const face = new Image({
+      width: cm(W.sizeForArc(3.4, D)), height: cm(W.sizeForArc(3.4, D)),
+      flexShrink: 0, borderRadius: cm(0.005), display: 'none', objectFit: 'fill',
+    });
     const title = new Text({
       text: '', flexGrow: 1, flexShrink: 1, flexBasis: 0, overflow: 'hidden',
       fontSize: fontFor(W.TYPE.meta, D), color: COL.text, wordBreak: 'keep-all',
@@ -124,12 +132,12 @@ export class BoardPanel extends Panel {
       text: '', flexShrink: 0, textAlign: 'right',
       fontSize: fontFor(W.TYPE.meta, D), color: COL.faint, wordBreak: 'keep-all',
     });
-    inert(chip); inert(title); inert(where);
-    inner.add(chip, title, where);
+    inert(chip); inert(face); inert(title); inert(where);
+    inner.add(chip, face, title, where);
     box.add(inner);
     this.grid.add(box);
 
-    const seat = { box, inner, chip, title, where, card: null };
+    const seat = { box, inner, chip, face, title, where, card: null };
     const t = new Target({
       mesh: inner, name: 'board-row',
       onSelect: () => { if (seat.card && this.onCard) this.onCard(seat.card); },
@@ -168,6 +176,8 @@ export class BoardPanel extends Panel {
       if (!c) return;
       const lt = lts.get(c.owner);
       s.chip.setProperties({ backgroundColor: W.agentColour(lt && lt.color) });
+      const tex = avatarTexture(lt && lt.avatar);
+      s.face.setProperties(tex ? { src: tex, display: 'flex' } : { display: 'none' });
       s.title.setProperties({ text: safe(c.title || c.id) });
       s.where.setProperties({ text: safe(shortColumn(cols.get(c.column) || c.column)) });
     });
@@ -199,6 +209,7 @@ export class CardPanel extends ChatPanel {
   }
 
   paintCard(card, lt, columnTitle) {
+    this.setFace(lt && lt.avatar);
     // A card he has just opened starts at the TOP: the body is the deliverable
     // and he came to read it from the beginning. A chat starts at the bottom
     // because the newest line is the point of it. Same panel, opposite ends,

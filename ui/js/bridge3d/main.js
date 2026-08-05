@@ -134,6 +134,7 @@ function openChat(lt) {
   }));
   p.setTitle(lt.name || lt.id, 'chat');
   p.setTint(W.agentColour(lt.color));
+  p.setFace(lt.avatar);
   p.paint(lt.chat);
   sound.open(p.group.position);
   return p;
@@ -165,6 +166,7 @@ function openCard(card) {
     onClose: (panel) => { sound.close(panel.group.position); windows.close(panel); },
   }));
   p.setTint(W.agentColour(lt && lt.color));
+  p.setFace(lt && lt.avatar);
   p.paintCard(card, lt, cols.get(card.column));
   sound.open(p.group.position);
   return p;

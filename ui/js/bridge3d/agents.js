@@ -15,7 +15,8 @@
 
 import * as THREE from 'three';
 import * as W from './world.js';
-import { root, Container, Text, COL, cm, fontFor, inert, safe } from './kit.js';
+import { root, Container, Text, Image, COL, cm, fontFor, inert, safe } from './kit.js';
+import { avatarTexture, hasAvatar } from './avatars3d.js';
 import { Target } from './hover.js';
 
 export class Agents {
@@ -97,6 +98,21 @@ export class Agents {
     });
     inert(plate);
     ui.add(plate);
+    // The face, before the name. It answers "which one is Selma" from across
+    // the terrace, where a five-letter word at 1.4° of em box does not — and it
+    // is the second channel the colour is not allowed to travel without.
+    // Square, the height of the type it sits beside, and hidden entirely when
+    // the lieutenant has no avatar, because the documented absent value means
+    // the colour dot and never a blank square.
+    const face = new Image({
+      width: cm(W.sizeForArc(W.TYPE.body * 1.45, at.dist)),
+      height: cm(W.sizeForArc(W.TYPE.body * 1.45, at.dist)),
+      marginRight: cm(W.sizeForArc(0.5, at.dist)),
+      borderRadius: cm(0.006), flexShrink: 0, display: 'none',
+      objectFit: 'fill',
+    });
+    inert(face);
+    plate.add(face);
     const label = new Text({
       text: '', color: COL.text, fontWeight: 'semi-bold',
       fontSize: fontFor(W.TYPE.body, at.dist),
@@ -123,7 +139,7 @@ export class Agents {
       spot.visible = lit;
     };
 
-    return { i, at, group: g, ball, hit, spot, ui, plate, label, target, lt: null };
+    return { i, at, group: g, ball, hit, spot, ui, plate, face, label, target, lt: null };
   }
 
   // Who sits where. `index` is the lieutenant's place in the board's own roster,
@@ -138,6 +154,8 @@ export class Agents {
       s.lt = lt;
       s.ball.material.color.set(W.agentColour(lt.color));
       s.label.setProperties({ text: safe(lt.name || lt.id) });
+      const tex = avatarTexture(lt.avatar);
+      s.face.setProperties(tex ? { src: tex, display: 'flex' } : { display: 'none' });
     });
     for (const s of this.slots) {
       const on = !!s.lt;

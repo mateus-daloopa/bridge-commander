@@ -28,7 +28,8 @@
 
 import * as THREE from 'three';
 import * as W from './world.js';
-import { root, Container, Text, COL, cm, fontFor, inert, safe } from './kit.js';
+import { root, Container, Text, Image, COL, cm, fontFor, inert, safe } from './kit.js';
+import { avatarTexture } from './avatars3d.js';
 import { Target } from './hover.js';
 
 // The bar is a target, so it is the hit floor tall at the distance the panel
@@ -86,6 +87,16 @@ export class Panel {
     });
     inert(this.chip);
 
+    // And their face, when they have one. A window is where the WORK is rather
+    // than where the person is, so this is the thing that makes "the owner
+    // travels with the card" visible: whose conversation this is, or whose card,
+    // answered before the title is read.
+    this.face = new Image({
+      width: cm(barM * 0.72), height: cm(barM * 0.72), flexShrink: 0,
+      borderRadius: cm(0.008), display: 'none', objectFit: 'fill',
+    });
+    inert(this.face);
+
     const stack = new Container({ flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden' });
     this.title = new Text({
       text: safe(title), fontSize: fontFor(W.TYPE.head, spec.distM),
@@ -109,7 +120,7 @@ export class Panel {
     inert(x);
     this.closeBox.add(x);
 
-    this.bar.add(this.chip, stack, this.closeBox);
+    this.bar.add(this.chip, this.face, stack, this.closeBox);
 
     // ---- the body: prose, scrolling, nothing in it is a target -------------
     this.body = new Container({
@@ -181,6 +192,13 @@ export class Panel {
   setTint(hex) {
     this.tint = hex;
     this.chip.setProperties({ backgroundColor: hex });
+  }
+
+  // `index` is the lieutenant's `avatar`, and absent is a real value meaning
+  // the colour alone — so this hides the face rather than showing an empty box.
+  setFace(index) {
+    const tex = avatarTexture(index);
+    this.face.setProperties(tex ? { src: tex, display: 'flex' } : { display: 'none' });
   }
 
   // A paragraph of prose. Returns the Text so a caller can rewrite it in place

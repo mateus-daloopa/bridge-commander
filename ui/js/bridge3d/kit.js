@@ -14,9 +14,10 @@
 import { Container } from '../../vendor/uikit/components/container.js';
 import { Text } from '../../vendor/uikit/components/text.js';
 import { Input } from '../../vendor/uikit/components/input.js';
+import { Image } from '../../vendor/uikit/components/image.js';
 import { reversePainterSortStable } from '../../vendor/uikit/order.js';
 
-export { Container, Text, Input, reversePainterSortStable };
+export { Container, Text, Input, Image, reversePainterSortStable };
 
 // uikit's own unit is a "pixel", and `pixelSize` says what one is worth in the
 // world. At 0.01 a layout unit is a centimetre, which is the size the room
