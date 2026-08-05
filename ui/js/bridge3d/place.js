@@ -200,7 +200,19 @@ export function buildTerrace(scene) {
 // downloads. Instancing them into one call would be better still and is not
 // worth the material rewiring for six objects.
 export const PLANT_URL = '/ui/env/plant/plant.gltf';
-const PLANT_AT = [-150, -105, -60, 60, 105, 150];
+
+// FOUR, not six, and the reason is measured rather than aesthetic. Poly Haven's
+// "1k" names the texture resolution, not the geometry: this plant is ~68 000
+// triangles, which is film quality and absurd for a prop in peripheral vision.
+// Six of them took the room from 45 000 triangles to 452 000 — and a headset
+// submits that twice, once per eye, inside an 11 ms frame. Four holds the room
+// near 320 000, which is comfortable on a Quest 3.
+//
+// The right fix is decimation — gltfpack or meshopt would take this to a few
+// thousand triangles with no visible difference at 4 m — and it needs a tool
+// this repo does not have yet. Until then the count is the lever, and it is
+// better to say so than to ship a prettier room that drops frames.
+const PLANT_AT = [-135, -75, 75, 135];
 
 function planters(contact, group) {
   // The shadows go down immediately — they are ours, they are cheap, and a plant

@@ -68,7 +68,19 @@ artefact in a normal map is a dent in the surface. The `.bin` is copied
 unchanged and is 1.85 MB of the 2.39 — geometry, not texture, and the only thing
 here that would benefit from Draco or meshopt if the prop count ever grows.
 
-Loaded once and cloned six times, so the six plants share geometry and materials.
+Loaded once and cloned, so the plants share geometry and materials.
+
+**Four of them, not six, and that is a frame-budget decision.** Poly Haven's
+"1k" names the *texture* resolution — the geometry is full quality, and this
+plant is about 68 000 triangles. Six took the room from 45 000 triangles to
+452 000, and a headset submits that twice, once per eye, inside an 11 ms frame.
+Four holds it near 312 000.
+
+The right fix is decimation: `gltfpack` or meshopt would take this to a few
+thousand triangles with no visible difference at four metres, and would shrink
+the 1.85 MB `.bin` along with it. That needs a tool this repo does not have yet,
+so until then the count is the lever — and saying so beats shipping a prettier
+room that drops frames.
 
 ## The download budget
 
