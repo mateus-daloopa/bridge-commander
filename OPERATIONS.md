@@ -73,4 +73,10 @@ ALWAYS exits 0, reporting through `$ARTIFACTS_DIR/nm-outcome` and `escalation.md
 runs as a bash node inside an Archon `loop_group` where a non-zero exit kills the whole run.
 The `bc-card` Archon workflow calls it by absolute path (`<this repo>/bin/nm-clerk.sh`), so the
 path is an interface: moving the file breaks a pipeline that lives outside this repo.
+
+`--respond <fix|approve|skip> [--findings id,id]` is the second door: it answers the gate the
+last invocation refused — the no-mistakes run is still open and still parked on it — and then
+drives the rest to an outcome exactly as the first door does. That is what lets a human's
+ruling arrive without anyone finishing the run by hand.
+
 Its tests replay gate payloads recorded from real runs — `node --test test/nm-clerk.test.js`.
