@@ -12,6 +12,12 @@ The division that matters: **the loop proves the room looks right and measures
 right; the person wearing it says whether it feels right.** No screenshot and no
 test detects fatigue, presence or scale. Headset time is not optional.
 
+One thing the loop is unusually good at, and it earned its keep twice: **measure
+contrast on the RENDERED FRAME, not on the palette constants.** Tone mapping
+sits between the two, and a background that changes as he turns his head cannot
+be reasoned about from a hex value at all — that is how bare crew labels shipped
+at 1.29:1 against a 4.5:1 floor while every constant in `kit.js` looked fine.
+
 ## One command
 
 ```bash
@@ -154,7 +160,9 @@ emulate; `window.__bridge` is not, so the room can still be driven by hand.
 | | |
 |---|---|
 | `world.js` | where everything stands and what standing there means — pure, no three.js, no DOM. Every angular figure in the room comes from here |
-| `main.js` | the room: renderer, session, ground, horizon, the loop, the desk fallback, and what each thing does when it is pressed |
+| `main.js` | the room: renderer, session, the loop, the desk fallback, and what each thing does when it is pressed |
+| `sky.js` | the daylight sky, drawn into a canvas and run through PMREM so it becomes the light everything else is lit by. The sun, and the tone mapping |
+| `place.js` | the terrace: deck, parapet, handrail, planters, skyline, sea — the bound you can see |
 | `agents.js` | the eight fixed berths and the lieutenants in them |
 | `panel.js` | a surface with prose on it he can read, move and put down — the bar is the handle, the body scrolls, the foot holds a composer |
 | `chat.js` | a conversation on a panel: the thread, and a composer that really sends |
