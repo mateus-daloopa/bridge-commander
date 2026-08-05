@@ -4,11 +4,16 @@
 // around: **what you HUNT for and what you READ are not the same thing.**
 //
 // The WALL is hunting, and it is a wall rather than a panel because eight rows
-// out of sixty-eight is a peephole with a search box attached. It is six flat
-// tiles laid along a 120° arc at 1.80 m — flat text, curved surface — carrying
-// fifteen rows each. Sixty-two cards at once on the live board, no filter, and
-// you scan it by turning your head. Every figure in it is derived in world.js
-// and the arithmetic is written out there; this file spends them.
+// out of sixty-eight is a peephole with a search box attached. It is FOUR flat
+// tiles laid along a 120° arc at 1.50 m — one per board column, flat text on a
+// curved surface — carrying eighteen rows each. Every figure in it is derived in
+// world.js and the arithmetic is written out there; this file spends them.
+//
+// The lane is sized by the TITLE and not the other way round: 32 characters is
+// the floor and it lands at 36, and that is what makes a lane 27.75° instead of
+// 18.6°. The version that solved for cap height first fitted six lanes and
+// sixteen characters, and sixteen characters of a fifty-three-character title
+// is not a title.
 //
 // The RAIL under it is how you filter, and the point of it is that **filtering
 // is one press and never a keystroke**. The lieutenants' faces are the control:
@@ -22,13 +27,12 @@
 //
 // ---- the row pool, which is the part that is load-bearing ------------------
 //
-// Ninety rows are built ONCE at startup and never again. Scrolling a lane
+// Seventy-two rows are built ONCE at startup and never again. Scrolling a lane
 // re-binds data into rows that already exist; it never makes or destroys a
 // uikit node. The version of this that held a live node per card is the version
-// that killed his headset browser at about sixty rows, and ninety is more than
-// sixty. `nodes()` is here so the claim can be checked rather than believed —
-// dev/room-shots.js scrolls a lane to its end and asserts the count did not
-// move by one.
+// that killed his headset browser at about sixty rows. `nodes()` is here so the
+// claim can be checked rather than believed — dev/room-shots.js scrolls a lane
+// to its end and asserts the count did not move by one.
 
 import * as THREE from 'three';
 import * as W from './world.js';
@@ -40,16 +44,23 @@ import { Target } from './hover.js';
 const D = W.WALL.distM;
 const ROWS = W.wallRows();
 const LANES = W.WALL.lanes;
+const CHARS = W.wallChars();
 
 // Everything on the wall, in metres at the distance the wall stands.
 const ROW_M = W.sizeForArc(W.WALL.rowDeg, D);
 const HEAD_M = W.sizeForArc(W.WALL.headDeg, D);
 const PAD_M = W.sizeForArc(0.7, D);
-const BAR_M = W.sizeForArc(1.0, D);
+// The row's own chrome, and it adds up to WALL_ROW_CHROME exactly — 0.5° of
+// padding each side, a 0.9° owner bar, 0.3° of gap. What is left is the title,
+// and the title is what the lane was sized for.
+const ROW_PAD_M = W.sizeForArc(0.5, D);
+const ROW_BAR_M = W.sizeForArc(0.9, D);
+const ROW_GAP_M = W.sizeForArc(0.3, D);
 
-// A tile: one flat uikit surface, turned to face the eye and then tilted back
-// about its OWN horizontal axis. Tilting in the room's frame instead would make
-// the outer lanes lean sideways, and at ±52° that is very visible.
+// A tile: one flat uikit surface, turned to face the eye. Every tile stands at
+// exactly WALL.distM and every one of them faces the head — the outer ones look
+// bigger in a wide-angle frame because a 90° projection stretches its own
+// edges, which is a property of the picture and not of the wall.
 function tile(spec, properties) {
   const group = new THREE.Group();
   const ui = root({
@@ -90,11 +101,9 @@ export class BoardWall {
     this.lanes = [];
     for (let i = 0; i < LANES; i++) this.lanes.push(this._lane(i));
     this._rail();
-    // Until a board arrives, one lane per column and the lanes in board order.
-    this.share = this.lanes.map(() => null);
   }
 
-  // ---- a lane: a header you press, and fifteen rows that recycle ------------
+  // ---- a lane: a header you press, and eighteen rows that recycle ----------
   _lane(i) {
     const spec = W.wallLaneAt(i);
     const t = tile(spec, {});
@@ -157,20 +166,20 @@ export class BoardWall {
   }
 
   // One row. A colour bar for the owner and a title, and the whole row is the
-  // target — at 18.6° wide the horizontal scatter of a hand-held ray is
+  // target — at 27.75° wide the horizontal scatter of a hand-held ray is
   // absorbed whole, and only the vertical is left to aim.
   _row(lane, r) {
     const box = new Container({
       width: '100%', height: cm(ROW_M), flexShrink: 0,
       flexDirection: 'row', alignItems: 'center',
-      paddingX: cm(PAD_M), gap: cm(W.sizeForArc(0.4, D)),
-      // Zebra rather than a rim: ninety rimmed boxes is a grid, and the shape
+      paddingX: cm(ROW_PAD_M), gap: cm(ROW_GAP_M),
+      // Zebra rather than a rim: seventy-two rimmed boxes is a grid, and the shape
       // of a row at this density is carried better by an alternating fill. The
       // hover rim is what says "this one" — and it is the only affordance the
       // wall has, so it is loud.
       backgroundColor: r % 2 ? COL.slot : COL.panel, backgroundOpacity: 1,
       // The rim is always THERE and only ever changes COLOUR, so hovering a row
-      // cannot reflow the seventy-eight rows under it. It hides by matching the
+      // cannot reflow the seventy-two rows under it. It hides by matching the
       // plate rather than by going to zero opacity — `borderOpacity: 0` drew a
       // full-strength accent line on every row in the rendered frame, and a
       // wall where every row is lit is a wall with no hover state at all.
@@ -180,7 +189,7 @@ export class BoardWall {
       display: 'none',
     });
     const bar = new Container({
-      width: cm(BAR_M), height: '62%', flexShrink: 0,
+      width: cm(ROW_BAR_M), height: '62%', flexShrink: 0,
       borderRadius: cm(0.002), backgroundColor: COL.faint,
     });
     const title = new Text({
@@ -364,27 +373,7 @@ export class BoardWall {
 
   // Which lanes belong to which column. Recomputed on OPEN and never while he
   // is standing in front of it — see world.js.
-  share_() {
-    const cols = this.doc.columns || [];
-    const counts = cols.map((c) => (this.doc.cards || []).filter((x) => x.column === c.id).length);
-    const per = W.wallLanesFor(counts);
-    const out = [];
-    cols.forEach((c, i) => {
-      for (let k = 0; k < per[i]; k++) out.push({ column: c, cont: k > 0, last: k === per[i] - 1 });
-    });
-    while (out.length < LANES) out.push({ column: null, cont: true, last: true });
-    this.share = out.slice(0, LANES);
-    this._sharedFor = this.columnKey();
-  }
-
-  // The board's own column list, as one string. The share is rebuilt when THIS
-  // changes and never when a count does — a column gaining a card must not
-  // move the row he is reaching for. It is also what catches the wall being
-  // opened one tick before the first board arrives, which is the ordinary case.
-  columnKey() { return (this.doc.columns || []).map((c) => c.id).join(','); }
-
   repaint() {
-    if (!this.share || this._sharedFor !== this.columnKey()) this.share_();
     const q = this.query.trim().toLowerCase();
     const lts = new Map((this.doc.lieutenants || []).map((l) => [l.id, l]));
     const cols = new Map((this.doc.columns || []).map((c) => [c.id, c.title || c.id]));
@@ -399,30 +388,22 @@ export class BoardWall {
     };
     const kept = all.filter(hit);
 
-    // Each lane takes its column's cards, newest activity first, and a column
-    // spread over two lanes takes the second lane's slice from where the first
-    // one ended.
+    // **One lane per board column.** That is what makes a column a column, and
+    // it is the whole reason a lane is 27.75° wide and a title is 36 characters
+    // rather than 16: sharing lanes out by how full a column was bought twenty
+    // more rows and cost half of every title.
+    const frame = this.doc.columns || [];
     let shown = 0;
-    const seen = new Map();
     this.lanes.forEach((lane, i) => {
-      const s = this.share[i] || {};
-      lane.column = s.column || null;
-      lane.cont = !!s.cont;
+      lane.column = frame[i] || null;
       const id = lane.column && lane.column.id;
       const mine = id
         ? kept.filter((c) => c.column === id).sort((a, b) => String(b.activity || b.updated || '')
           .localeCompare(String(a.activity || a.updated || '')))
         : [];
-      // A column spread over two lanes deals them like newspaper columns: the
-      // first lane is a fixed page and only the LAST lane scrolls, through
-      // whatever is left. Two lanes that could both scroll would show the same
-      // card twice, which is worse than a page that holds still.
-      const from = seen.get(id) || 0;
-      lane.cards = s.last ? mine.slice(from) : mine.slice(from, from + ROWS);
-      seen.set(id, from + ROWS);
-      const total = id ? mine.length : 0;
-      lane.title.setProperties({ text: safe(lane.cont ? '' : shortColumn((lane.column && lane.column.title) || id || '')) });
-      lane.count.setProperties({ text: safe(lane.cont ? '...' : String(total)) });
+      lane.cards = mine;
+      lane.title.setProperties({ text: safe(shortColumn((lane.column && lane.column.title) || id || '')) });
+      lane.count.setProperties({ text: safe(String(mine.length)) });
       lane.head.setProperties({ backgroundColor: this.column && this.column === id ? '#2a5f7a' : COL.bar });
       lane.first = Math.max(0, Math.min(lane.first, lane.cards.length - ROWS));
       this._bind(lane, lts);
@@ -472,7 +453,14 @@ export class BoardWall {
       if (!c) return;
       const lt = lts.get(c.owner);
       row.bar.setProperties({ backgroundColor: W.agentColour(lt && lt.color) });
-      row.title.setProperties({ text: safe(c.title || c.id) });
+      const full = safe(c.title || c.id);
+      row.whole = full.length <= CHARS;
+      // Cut in JS with an ellipsis rather than letting the glyphs run into the
+      // lane's edge. A title that stops dead at the panel boundary reads as a
+      // title hidden BEHIND the next panel — that is exactly how this surface
+      // was read on review, and the tiles were never overlapping. Three dots
+      // inside the plate say "shortened here" and cannot be mistaken for it.
+      row.title.setProperties({ text: row.whole ? full : full.slice(0, CHARS - 3).trimEnd() + '...' });
     });
     const rowU = cm(ROW_M);
     lane.padTop.setProperties({ height: first * rowU });
@@ -487,7 +475,7 @@ export class BoardWall {
     this.open = on;
     this.group.visible = on;
     for (const ui of this.uis) ui.setProperties({ display: on ? 'flex' : 'none' });
-    if (on) { this.share_(); this.repaint(); }
+    if (on) this.repaint();
   }
 
   // How many uikit components the wall is made of. Constant from construction
@@ -495,17 +483,37 @@ export class BoardWall {
   nodes() { return this._nodes; }
 
   // What the wall is currently showing, for the capture run and for a console.
-  // `shown` is the number the whole card turns on: titles legible at once.
+  //
+  // **`legible` is the number, and `shown` is not.** Counting rows that exist
+  // is what put "53 of 70" on a wall of sixteen-character stubs. A title counts
+  // as legible only when all three hold: it is BOUND to a row, its text is
+  // WHOLE — no ellipsis, the card's own title end to end — and nothing covers
+  // it, which `wallTileGap` decides for the whole wall at once because the
+  // tiles either clear each other or they do not.
   report() {
+    const gap = W.wallTileGap(0);
+    const clear = gap > 0;
+    let shown = 0, legible = 0;
+    const lens = [];
+    for (const lane of this.lanes) {
+      const n = Math.max(0, Math.min(lane.cards.length - lane.first, ROWS));
+      shown += n;
+      for (const row of lane.rows) if (row.card) { if (row.whole && clear) legible++; }
+    }
+    for (const c of this.doc.cards || []) lens.push(safe(c.title || c.id).length);
+    lens.sort((a, b) => a - b);
     return {
       nodes: this._nodes,
-      rows: ROWS, lanes: LANES, seats: W.wallSeats(),
+      rows: ROWS, lanes: LANES, seats: W.wallSeats(), chars: CHARS,
       cards: (this.doc.cards || []).length,
-      shown: this.lanes.reduce((n, l) => n + Math.max(0, Math.min(l.cards.length - l.first, ROWS)), 0),
+      shown,
+      legible,
+      tileGapDeg: +gap.toFixed(2),
+      tileGapLeaningDeg: +W.wallTileGap(0.20).toFixed(2),
+      titleLen: lens.length ? { min: lens[0], median: lens[Math.floor(lens.length / 2)], max: lens[lens.length - 1] } : null,
       filters: this.filters(),
       lane: this.lanes.map((l) => ({
-        column: (l.column && l.column.id) || null, cont: l.cont,
-        held: l.cards.length, first: l.first,
+        column: (l.column && l.column.id) || null, held: l.cards.length, first: l.first,
       })),
     };
   }

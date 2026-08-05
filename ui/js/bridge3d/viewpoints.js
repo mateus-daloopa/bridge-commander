@@ -51,18 +51,23 @@ const ARC = {
   heightM: W.sizeForArc(W.AGENT.riseDeg, W.AGENT.distM) + W.AGENT.diaM,
 };
 
-// The wall: six flat tiles on a 120° arc. A shot cannot hold 120°, so the
-// board's shot is framed on the two CENTRE lanes — the same reasoning that
-// frames the crew on the middle pair of berths rather than on the whole arc —
-// and a second shot is aimed at lane four, which is the one you have to turn
-// your head for and therefore the one that proves the wall is a wall.
-const LANE = [0, 1, 2, 3, 4, 5].map((i) => W.wallLaneAt(i));
-const LANE_PAIR = { widthM: LANE[0].widthM * 2 + W.sizeForArc(W.BUILD.gap, W.WALL.distM), heightM: LANE[0].heightM };
+// The wall: four flat tiles on a 120° arc, one per board column. A shot cannot
+// hold 120°, so the board's shot is framed on the two CENTRE lanes — the same
+// reasoning that frames the crew on the middle pair of berths rather than on
+// the whole arc — and a second shot is aimed at the outer lane, which is the
+// one you turn your head for and therefore the one that proves the wall is a
+// wall and that its far tiles are still square-on.
+const LANE = [0, 1, 2, 3].map((i) => W.wallLaneAt(i));
+const LANE_PAIR = { widthM: LANE[0].widthM * 2 + W.sizeForArc(W.WALL.laneGapDeg, W.WALL.distM), heightM: LANE[0].heightM };
 const RAIL = W.railTileAt(0);          // the faces
 const RAIL_R = W.railTileAt(1);        // the field, the clear and the close
 // Dead ahead at the wall's own distance — where a surface stands when he opens
 // one, and so what an empty room has to look right without.
 const AHEAD = { x: 0, y: W.EYE, z: -W.WALL.distM };
+// And the middle of the wall itself: dead ahead, but at the elevation the wall
+// is CENTRED on rather than at the horizon. Aimed at AHEAD the shot came back
+// half sky, which is a picture of the weather.
+const WALL_MID = W.pointAt(0, W.wallElevDeg(), W.WALL.distM);
 
 // The middle pair of berths, as one thing. A shot of the room at rest is framed
 // on these rather than on the whole arc: the arc is 68.5° wide at 2 m and does
@@ -108,17 +113,27 @@ export const VIEWPOINTS = [
   },
   {
     name: 'board', scene: 'board',
-    why: 'the wall open, straight ahead: the two centre lanes, their column headers and their counts, and fifteen rows apiece — the shot the cap-height measurement is taken on, and the one that says whether sixty-two titles at once is reading or wallpaper',
+    why: 'the wall open, straight ahead: the two centre lanes, their column headers and their counts, and sixteen rows apiece at 32 characters of title — the shot the legibility count is taken on, and the one that says whether a title identifies a card or only hints at one',
     eye: HERE,
-    look: at(LANE[2].pos),
-    frames: { panel: LANE_PAIR, at: LANE[2].pos },
+    // Dead ahead, which with four lanes is the seam between the two centre
+    // ones — so the shot is the wall as he meets it rather than one tile with
+    // its neighbours falling off both edges.
+    look: at(WALL_MID),
+    frames: { panel: LANE_PAIR, at: WALL_MID },
   },
   {
     name: 'wall-edge', scene: 'board',
-    why: 'lane four, 31° off centre: the tile you turn your head for. A wall is only a wall if the far tiles are still square-on and still legible, which is the whole reason it is tiles on an arc rather than one bent sheet',
+    why: 'the outer lane, 47° off centre: the tile you turn your head for. Every tile stands at exactly the same radius and faces the head — this is the shot that says so, against a wide-angle frame that stretches whatever sits at its edge',
     eye: HERE,
-    look: at(LANE[4].pos),
-    frames: { panel: { widthM: LANE[4].widthM, heightM: LANE[4].heightM }, at: LANE[4].pos },
+    // A 46° turn, and it is declared rather than smuggled: a 120° wall is a
+    // surface you READ BY TURNING, so its outer lane sits past the 45° a single
+    // viewpoint is otherwise held to. That is the cost of the width, and the
+    // shot exists to show what he gets for it.
+    turn: W.WALL.spanDeg / 2,
+    // The FIRST lane, not the last: it is the one carrying Backlog, and a
+    // photograph of the empty end of the board proves nothing about type.
+    look: at(LANE[0].pos),
+    frames: { panel: { widthM: LANE[0].widthM, heightM: LANE[0].heightM }, at: LANE[0].pos },
   },
   {
     name: 'rail', scene: 'board',
@@ -201,7 +216,7 @@ export const PROBES = [
 // Everywhere the room actually stands something — what a viewpoint is allowed to
 // be aimed at. A viewpoint pointed anywhere else is a photograph of the floor.
 export function places() {
-  const out = [PLATE.pos, AHEAD];
+  const out = [PLATE.pos, AHEAD, WALL_MID];
   for (const l of LANE) out.push(l.pos);
   for (let i = 0; i < W.RAIL.tiles; i++) out.push(W.railTileAt(i).pos);
   // The panel slots. Nothing stands in them until he opens something, but they

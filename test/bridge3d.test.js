@@ -378,7 +378,7 @@ test('full white is clamped, and colour never travels alone', async () => {
   // in the title bar beside the chip. None of the three is optional — a colour
   // on its own names nobody.
   assert.match(fs.readFileSync(path.join(UI, 'agents.js'), 'utf8'), /label\.setProperties\(\{ text: safe\(lt\.name/);
-  assert.match(fs.readFileSync(path.join(UI, 'board.js'), 'utf8'), /title\.setProperties\(\{ text: safe\(c\.title/);
+  assert.match(fs.readFileSync(path.join(UI, 'board.js'), 'utf8'), /const full = safe\(c\.title/);
   assert.match(fs.readFileSync(path.join(UI, 'panel.js'), 'utf8'), /this\.chip = new Container/);
 });
 
@@ -398,10 +398,19 @@ test('the wall is a wall: fifty-odd cards at once, and every one of them legible
   // drawn through — which is exactly what the first rendered frame showed.
   assert.ok(ext.maxDistM < W.AGENT.distM - W.AGENT.diaM / 2,
     `the wall reaches ${ext.maxDistM.toFixed(2)} m and the crew's near side is ${(W.AGENT.distM - W.AGENT.diaM / 2).toFixed(2)} m`);
-  // Two flat neighbours on an arc must not saw into each other.
-  const a = W.wallLaneAt(0), b = W.wallLaneAt(1);
-  assert.ok(a.widthM < Math.hypot(a.pos.x - b.pos.x, a.pos.z - b.pos.z),
-    'a lane is wider than the gap between two lane centres, so the tiles intersect');
+  // **Does a tile ever cover its neighbour?** A title cut at its own lane's
+  // edge and a title hidden behind the next panel look identical in a
+  // photograph, and this wall was read as the second when it was the first. So
+  // it is measured: the gap between two neighbours, from the arc centre AND
+  // from an eye leaned 20 cm along the wall, which is further than a seated
+  // head goes. Negative would mean one really does eat the other.
+  for (const lean of [0, 0.032, 0.10, 0.20]) {
+    const gap = W.wallTileGap(lean);
+    assert.ok(gap > 0.5,
+      `leaning ${lean * 100} cm, two lanes leave ${gap.toFixed(2)}° between them`);
+  }
+  assert.ok(Math.abs(W.wallTileGap(0) - W.WALL.laneGapDeg) < 0.15,
+    'from the arc centre the gap between two tiles is the gap they were built with');
   // It is deliberately wider than the ±45° a bounded region is held to — a
   // board you scan by turning your head is the whole point of it — but a tile
   // is still a flat surface and past about 34° off-normal a flat surface
@@ -410,35 +419,64 @@ test('the wall is a wall: fifty-odd cards at once, and every one of them legible
   assert.ok(W.WALL.spanDeg >= 100 && W.WALL.spanDeg <= 120,
     `the wall spans ${W.WALL.spanDeg}°, and a neck does not`);
 
-  // The cap height the captain set — and it has to hold on the WORST row, not
-  // on the size the type is cut at. The top of a lane is further away and more
-  // turned than its middle, and reading the floor off `TYPE.wall × CAP` would
-  // have shipped the top two rows 10% under it.
+  // **The floor is the TITLE, and it is the thing this surface exists for.**
+  // Sized the other way round — cap height first — the lane came out at 16
+  // characters against a median card title of 53, and every row read "Archon
+  // as the exe". This assertion is the one that stops that coming back.
+  assert.ok(W.wallChars() >= W.WALL_CHARS,
+    `a lane holds ${W.wallChars()} characters of title, under the ${W.WALL_CHARS} floor`);
+
+  // One lane per board column. Six was a number with nothing behind it; the
+  // board's own frame is fixed at four and this is read off the server rather
+  // than restated, so adding a column fails here instead of silently vanishing.
+  const cols = fs.readFileSync(path.join(ROOT, 'server', 'server.js'), 'utf8')
+    .match(/const COLUMNS = \[([\s\S]*?)\];/)[1].match(/id:/g).length;
+  assert.strictEqual(W.WALL.lanes, cols,
+    `the wall has ${W.WALL.lanes} lanes and the board has ${cols} columns`);
+
+  // The cap height it lands at, measured on the WORST row rather than on the
+  // size the type is cut at — the top of a lane is further away and more turned
+  // than its middle. It clears the room's own 0.7° floor and its 1.0° body
+  // text; it does NOT clear the 1.3° this was first built to, and that is the
+  // price of the 32 characters, on purpose.
   const cap = W.wallCap();
-  assert.ok(cap.worstDeg >= 1.3,
-    `the worst row's cap is ${cap.worstDeg.toFixed(2)}°, under the 1.3° he asked for `
-    + `(the type is cut at ${cap.cutDeg.toFixed(2)}°)`);
+  assert.ok(cap.worstDeg >= W.CAP,
+    `the worst row's cap is ${cap.worstDeg.toFixed(2)}°, under the ${W.CAP}° floor`);
+  // Cut at the size the room's own prose is set at — that is where the type
+  // stopped being pushed down for characters — and a third clear of the floor
+  // once the worst row's foreshortening is taken off it.
+  assert.ok(cap.cutDeg >= W.TYPE.body * W.CAP,
+    `wall type is cut at ${cap.cutDeg.toFixed(2)}° of cap, under the room's own body prose`);
+  assert.ok(cap.worstDeg >= W.CAP * 1.25,
+    `the worst wall row is ${cap.worstDeg.toFixed(2)}°, too near the ${W.CAP}° floor to have any margin`);
   assert.ok(cap.worstDeg <= cap.bestDeg && cap.bestDeg <= cap.cutDeg + 1e-9,
     'the foreshortening runs the wrong way');
   assert.ok(W.WALL.rowDeg >= W.TYPE.wall * 1.15,
     `a ${W.WALL.rowDeg}° row cannot hold a ${(W.TYPE.wall * 1.15).toFixed(2)}° line`);
 
-  // And the count, which is the whole card. Seventy-eight seats, and on the
-  // live shape of the board — 35 backlog, 4 working, 31 in review, 0 peer —
-  // fifty-six of them are filled with no filter applied.
-  assert.strictEqual(W.wallRows(), 13);
-  assert.ok(W.wallSeats() >= 50, `${W.wallSeats()} seats is not a wall`);
+  // Seventy-two seats, and on the live shape of the board — 35 backlog, 4
+  // working, 31 in review, 0 peer — forty are filled with no filter. One lane
+  // per column is what caps it: a column shows at most `rows` of its own.
+  assert.strictEqual(W.wallRows(), 18);
+  assert.strictEqual(W.wallSeats(), 72);
   const live = [35, 4, 31, 0];
-  const per = W.wallLanesFor(live);
-  assert.strictEqual(per.reduce((a, b) => a + b), W.WALL.lanes, 'every lane belongs to a column');
-  assert.ok(per.every((n) => n >= 1), 'a column with no lane has no header and no count');
-  const shown = live.reduce((n, c, i) => n + Math.min(c, per[i] * W.wallRows()), 0);
-  assert.ok(shown >= 50, `only ${shown} of the live board's cards are on the wall at once`);
+  const shown = live.reduce((n, c) => n + Math.min(c, W.wallRows()), 0);
+  assert.strictEqual(shown, 40, `${shown} of the live board's cards are on the wall at once`);
 
-  // A title has to survive the lane it sits in. Sixteen is short and it is what
-  // 1.3° of cap leaves; the assertion exists so that shrinking a lane to buy a
-  // seventh one fails loudly rather than quietly.
-  assert.ok(W.wallChars() >= 16, `a lane holds ${W.wallChars()} characters of title`);
+  // And the trade is arguable rather than asserted: more characters is fewer
+  // rows, every time, and the curve has to run the right way.
+  // Characters and rows do NOT trade against each other — both come out of the
+  // type size, and both are bought with cap height. So a wider character floor
+  // buys MORE rows and smaller letters, and the only thing that stops it is the
+  // floor above. That is why 32 is the number: one more character and the worst
+  // row drops under the 1.0° cap the room's own body text carries.
+  const wide = W.wallTrade(40), tight = W.wallTrade(24);
+  assert.ok(wide.emDeg < tight.emDeg && wide.rows >= tight.rows,
+    'the character/cap trade does not run the way the arithmetic says');
+  // And the type really is pushed as far down as the body-prose rule allows:
+  // one more character and the cut cap goes under it.
+  assert.ok(W.wallTrade(W.wallChars() + 1).capCutDeg < W.TYPE.body * W.CAP,
+    `${W.wallChars()} characters is not where the cap rule actually bites`);
 
   const src = fs.readFileSync(path.join(UI, 'board.js'), 'utf8');
   assert.match(src, /new Input\(/, 'the wall still takes free text');
@@ -761,6 +799,28 @@ test('kit components are imported one at a time, never the package barrel', asyn
   }
 });
 
+test('every module in the room actually parses', async () => {
+  // A syntax error in here costs a four-minute capture run to find, because the
+  // room's modules import three.js and uikit and so cannot be imported from a
+  // test. `node --check` can read them without running them — through a copy
+  // with an .mjs extension, which is how node is told they are modules.
+  const { execFileSync } = require('node:child_process');
+  const os = require('node:os');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'room-parse-'));
+  try {
+    for (const f of fs.readdirSync(UI)) {
+      if (!f.endsWith('.js')) continue;
+      const copy = path.join(tmp, f.replace(/\.js$/, '.mjs'));
+      fs.writeFileSync(copy, fs.readFileSync(path.join(UI, f)));
+      try {
+        execFileSync(process.execPath, ['--check', copy], { stdio: 'pipe' });
+      } catch (e) {
+        assert.fail(`${f} does not parse:\n${e.stderr || e.message}`);
+      }
+    }
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
 test('the room the captain opens never loads the dev loop', async () => {
   // The flags are OFF by default, and "off" has to mean not fetched rather than
   // merely not used: the emulator is reachable only through a dynamic import
@@ -805,7 +865,12 @@ test('no viewpoint asks for a turn of the head the room does not', async () => {
   const W = await load('world.js');
   for (const v of VIEWPOINTS) {
     const a = aimAt(v.eye, v.look);
-    assert.ok(Math.abs(a.yaw) <= 45, `${v.name} turns the head ${a.yaw.toFixed(1)}° off centre`);
+    // 45° unless the viewpoint declares otherwise, and the only thing that
+    // does is the wall's outer lane — a surface built to be read by turning
+    // has to be photographed turned. Declared, not assumed: `turn` is on the
+    // viewpoint so the exception is visible where it is taken.
+    const turn = v.turn || 45;
+    assert.ok(Math.abs(a.yaw) <= turn, `${v.name} turns the head ${a.yaw.toFixed(1)}° off centre, past ${turn}°`);
     assert.ok(a.pitch <= W.RISE, `${v.name} looks ${a.pitch.toFixed(1)}° up`);
     const down = v.floor ? W.FLOOR_LOOK : 45;
     assert.ok(a.pitch >= -down, `${v.name} looks ${a.pitch.toFixed(1)}° down — that is a neck, not a glance`);

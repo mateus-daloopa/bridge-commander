@@ -288,7 +288,9 @@ async function main() {
     // Three things a still photograph of the wall cannot tell you, and the
     // third one is the reason the wall is built the way it is.
     //
-    //   · how many titles are on it at once, with nothing filtered
+    //   · how many titles are LEGIBLE at once — bound to a row, shown whole
+    //     with no ellipsis, and with nothing covering them. Counting rows that
+    //     merely exist is what put "53 of 70" on a wall of 16-character stubs
     //   · that pressing a lieutenant's FACE filters it, with no typing
     //   · that scrolling a lane to the bottom of its column changes the uikit
     //     node count by exactly zero
@@ -341,8 +343,14 @@ async function main() {
       const flat = !!(full && after && afterFilter
         && full.nodes === after.nodes && full.nodes === afterFilter.nodes);
       wall = { full, scrolled, after, filtered: afterFilter, beat, shut, shutRoom, openRoom, poolHeldFlat: flat };
-      console.log('· ' + 'the wall'.padEnd(24) + full.shown + ' of ' + full.cards
-        + ' titles at once, ' + full.nodes + ' uikit nodes');
+      console.log('· ' + 'the wall'.padEnd(24) + full.legible + ' of ' + full.cards
+        + ' titles LEGIBLE at once (' + full.shown + ' rows bound, ' + full.chars
+        + ' chars a lane, titles run ' + full.titleLen.min + '-' + full.titleLen.max
+        + ', median ' + full.titleLen.median + ')');
+      console.log('· ' + 'do tiles cover tiles'.padEnd(24)
+        + full.tileGapDeg + '° between neighbours from the arc centre, '
+        + full.tileGapLeaningDeg + '° leaning 20 cm — '
+        + (Math.min(full.tileGapDeg, full.tileGapLeaningDeg) > 0 ? 'no tile covers another' : 'OCCLUDED'));
       console.log('· ' + 'what it costs'.padEnd(24)
         + shutRoom.calls + ' -> ' + openRoom.calls + ' draws, '
         + shut.median.toFixed(1) + ' -> ' + beat.median.toFixed(1) + ' ms median frame ('
