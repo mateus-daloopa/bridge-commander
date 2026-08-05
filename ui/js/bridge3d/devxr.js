@@ -52,7 +52,12 @@ export async function install() {
   // controller sits at the feet with its ray drawn across the whole room, and
   // every screenshot then has a blue line through the board.
   const OFFSET = { x: 0.22, y: -0.35, z: -0.12 };
-  const REACH = 1.75;                 // the shelf radius: where most of the room stands
+  // How far out the hand and the gaze converge. A person aims their hand at the
+  // thing they are looking at, and how far away that is changes what "aimed at
+  // it" means — a hand held 35 cm below the eye and converging at 1.75 m is
+  // pointing well past a panel standing at 1.10 m. Defaults to the shelf
+  // radius, where most of the room stands; `reach()` moves it for the panels.
+  let REACH = 1.75;
   if (device.controllers.left) device.controllers.left.connected = false;
   function aimController() {
     const c = device.controllers.right;
@@ -73,6 +78,12 @@ export async function install() {
     const a = aimAt(at, target);
     const q = eulerToQuat({ yaw: a.yaw, pitch: a.pitch, roll: 0 });
     c.quaternion.set(q.x, q.y, q.z, q.w);
+  }
+
+  function reach(m) {
+    REACH = Math.max(0.3, Number(m) || 1.75);
+    apply();
+    return REACH;
   }
 
   // Turn the head by hand, in the same degrees everything else here speaks.
@@ -176,7 +187,7 @@ export async function install() {
 
   // The handle the capture script drives, and the one to poke at from a console.
   window.__xr = {
-    device, look, aim, press, frames, frameStats, pose,
+    device, look, aim, reach, press, frames, frameStats, pose,
     viewpoints: VIEWPOINTS.map((v) => ({ name: v.name, why: v.why })),
     get presenting() { return !!device.activeSession; },
   };

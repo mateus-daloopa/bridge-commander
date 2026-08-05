@@ -250,6 +250,76 @@ test('the shelves are centred where the eyes rest', async () => {
     `the shelves are centred ${centre.toFixed(1)}° below the horizon, not ${W.DROP.join('–')}°`);
 });
 
+// ---- the panels, where prose is read ---------------------------------------
+//
+// The panels are the readable half of the room, and "readable" is a number
+// rather than an impression: how many degrees the type covers at the distance
+// the surface stands, and how many characters that buys.
+
+test('a panel stands in the comfort band, below the horizon, and never on the floor', async () => {
+  const W = await load('world.js');
+  assert.ok(W.PANEL.distM >= W.NEAR && W.PANEL.distM <= W.FAR,
+    `panels stand at ${W.PANEL.distM} m, outside the ${W.NEAR}–${W.FAR} m comfort band`);
+  const centre = -W.PANEL.elevDeg;
+  assert.ok(centre >= W.DROP[0] && centre <= W.DROP[1],
+    `panels are centred ${centre.toFixed(1)}° below the horizon, not ${W.DROP.join('–')}°`);
+  // Top and bottom edges, in the room's own bounds. A panel is tilted back, so
+  // its extent in elevation is a little less than its height — checking the
+  // untilted extent is the conservative version of the same assertion.
+  const top = W.PANEL.elevDeg + W.PANEL.heightDeg / 2;
+  const bottom = W.PANEL.elevDeg - W.PANEL.heightDeg / 2;
+  assert.ok(top <= W.RISE, `a panel reaches ${top.toFixed(1)}°, over the +${W.RISE}° ceiling`);
+  assert.ok(bottom >= -W.SINK, `a panel reaches ${bottom.toFixed(1)}°, under the -${W.SINK}° floor`);
+  // Tilted TOWARD the face, never lying flat: a panel on the floor is
+  // foreshortened into uselessness and makes him bow his head to read it.
+  assert.ok(W.PANEL.tiltDeg > 0 && W.PANEL.tiltDeg <= 30,
+    `a panel tilted ${W.PANEL.tiltDeg}° is either flat on the floor or falling over backwards`);
+});
+
+test('every panel slot is inside the shoulders, and the readable pair does not overlap', async () => {
+  const W = await load('world.js');
+  const half = W.PANEL.widthDeg / 2;
+  for (const az of W.PANEL_SLOTS) {
+    assert.ok(Math.abs(az) + half <= 45 + 1e-9,
+      `a panel at ${az}° reaches ${(Math.abs(az) + half).toFixed(1)}°, past the ±45° bound`);
+  }
+  // The first two slots are the pair he can read at once. They may touch but
+  // they may not overlap — a window hidden behind another is a window he has to
+  // tidy before he can work.
+  const [a, b] = W.PANEL_SLOTS;
+  assert.ok(Math.abs(b - a) >= W.PANEL.widthDeg - 1e-9,
+    `the two readable slots are ${Math.abs(b - a)}° apart and each is ${W.PANEL.widthDeg}° wide — they overlap`);
+});
+
+test('a panel holds enough prose to be worth reading', async () => {
+  const W = await load('world.js');
+  const cap = W.panelCapacity();
+  // A measure under ~45 characters is a column of broken words; a panel that
+  // shows fewer than ten lines is a peephole. Both floors are about whether a
+  // real card body — median 2 196 characters on this board — can be read at
+  // all rather than scrolled through a slot.
+  assert.ok(cap.charsPerLine >= 45, `${cap.charsPerLine} characters per line is too narrow to read`);
+  assert.ok(cap.lines >= 10, `${cap.lines} lines is a peephole, not a panel`);
+  // And the bar and the composer are both targets, so they eat two hit floors
+  // out of the height before a word is drawn. That has to still leave a body.
+  const chrome = 2 * W.BUILD.hit;
+  assert.ok(W.PANEL.heightDeg - chrome >= 15,
+    `${(W.PANEL.heightDeg - chrome).toFixed(1)}° of body left after the bar and the composer`);
+});
+
+test('panel type clears the same floors as everything else, at the distance a panel stands', async () => {
+  const W = await load('world.js');
+  for (const [name, em] of Object.entries(W.TYPE)) {
+    assert.ok(em * W.CAP >= 0.7, `${name} on a panel is ${(em * W.CAP).toFixed(2)}° of cap height`);
+  }
+  // The bar is a target — he has to hit it to move the window — so it is the
+  // padded hit floor tall where the panel stands, not merely tall enough to
+  // hold its title.
+  const { widthM, heightM } = W.panelSize();
+  assert.ok(Math.abs(W.arcDeg(widthM, W.PANEL.distM) - W.PANEL.widthDeg) < 1e-9);
+  assert.ok(Math.abs(W.arcDeg(heightM, W.PANEL.distM) - W.PANEL.heightDeg) < 1e-9);
+});
+
 // ---- the type -------------------------------------------------------------
 
 test('the smallest type in the room clears the 0.7° cap-height floor everywhere it is used', async () => {
@@ -542,10 +612,12 @@ test('every viewpoint is aimed at something the room really stands there', async
     const at = v.frames.at;
     assert.ok(where.some((p) => near(p.x || 0, at.x || 0) && near(p.y, at.y) && near(p.z, at.z)),
       `${v.name} frames (${at.x}, ${at.y}, ${at.z}) and nothing stands there`);
-    assert.ok(['world', 'list'].includes(v.scene), `${v.name} wants an unknown scene`);
+    assert.ok(['world', 'list', 'chat'].includes(v.scene), `${v.name} wants an unknown scene`);
     assert.ok(v.why && v.why.length > 20, `${v.name} does not say what it is for`);
   }
   assert.ok(VIEWPOINTS.some((v) => v.scene === 'list'), 'nothing photographs the escape hatch');
+  assert.ok(VIEWPOINTS.some((v) => v.scene === 'chat'),
+    'nothing photographs a conversation, which is the thing he actually came here to do');
   assert.ok(VIEWPOINTS.some((v) => v.floor), 'nothing photographs the landmarks, which is the thing most likely to be missing');
 });
 

@@ -22,6 +22,9 @@ import { Shelf, Decal } from './shelves.js';
 import { Agents } from './agents.js';
 import { CardList, ListPlate } from './list.js';
 import { Rays } from './hover.js';
+import { Windows } from './windows.js';
+import { ChatPanel } from './chat.js';
+import { Grabs } from './grab.js';
 import { updateRoots, sortTransparent, rootCount, COL } from './kit.js';
 
 const say = (m) => { const el = document.getElementById('status'); if (el) el.textContent = m; };
@@ -106,6 +109,34 @@ list.setOpen(false);
 
 const rays = new Rays(renderer, scene, camera, renderer.domElement);
 
+// ---- the windows -----------------------------------------------------------
+//
+// Panels are the readable half of the room. They are created on demand, they
+// remember where he put them, and they are the only surfaces in here carrying
+// prose — everything else is a thing you recognise rather than read.
+
+const windows = new Windows(scene);
+const grabs = new Grabs(scene);
+
+// Click a lieutenant, get its chat. This is the shortest path between "I can
+// see my crew" and "I am talking to them", and it is the whole reason the
+// spheres were worth drawing.
+function openChat(lt) {
+  const key = 'lieutenant:' + lt.id;
+  const p = windows.show(key, () => new ChatPanel({
+    target: key,
+    title: lt.name || lt.id,
+    subtitle: 'chat',
+    tint: W.agentColour(lt.color),
+    onClose: (panel) => windows.close(panel),
+  }));
+  p.setTitle(lt.name || lt.id, 'chat');
+  p.setTint(W.agentColour(lt.color));
+  p.paint(lt.chat);
+  return p;
+}
+agents.onSelect = openChat;
+
 function repaint() {
   const cols = W.columnsOf(doc);
   const lts = new Map((doc.lieutenants || []).map((l) => [l.id, l]));
@@ -113,6 +144,13 @@ function repaint() {
   decals.forEach((d, i) => d.paint(doc, cols[i]));
   agents.paint(doc);
   list.paint(doc);
+  // An open chat follows the board: the refresh is what makes a reply arrive
+  // while he is standing there, rather than on the next time he opens it.
+  for (const p of windows) {
+    if (!p.open || !p.paint) continue;
+    const m = /^lieutenant:(.+)$/.exec(p.key || '');
+    if (m) { const lt = lts.get(m[1]); if (lt) p.paint(lt.chat); }
+  }
 }
 
 async function refresh() {
@@ -152,6 +190,20 @@ async function enter() {
   rays.setPresenting(true);
   session.addEventListener('end', () => { gate.hidden = false; rays.setPresenting(false); });
 }
+
+// ---- squeeze to pick a window up -------------------------------------------
+//
+// Squeeze, not trigger: the trigger presses things and the grip moves them, and
+// only a window's title bar answers a squeeze at all. Wired here rather than in
+// grab.js because the controllers belong to the renderer's session and the ray
+// that says what is under the hand belongs to `rays`.
+for (const c of rays.controllers) {
+  c.addEventListener('squeezestart', () => {
+    const p = grabs.start(c, rays.hits.get(c));
+    if (p) windows.touch(p);
+  });
+  c.addEventListener('squeezeend', () => grabs.end(c));
+}
 document.getElementById('enter').addEventListener('click', enter);
 
 // ---- a desk, so this can be driven without a headset ------------------------
@@ -169,8 +221,14 @@ window.addEventListener('pointermove', (e) => {
   pitch = Math.max(-1.3, Math.min(1.0, pitch - e.movementY * 0.003));
   camera.rotation.set(pitch, yaw, 0, 'YXZ');
 });
+// Keystrokes belong to whatever composer has focus — a chat panel takes the
+// keyboard when it opens, and Enter inside it sends. The shortcuts below are
+// only for when nothing is being typed into, which is why they all check.
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'l' && !list.search.hasFocus?.value) list.setOpen(!list.open);
+  const typing = document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
+  if (typing) return;
+  if (e.key === 'l') list.setOpen(!list.open);
+  if (e.key === 'b') windows.closeFront();
 });
 
 window.addEventListener('resize', () => {
@@ -191,14 +249,30 @@ renderer.setAnimationLoop((t) => {
   agents.tick(now);
   plate.tick(now);
   list.tick(now);
+  windows.tick(now);
+  grabs.tick(dt);
   updateRoots(dt);
   renderer.render(scene, camera);
 });
 
 // The handle the capture script and a console drive the room through.
 window.__bridge = {
-  shelves, decals, agents, list, plate, scene, camera, rays,
+  shelves, decals, agents, list, plate, scene, camera, rays, windows, grabs,
   openList: (on) => list.setOpen(on),
+  // The capture script and a console drive the panels through these — a chat
+  // that can only be reached by aiming a ray is a chat no test can photograph.
+  // Named, or else whoever has actually been talked to — a photograph of an
+  // empty chat proves the frame renders and nothing about the prose in it.
+  openChat: (id) => {
+    const lts = doc.lieutenants || [];
+    const lt = (id && lts.find((l) => l.id === id))
+      || lts.slice().sort((a, b) => (b.chat || []).length - (a.chat || []).length)[0];
+    return lt ? !!openChat(lt) : false;
+  },
+  panels: () => [...windows].filter((p) => p.open).map((p) => ({
+    key: p.key, slot: p.slot, placed: p.placed,
+    at: W.angleOf(p.group.position),
+  })),
   search: (q) => { list.query = q || ''; list.repaint(); },
   stats: () => ({
     roots: rootCount(),

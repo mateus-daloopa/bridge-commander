@@ -38,6 +38,16 @@ export const COL = {
   accent: '#4cc2ff',
   ink: '#05070b',
   decal: '#2b3a4d',
+  // The panels. A plate dark enough to carry light type can never itself reach
+  // 3:1 against the room behind it, so the SHAPE of a panel is carried by its
+  // rim and never by its fill: `rim` is 6.8:1 on the room's plate and `text` is
+  // 9.9:1 on `panel`. Measured, not guessed.
+  panel: '#0d1420',
+  bar: '#18222f',
+  barLit: '#26374a',
+  rim: '#8ea2c0',
+  field: '#111b27',
+  mine: '#1b2b3d',
 };
 
 // Every root has to be told to lay itself out each frame. One registry rather

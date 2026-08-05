@@ -21,6 +21,7 @@ import { Target } from './hover.js';
 export class Agents {
   constructor() {
     this.group = new THREE.Group();
+    this.onSelect = null;          // set by main.js: what a press on a sphere does
     this.slots = [];
     for (let i = 0; i < W.AGENT.slots; i++) this.slots.push(this._slot(i));
   }
@@ -73,7 +74,13 @@ export class Agents {
     });
     ui.add(label);
 
-    const target = new Target({ mesh: hit, mark: ball, spot, name: 'lieutenant', base: new THREE.Color(COL.faint) });
+    // Pointing at a lieutenant and pressing opens its chat. The sphere is the
+    // shortest route to the thing he actually came here to do, so it is the one
+    // target in the room that needed no other justification.
+    const target = new Target({
+      mesh: hit, mark: ball, spot, name: 'lieutenant', base: new THREE.Color(COL.faint),
+      onSelect: () => { const s = this.slots[i]; if (s.lt && this.onSelect) this.onSelect(s.lt); },
+    });
     // A collider that draws nothing has no colour to change, so the hover state
     // lives on the ball's rim instead — same six states, painted where they can
     // actually be seen.

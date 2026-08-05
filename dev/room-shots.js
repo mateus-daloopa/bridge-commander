@@ -271,8 +271,48 @@ async function main() {
         + (on ? on.state + ' at ' + on.distance.toFixed(2) + ' m' : 'NOTHING — the ray reaches nothing there'));
     }
 
+    // And can he MOVE a window? Grabbing is the one interaction the captain
+    // named as a requirement rather than a nicety, and it is invisible in every
+    // photograph: a panel that never budges looks exactly like a panel he has
+    // not tried to move yet. So the run opens a chat, aims at its title bar,
+    // squeezes, turns its head, releases, and checks the panel came along.
+    let grab = null;
+    try {
+      await evaluate(cdp, setScene('chat'));
+      await evaluate(cdp, 'window.__xr.frames(4)');
+      const before = await evaluate(cdp, 'window.__bridge.panels()[0]');
+      // The hand converges with the gaze at whatever it is aiming at, so it has
+      // to be told the panel is nearer than the room — held at the shelf
+      // radius, the ray sails past a surface standing at 1.10 m.
+      await evaluate(cdp, `window.__xr.reach(${before && before.at ? before.at.dist : 1.1})`);
+      // The bar sits at the top of the panel — its own slot's azimuth, and a
+      // little above the panel's centre.
+      await evaluate(cdp, `window.__xr.aim(${-(before && before.at ? before.at.az : 0)}, -3.0)`);
+      await evaluate(cdp, 'window.__xr.frames(4)');
+      const onBar = await evaluate(cdp, 'window.__bridge.lit().some((t) => /-bar$/.test(t.name))');
+      await evaluate(cdp, 'window.__xr.device.controllers.right.updateButtonValue("squeeze", 1)');
+      await evaluate(cdp, 'window.__xr.frames(3)');
+      await evaluate(cdp, 'window.__xr.aim(-8, -22)');
+      await evaluate(cdp, 'window.__xr.frames(6)');
+      await evaluate(cdp, 'window.__xr.device.controllers.right.updateButtonValue("squeeze", 0)');
+      await evaluate(cdp, 'window.__xr.frames(4)');
+      const after = await evaluate(cdp, 'window.__bridge.panels()[0]');
+      const moved = !!(before && after
+        && Math.hypot(after.at.az - before.at.az, after.at.el - before.at.el) > 2);
+      grab = { onBar, before, after, moved, placed: !!(after && after.placed) };
+      console.log((moved ? '· ' : '✗ ') + 'grab a window'.padEnd(24)
+        + (moved
+          ? 'moved ' + Math.hypot(after.at.az - before.at.az, after.at.el - before.at.el).toFixed(1)
+            + '° and stayed put' + (after.placed ? ' (his placement now)' : '')
+          : 'DID NOT MOVE — squeeze reached nothing'));
+    } catch (e) {
+      grab = { error: String((e && e.message) || e) };
+      console.log('✗ grab a window'.padEnd(26) + 'could not be driven: ' + grab.error);
+    }
+
     const manifest = {
       generatedAt: new Date().toISOString(),
+      grab,
       url, size: args.width + 'x' + args.height,
       chrome: bin, board: args.url ? 'live server' : 'dev/ui-server.js fixture',
       note: 'Screenshots are structural evidence only — every arc figure is asserted in test/bridge3d.test.js, and every design number lives in the vr-design skill.',
@@ -307,13 +347,18 @@ async function main() {
 
 // What has to be true for a scene's shots to be of anything. Driven through the
 // room's own handles (window.__bridge), so the photograph is of the room doing
-// its ordinary thing rather than of a rig posing it. The world itself never
-// changes — it is a static room, which is the whole point of it — so the only
-// scene there is besides 'world' is the flat list standing open in front of it.
+// its ordinary thing rather than of a rig posing it.
+//
+// 'world' is the room standing still. 'list' is the flat list of every card.
+// 'chat' opens a lieutenant's conversation as a panel — which is the one thing
+// in here that cannot be photographed by pointing a camera at the room, because
+// it does not exist until somebody asks for it.
 function setScene(scene) {
   return `(() => {
     const b = window.__bridge;
     b.openList(${scene === 'list'});
+    for (const p of [...b.windows]) if (p.open) b.windows.close(p);
+    ${scene === 'chat' ? 'b.openChat();' : ''}
     return b.stats();
   })()`;
 }

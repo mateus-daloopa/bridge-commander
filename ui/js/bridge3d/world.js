@@ -156,6 +156,80 @@ export const LIST = { distM: 1.2, widthM: 0.90, heightM: 0.70, centreElevDeg: -1
 // is not a surface you read. It is still inside the −60° a neck will go to.
 export const PLATE = { azimuthDeg: 0, radiusM: 1.12, widthDeg: BUILD.hit * 2, heightDeg: BUILD.hit };
 
+// ---- the panels, where prose is actually read ------------------------------
+//
+// Text stays flat. Nobody in twenty-seven years of immersive analytics made an
+// abstract 3D visualisation of text data, and Meta, Microsoft and Apple say the
+// same thing independently — so a card body, a chat and a report are PANELS,
+// and the only question is where they stand and how big they are.
+//
+// 1.10 m, because comfort peaks between 1.0 and 2.0 m and this is the near end
+// of that: prose is the thing you lean into. Centred 16° below the horizon,
+// which is where the eyes rest. And TILTED BACK 15° from vertical, so the face
+// points up at the eye rather than presenting a keystone — a panel lying flat
+// is foreshortened into uselessness and makes you bow your head to read it.
+//
+// Panels stand INSIDE everything else in the room. A surface parked behind the
+// objects is in the dark, at the wrong distance, competing for the same line of
+// sight with the things in front of it.
+// 34° tall rather than the 28° this started at, and the extra six degrees are
+// not decoration: the bar and the composer are both targets, so both are the
+// 6.06° hit floor tall, and they eat 12° of any panel before a word of prose is
+// drawn. At 28° that left seven lines of body, which is a peephole. At 34°,
+// centred at -16°, the panel spans -33° to +1° — clear of the -35° floor below
+// and nowhere near the +10° ceiling above — and the body holds eleven lines.
+export const PANEL = {
+  distM: 1.10,
+  elevDeg: -16,
+  tiltDeg: 15,
+  widthDeg: 34,
+  heightDeg: 34,
+};
+
+// Where an unplaced panel lands. There are TWO, and that is the whole list.
+//
+// **Two panels is the ceiling, and it is arithmetic rather than taste**: at
+// 34° each they span ±34.5° of the ±45° a comfortable field has. A third has
+// nowhere to go — a slot far enough out not to overlap these two puts its
+// outer edge past 45°, and past 33.75° a flat panel turned to face the eye
+// stops facing it anyway.
+//
+// So the room does not pretend to offer more. Open a third and it lands on the
+// least recently touched of the two, because refusing to open is worse than
+// overlapping something he can pick up and move. Where windows go BEYOND two is
+// his business, not the room's: once he places one himself, the room never
+// touches it again, and he can carry as many as his attention will hold.
+export const PANEL_SLOTS = [-17.5, 17.5];
+
+export function panelSize() {
+  return {
+    widthM: sizeForArc(PANEL.widthDeg, PANEL.distM),
+    heightM: sizeForArc(PANEL.heightDeg, PANEL.distM),
+  };
+}
+
+// Where a panel in a given slot stands, and which way it faces. `tilt` is
+// applied about the panel's own horizontal axis after it has been turned to
+// face the eye, so a panel off to the side is tilted in ITS frame and not in
+// the room's — otherwise the two outer slots lean sideways.
+export function panelAt(azDeg) {
+  return {
+    az: azDeg, el: PANEL.elevDeg, dist: PANEL.distM, tilt: PANEL.tiltDeg,
+    pos: pointAt(azDeg, PANEL.elevDeg, PANEL.distM),
+    ...panelSize(),
+  };
+}
+
+// What the panel can actually hold, said in characters rather than in metres —
+// the figure that decides whether a card body is readable or a scrolling chore.
+// 0.494 em is Inter's measured mean advance over real card titles and bodies.
+export function panelCapacity(bodyDeg = TYPE.body) {
+  return {
+    charsPerLine: Math.floor(PANEL.widthDeg / (bodyDeg * 0.494)),
+    lines: Math.floor(PANEL.heightDeg / (bodyDeg * 1.4)),
+  };
+}
+
 // ---- pointing -------------------------------------------------------------
 //
 // dir(azimuth, elevation) — a unit vector, in the WebXR convention: forward is

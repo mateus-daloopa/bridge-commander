@@ -64,6 +64,9 @@ const LIST = W.listPanel();
 const PLATE = W.plate();
 const DECAL = W.decalAt(1);
 
+// The first panel slot, which is where a chat opened from a cold room lands.
+const CHAT = W.panelAt(W.PANEL_SLOTS[0]);
+
 // Each one exists to answer a question a screenshot can answer; anything a
 // screenshot cannot answer is measured in test/bridge3d.test.js instead, and no
 // photograph is a substitute for wearing it.
@@ -113,6 +116,13 @@ export const VIEWPOINTS = [
     look: at(LIST.pos),
     frames: { panel: { widthM: LIST.widthM, heightM: LIST.heightM }, at: LIST.pos },
   },
+  {
+    name: 'chat', scene: 'chat',
+    why: 'a lieutenant\'s conversation, open where a chat opens: is the prose readable at 1.10 m, does the composer sit at the bottom, and is the title bar a bar he could actually grab',
+    eye: HERE,
+    look: at(CHAT.pos),
+    frames: { panel: { widthM: CHAT.widthM, heightM: CHAT.heightM }, at: CHAT.pos },
+  },
 ];
 
 export const byName = (name) => VIEWPOINTS.find((v) => v.name === name) || null;
@@ -142,6 +152,9 @@ export const PROBES = [
 // be aimed at. A viewpoint pointed anywhere else is a photograph of the floor.
 export function places() {
   const out = [LIST.pos, PLATE.pos, { x: 0, y: W.EYE, z: -W.SHELF.radius }];
+  // The panel slots. Nothing stands in them until he opens something, but they
+  // are where a window lands, so a shot aimed at one is a shot of the room.
+  for (const az of W.PANEL_SLOTS) out.push(W.panelAt(az).pos);
   for (let i = 0; i < W.SHELF.azimuths.length; i++) {
     out.push(W.shelfPlane(i).centre, W.decalAt(i).pos);
     for (const s of W.slots(i)) out.push(s.pos);

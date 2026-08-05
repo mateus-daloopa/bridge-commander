@@ -138,6 +138,7 @@ export class Rays {
     this.pointers = [];
     this.controllers = [];
     this.presenting = false;
+    this.hits = new Map();          // controller -> the object its ray is on
     const state = {};
     for (let i = 0; i < 2; i++) {
       const c = renderer.xr.getController(i);
@@ -173,11 +174,20 @@ export class Rays {
       // the signal.
       const live = this.presenting && controller.visible;
       pointer.setEnabled(live, ev);
-      if (!live) { decor.line.visible = false; decor.dot.visible = false; continue; }
+      if (!live) {
+        decor.line.visible = false; decor.dot.visible = false;
+        this.hits.set(controller, null);
+        continue;
+      }
       decor.line.visible = true;
       pointer.move(this.scene, ev);
       const hit = pointer.getIntersection();
       const landed = !!(hit && hit.object && !hit.object.isVoidObject);
+      // Remembered per controller so grab.js can ask what this hand is on
+      // without raycasting again. One ray in the room, one set of hover states:
+      // a second raycast would be a second opinion about what is under the
+      // pointer, and the two would disagree on exactly the hard frames.
+      this.hits.set(controller, landed ? hit.object : null);
       const reach = landed ? hit.distance : REACH;
       decor.line.scale.z = reach;
       decor.dot.position.z = -reach;
