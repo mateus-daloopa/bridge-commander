@@ -1,0 +1,21 @@
+run:
+  id: "01KZ9S3G69VR6KNMR2QZ3WP1SJ"
+  branch: feat/bulk-discount
+  status: completed
+  head: "0138684c"
+  findings: 1 auto-fix
+  steps[9]{step,status,findings,duration_ms}:
+    intent,completed,0,3
+    rebase,completed,0,32
+    review,completed,1,170503
+    test,completed,0,88110
+    document,completed,0,66357
+    lint,completed,0,5
+    push,skipped,0,0
+    pr,skipped,0,0
+    ci,skipped,0,0
+outcome: passed
+fixes[2]{step,summary}:
+  review,fix average_discount empty input and test import
+  review,"untrack __pycache__, add .gitignore, use pytest.raises"
+help[3]: "Summarize this pipeline run for the user in a concise, easily readable format: what was validated and what was found.",The pipeline fixed findings the original change missed (see `fixes`) - acknowledge the misses and list each fix so the user can review them.,"When you make an additional fix after a gate round has already produced fix commits, commit it on top of the existing branch and run `no-mistakes axi run --intent \"...\"` with the original user intent. Never abort-and-restart, reset the branch, or open a new branch in a way that drops prior gate-fix commits. A fresh run re-validates the branch's current state, so already-resolved findings do not re-surface."

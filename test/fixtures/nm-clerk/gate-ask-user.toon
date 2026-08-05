@@ -1,0 +1,28 @@
+run:
+  id: "01KZ9SDN40H4H13P0Q4FJ0YR2S"
+  branch: fix/tile-b
+  status: running
+  awaiting_agent: parked 0s
+  head: cc3a40cb
+  findings: "3 awaiting, 1 auto-fix"
+  steps[9]{step,status,findings,duration_ms}:
+    intent,completed,0,2
+    rebase,completed,0,36
+    review,awaiting_approval,4,52524
+    test,pending,0,0
+    document,pending,0,0
+    lint,pending,0,0
+    push,pending,0,0
+    pr,pending,0,0
+    ci,pending,0,0
+gate:
+  step: review
+  status: awaiting_approval
+  risk: high
+  note: "Review auto-fix is disabled by default (`auto_fix.review: 0`; a repo or global `auto_fix.review > 0` override re-enables it), so blocking and ask-user review findings park for your decision rather than being silently self-fixed."
+  findings[4]{id,severity,file,action,description}:
+    drag-starting-on-tile-no-longer-selects,error,selection.py,ask-user,"Removed required behavior. The intent states: \"no existing behaviour may be removed. A rubber-band drag that STARTS on a tile must still select everything its rectangle covers, exactly as it did before.\" The new hunk `if not should_start_selection_drag(target): return set(SELECTION)` short-circuits at mousedown, so `items_in_rect` is never consulted for any target beginning with \"tile-\". Before this change, `handle_mousedown(\"tile-7\", {\"c\"})` returned `{\"c\"}`; now it returns the untouched prior selection. Repro: SELECTION={\"a\"}; drag starting on tile-7 covering tile-9 -> expected {\"a\"?/\"tile-9… (truncated, 827 chars total)"
+    tests-assert-helper-not-behavior,error,test_selection.py,ask-user,"The intent states: \"the reported behaviour itself must be fixed and asserted - clicking a tile keeps the selection you were building. Exposing a helper that says a drag should not start is not the same thing.\" Both added tests (`test_drag_does_not_start_on_a_tile`, `test_drag_starts_on_empty_canvas`) assert only `should_start_selection_drag(...)`. No test calls `handle_mousedown` with a tile target, so the user-visible claim (selection survives a tile click) is unasserted, and the regression in finding 1 (drag starting on a tile still selects its rectangle) has no test guarding it either."
+    tile-prefix-string-heuristic,warning,selection.py,ask-user,"Tile identification is a `str(target).startswith(\"tile-\")` prefix match. Any non-tile element whose identifier happens to start with \"tile-\" (e.g. a container id \"tile-grid-background\" or \"tile-panel\") is treated as a tile and suppresses the gesture, while a tile identified any other way (numeric id, DOM node object, child element inside a tile) is not matched and still wipes the selection. `str()` on a non-string target also silently stringifies arbitrary objects, so the check can pass or fail on repr formatting rather than on what was actually clicked."
+    tests-share-mutable-global,info,test_selection.py,auto-fix,"`SELECTION` is module-level mutable state and only `test_rubber_band_over_empty_space_selects_what_it_covers` clears it, inline. The new code path returns that global directly, so any test of the tile-click behavior depends on prior test ordering. A `setUp` that calls `SELECTION.clear()` removes the ordering dependency before more tests are added."
+help[6]: Run `no-mistakes axi respond --action approve` to accept this step and continue,Run `no-mistakes axi respond --action fix --findings <ids>` to have the pipeline fix the selected findings (do not edit files yourself),Run `no-mistakes axi respond --action skip` to skip this step,Run `no-mistakes axi logs --step review --full` to read the full step log,"A long-running call is working, not stalled - background it if your harness needs to, but the run never advances past a gate on its own. Read every return; on a `gate:`, respond; loop until an `outcome:`.","When you make an additional fix after a gate round has already produced fix commits, commit it on top of the existing branch and run `no-mistakes axi run --intent \"...\"` with the original user intent. Never abort-and-restart, reset the branch, or open a new branch in a way that drops prior gate-fix commits. A fresh run re-validates the branch's current state, so already-resolved findings do not re-surface."
