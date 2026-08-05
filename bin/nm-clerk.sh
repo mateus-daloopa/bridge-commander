@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # nm-clerk.sh — drive `no-mistakes axi` through its gates with no model in the loop.
 #
-#   nm-clerk.sh --intent-file <file> [extra axi run flags...]
+#   nm-clerk.sh --intent-file <file> [extra axi run flags...]   start a run
+#   nm-clerk.sh --respond <fix|approve|skip> [--findings id,id] answer a parked gate
 #
 # The gate is a mapping, not a judgement: `auto-fix` findings get fixed, a gate
 # with nothing actionable left gets approved, and an `ask-user` finding stops the
 # clerk — that call belongs to a human.
+#
+# `--respond` is that human coming back. It answers the gate the LAST invocation
+# refused — the run is still alive and still parked on it — and then drives the
+# rest exactly as the first entry point does, to the same files. So one card can
+# go run → park → human → outcome without anyone finishing it by hand.
 #
 # ALWAYS EXITS 0. This runs as a bash node inside an Archon `loop_group`, where a
 # non-zero exit kills the whole run and a crashed run looks exactly like a broken
@@ -34,10 +40,16 @@ ART=${ARTIFACTS_DIR:-.}
 LOG=${NM_CLERK_LOG:-/dev/stderr}
 
 INTENT_FILE=
+RESPOND=
+FINDINGS=
 while [ $# -gt 0 ]; do
   case "$1" in
     --intent-file) INTENT_FILE=${2:-}; shift 2 ;;
     --intent-file=*) INTENT_FILE=${1#*=}; shift ;;
+    --respond) RESPOND=${2:-}; shift 2 ;;
+    --respond=*) RESPOND=${1#*=}; shift ;;
+    --findings) FINDINGS=${2:-}; shift 2 ;;
+    --findings=*) FINDINGS=${1#*=}; shift ;;
     *) break ;;
   esac
 done
@@ -51,8 +63,17 @@ finish() {
   exit 0
 }
 
-[ -n "$INTENT_FILE" ] && [ -r "$INTENT_FILE" ] \
-  || finish failed "usage: nm-clerk.sh --intent-file <readable file> [axi run flags...]"
+if [ -n "$RESPOND" ]; then
+  case "$RESPOND" in
+    fix|approve|skip) ;;
+    *) finish failed "--respond takes fix, approve or skip — not '$RESPOND'" ;;
+  esac
+  [ -z "$INTENT_FILE" ] \
+    || finish failed "--respond answers a gate that is already open; --intent-file starts a new run. Pick one."
+else
+  [ -n "$INTENT_FILE" ] && [ -r "$INTENT_FILE" ] \
+    || finish failed "usage: nm-clerk.sh --intent-file <readable file> [axi run flags...] | --respond <fix|approve|skip> [--findings id,id]"
+fi
 
 # Pull `<id>\t<action>` out of the TOON tabular block `findings[N]{cols}:`.
 # The COLUMNS ARE READ FROM THE HEADER, never assumed by position: a reordered
@@ -100,7 +121,20 @@ gate_status() {
 
 fix_rounds=0
 gates=0
-out=$("$NM" axi run --intent "$(cat "$INTENT_FILE")" "$@" 2>>"$LOG")
+
+# The two doors into the same loop. `--respond` skips `axi run` because the run
+# is already open and parked; the human's decision IS the first gate answer, and
+# everything after it is the clerk's ordinary job again.
+if [ -n "$RESPOND" ]; then
+  printf 'clerk: answering the parked gate — %s%s\n' "$RESPOND" "${FINDINGS:+ ($FINDINGS)}"
+  if [ "$RESPOND" = fix ] && [ -n "$FINDINGS" ]; then
+    out=$("$NM" axi respond --action fix --findings "$FINDINGS" 2>>"$LOG")
+  else
+    out=$("$NM" axi respond --action "$RESPOND" 2>>"$LOG")
+  fi
+else
+  out=$("$NM" axi run --intent "$(cat "$INTENT_FILE")" "$@" 2>>"$LOG")
+fi
 
 while :; do
   printf '\n===== gate %d =====\n%s\n' "$((gates + 1))" "$out"

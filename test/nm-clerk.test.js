@@ -40,8 +40,9 @@ cat "$d/reply-$n" 2>/dev/null || cat "$d/last"
   return bin;
 }
 
-// run(replies) -> { status, stdout, outcome, escalation, calls }
-function run(replies, env = {}) {
+// run(replies, env, argv) -> { status, stdout, outcome, escalation, calls }
+// `argv` defaults to the --intent-file door; the --respond tests pass their own.
+function run(replies, env = {}, argv = null) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-clerk-'));
   const bin = fakeNoMistakes(dir, replies);
   const intent = path.join(dir, 'intent.md');
@@ -50,7 +51,7 @@ function run(replies, env = {}) {
   let status = 0;
   let stdout = '';
   try {
-    stdout = execFileSync('bash', [CLERK, '--intent-file', intent], {
+    stdout = execFileSync('bash', [CLERK, ...(argv || ['--intent-file', intent])], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, NM_BIN: bin, ARTIFACTS_DIR: dir, NM_CLERK_LOG: path.join(dir, 'nm.log'), ...env },
@@ -161,6 +162,82 @@ test('an unfamiliar gate status is failed rather than guessed at', () => {
   assert.equal(r.outcome, 'failed');
   assert.match(r.stdout, /unknown gate status: awaiting_something_new/);
   assert.equal(r.calls.length, 1, 'it answered nothing');
+});
+
+// ---------- --respond: the human coming back ----------
+
+test('--respond fix answers the parked gate by id and drives the rest to passed', () => {
+  // What run one actually left behind: a gate parked on two ask-user findings,
+  // and a lieutenant who ruled they are mechanical. From there it is the
+  // clerk's ordinary job again — the fix_review that follows is auto-fix.
+  const r = run(
+    [fixture('gate-fix-review'), fixture('outcome-passed')],
+    {},
+    ['--respond', 'fix', '--findings', 'lint-1,lint-2']
+  );
+
+  assert.equal(r.status, 0);
+  assert.equal(r.outcome, 'passed');
+  assert.equal(r.escalation, null);
+
+  // No `axi run` — the run was already open. The decision IS the first call.
+  assert.equal(r.calls[0], 'axi respond --action fix --findings lint-1,lint-2');
+  assert.equal(
+    r.calls[1],
+    'axi respond --action fix --findings committed-pycache-artifacts,manual-raises-assertion'
+  );
+  assert.equal(r.calls.filter(c => c.startsWith('axi run')).length, 0);
+});
+
+test('--respond approve needs no findings', () => {
+  const r = run([fixture('outcome-passed')], {}, ['--respond', 'approve']);
+
+  assert.equal(r.outcome, 'passed');
+  assert.equal(r.calls.length, 1);
+  assert.equal(r.calls[0], 'axi respond --action approve');
+});
+
+test('--respond skip is passed through as its own action', () => {
+  const r = run([fixture('outcome-passed')], {}, ['--respond', 'skip']);
+
+  assert.equal(r.outcome, 'passed');
+  assert.equal(r.calls[0], 'axi respond --action skip');
+});
+
+test('--respond re-escalates when the answered gate hands back another ask-user', () => {
+  // The lieutenant's call did not end it: the next gate asks again. The run
+  // must park again rather than approve something nobody ruled on.
+  const r = run([fixture('gate-ask-user')], {}, ['--respond', 'fix', '--findings', 'lint-1']);
+
+  assert.equal(r.status, 0);
+  assert.equal(r.outcome, 'escalated');
+  assert.match(r.escalation, /ask-user finding/);
+  assert.equal(r.calls.length, 1, 'it answered nothing after the human’s own decision');
+});
+
+test('--respond keeps the fix-round cap', () => {
+  const r = run([fixture('gate-fix-review')], {}, ['--respond', 'fix', '--findings', 'lint-1']);
+
+  assert.equal(r.status, 0);
+  assert.equal(r.outcome, 'failed');
+  assert.match(r.stdout, /fix-round cap \(3\) reached at gate fix_review/);
+});
+
+test('an unknown --respond action is failed, not sent', () => {
+  const r = run([fixture('outcome-passed')], {}, ['--respond', 'merge-it']);
+
+  assert.equal(r.status, 0);
+  assert.equal(r.outcome, 'failed');
+  assert.match(r.stdout, /--respond takes fix, approve or skip/);
+  assert.equal(r.calls.length, 0);
+});
+
+test('--respond and --intent-file together is refused rather than half-honoured', () => {
+  const r = run([fixture('outcome-passed')], {}, ['--respond', 'approve', '--intent-file', '/dev/null']);
+
+  assert.equal(r.status, 0);
+  assert.equal(r.outcome, 'failed');
+  assert.equal(r.calls.length, 0);
 });
 
 // ---------- the parser ----------
