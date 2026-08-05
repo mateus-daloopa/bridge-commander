@@ -94,6 +94,7 @@ export class Panel {
     this.face = new Image({
       width: cm(barM * 0.72), height: cm(barM * 0.72), flexShrink: 0,
       borderRadius: cm(0.008), display: 'none', objectFit: 'fill',
+      borderWidth: cm(0.0014), borderColor: COL.rim, borderOpacity: 0.85,
     });
     inert(this.face);
 

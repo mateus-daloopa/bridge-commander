@@ -123,6 +123,7 @@ export class BoardPanel extends Panel {
     const face = new Image({
       width: cm(W.sizeForArc(3.4, D)), height: cm(W.sizeForArc(3.4, D)),
       flexShrink: 0, borderRadius: cm(0.005), display: 'none', objectFit: 'fill',
+      borderWidth: cm(0.0012), borderColor: COL.rim, borderOpacity: 0.8,
     });
     const title = new Text({
       text: '', flexGrow: 1, flexShrink: 1, flexBasis: 0, overflow: 'hidden',

@@ -10,13 +10,22 @@
 // The arc runs from 0° at the ends to +5° in the middle, above the shelves and
 // never higher: looking up is the fastest route to a sore neck.
 //
-// Nothing here breathes. Idle motion, twitch-per-event and the working states
-// are the last card in this line and they need this one still underneath.
+// And they are ALIVE. Each berth reads the board's own liveness — a running
+// worker, a card waiting on the captain, an unanswered reply — and moves on it:
+// a bob while a worker of theirs is running, a lift and a pulse when something
+// of theirs wants him, and dead stillness otherwise. Motion driven by real
+// state, never by a spinner: `world.md` is blunt that an object which never
+// moves is furniture, and that a dead process is a still object, which beats
+// any status string because it cannot go stale.
+//
+// Walking in and looking once should answer "who needs me", which is the only
+// question he ever really asks this board.
 
 import * as THREE from 'three';
 import * as W from './world.js';
 import { root, Container, Text, Image, COL, cm, fontFor, inert, safe } from './kit.js';
 import { avatarTexture, hasAvatar } from './avatars3d.js';
+import { crewLiveness, motionAt, SETTLE_S } from './liveness.js';
 import { Target } from './hover.js';
 
 export class Agents {
@@ -34,17 +43,49 @@ export class Agents {
     g.lookAt(0, W.EYE, 0);
     this.group.add(g);
 
-    // A physically-shaded ball, not a flat one. Under the sky's image-based
-    // light this picks up the sun on one side, the sky on top and the deck
-    // underneath — which is the whole difference between a sphere and a
-    // coloured disc, and it is what made these read as placeholders before.
-    const ball = new THREE.Mesh(
-      new THREE.SphereGeometry(W.AGENT.diaM / 2, 32, 24),
-      new THREE.MeshStandardMaterial({
-        color: COL.faint, roughness: 0.28, metalness: 0.05, envMapIntensity: 1.1,
-      }),
-    );
+    // A PORTRAIT, not a ball. The berth used to be a shaded sphere, which was
+    // an improvement on a flat disc and still a thing rather than a person —
+    // and a sphere cannot tell you which way it is turned, so it bought no
+    // orientation either. A face looking back does both jobs: it says who, and
+    // it says it is facing you.
+    //
+    // The disc is `ball` throughout because the hover machinery scales and
+    // brightens whatever is called that, and renaming it would have been a
+    // change to six other places for no gain.
+    const R = W.AGENT.diaM / 2;
+    const ball = new THREE.Group();
     g.add(ball);
+
+    // The lieutenant's colour, as the rim around the portrait. Colour never
+    // travels alone and here it is the one that never goes missing: an avatar
+    // is optional, a colour is not, so the ring is what a crewless-of-avatars
+    // board still reads by.
+    const rim = new THREE.Mesh(
+      new THREE.TorusGeometry(R * 0.99, R * 0.13, 10, 40),
+      new THREE.MeshStandardMaterial({ color: COL.faint, roughness: 0.35, metalness: 0.1, envMapIntensity: 1.1 }),
+    );
+    ball.add(rim);
+
+    // The plate behind the face, so a berth with no avatar is still an object
+    // and not a floating ring — and so the portrait has something opaque under
+    // it rather than the sky.
+    const backing = new THREE.Mesh(
+      new THREE.CircleGeometry(R * 0.95, 32),
+      new THREE.MeshStandardMaterial({ color: COL.panel, roughness: 0.6, metalness: 0.0 }),
+    );
+    backing.position.z = -0.002;
+    ball.add(backing);
+
+    const portrait = new THREE.Mesh(
+      new THREE.CircleGeometry(R * 0.9, 32),
+      // Basic, not standard: a photograph of a face lit AGAIN by the room's sun
+      // comes out with a bright side and a dark side, which reads as a badly
+      // exposed picture rather than as a person. It is already lit; it wants to
+      // be shown, not shaded.
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true }),
+    );
+    portrait.visible = false;
+    ball.add(portrait);
 
     // The drawn sphere is 5.16° and the thing that answers a ray is 6.06°, so
     // the collider is its own geometry rather than the ball itself. It draws
@@ -110,6 +151,12 @@ export class Agents {
       marginRight: cm(W.sizeForArc(0.5, at.dist)),
       borderRadius: cm(0.006), flexShrink: 0, display: 'none',
       objectFit: 'fill',
+      // A photograph is not a UI shape and cannot be held to the 3:1 floor — that
+      // would mean recolouring somebody's portrait. What CAN be held to it is
+      // the face's own edge, so it gets the same rim every other shape in this
+      // room is delineated by. Measured against the plate: a dark avatar came
+      // out at 1.53:1 and its rim is 5.9:1.
+      borderWidth: cm(0.0012), borderColor: COL.rim, borderOpacity: 0.85,
     });
     inert(face);
     plate.add(face);
@@ -135,11 +182,19 @@ export class Agents {
       const hot = s === 'contact' || s === 'held';
       const lit = s !== 'idle';
       target._want = s === 'idle' || s === 'released' ? 1 : (hot ? W.STEP * 1.03 : W.STEP);
-      ball.material.emissive.set(hot ? '#2a5f7a' : (lit ? '#16303f' : '#000000'));
+      // The rim carries the hover, because it is the part that is always there.
+      rim.material.emissive.set(hot ? '#2a5f7a' : (lit ? '#16303f' : '#000000'));
       spot.visible = lit;
     };
 
-    return { i, at, group: g, ball, hit, spot, ui, plate, face, label, target, lt: null };
+    return {
+      i, at, group: g, ball, rim, backing, portrait, hit, spot, ui, plate, face, label, target,
+      lt: null,
+      // Fixed per berth so the crew never pulses in unison. Irrational stride so
+      // no two of the eight land in step with each other either.
+      phase: i * 2.399963,
+      state: 'idle', lift: 0, baseY: at.pos.y,
+    };
   }
 
   // Who sits where. `index` is the lieutenant's place in the board's own roster,
@@ -152,10 +207,16 @@ export class Agents {
       if (slot < 0) return;
       const s = this.slots[slot];
       s.lt = lt;
-      s.ball.material.color.set(W.agentColour(lt.color));
+      s.rim.material.color.set(W.agentColour(lt.color));
       s.label.setProperties({ text: safe(lt.name || lt.id) });
       const tex = avatarTexture(lt.avatar);
       s.face.setProperties(tex ? { src: tex, display: 'flex' } : { display: 'none' });
+      // No avatar means the plate shows through in the owner's colour — the
+      // room as it was, which is exactly what "absent" is documented to mean.
+      s.portrait.visible = !!tex;
+      if (tex) s.portrait.material.map = tex;
+      s.backing.material.color.set(tex ? COL.panel : W.agentColour(lt.color));
+      s.portrait.material.needsUpdate = true;
     });
     for (const s of this.slots) {
       const on = !!s.lt;
@@ -173,5 +234,32 @@ export class Agents {
     }
   }
 
-  tick(now) { for (const s of this.slots) s.target.tick(now); }
+  tick(now) {
+    const t = now / 1000;
+    for (const s of this.slots) {
+      s.target.tick(now);
+      if (!s.lt) continue;
+      const m = motionAt(s.state, t, s.phase);
+      // The lift eases; the bob does not need to, because it is already a sine
+      // and starts from zero. `dt` is taken from the frame rather than assumed,
+      // so a dropped frame moves things the right distance instead of stalling.
+      const dt = Math.min(0.1, (now - (this._last || now)) / 1000);
+      const want = W.sizeForArc(m.liftDeg, s.at.dist);
+      s.lift += (want - s.lift) * Math.min(1, dt / SETTLE_S);
+      s.group.position.y = s.baseY + s.lift + W.sizeForArc(m.bobDeg, s.at.dist);
+      // The pulse rides the rim, which is the part that is always there — an
+      // avatar is optional and a colour is not.
+      if (m.glow > 0) s.rim.material.emissive.setScalar(m.glow * 0.42);
+      else if (s.target.state === 'idle') s.rim.material.emissive.setScalar(0);
+    }
+    this._last = now;
+  }
+
+  // Read the board's liveness into the berths. Called from the same refresh that
+  // repaints everything else, so the room is never more than five seconds
+  // behind what the board knows.
+  paintLiveness(doc) {
+    const live = crewLiveness(doc);
+    for (const s of this.slots) s.state = s.lt ? (live.get(s.lt.id) || 'idle') : 'idle';
+  }
 }

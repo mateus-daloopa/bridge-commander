@@ -421,6 +421,97 @@ test('the board is the escape hatch: every card, filterable, and each row pressa
   assert.match(src, /onCard/, 'a row opens the card it names');
 });
 
+// ---- the crew is alive, and on real state ----------------------------------
+
+test('a berth reads the board rather than a spinner', async () => {
+  const L = await load('liveness.js');
+  const lt = { id: 'monica', chat: [] };
+  const card = (over) => Object.assign({ owner: 'monica', status: { worker: {}, unread: false } }, over);
+
+  assert.strictEqual(L.livenessOf(lt, { cards: [] }), 'idle',
+    'nothing happening is idle, and idle is the state the others are legible against');
+
+  assert.strictEqual(L.livenessOf(lt, {
+    cards: [card({ status: { worker: { state: 'working' }, unread: false } })],
+  }), 'working');
+
+  assert.strictEqual(L.livenessOf(lt, {
+    cards: [card({ status: { worker: { state: 'needs-you' }, unread: false } })],
+  }), 'wants-you');
+
+  assert.strictEqual(L.livenessOf(lt, {
+    cards: [card({ status: { worker: {}, unread: true } })],
+  }), 'wants-you', 'a timeline he has not read is a thing waiting on him');
+
+  // Precedence, and it is not alphabetical: a lieutenant both running a worker
+  // AND sitting on something unread is one he needs to look at. The louder
+  // state is never masked by the busier one.
+  assert.strictEqual(L.livenessOf(lt, {
+    cards: [
+      card({ status: { worker: { state: 'working' }, unread: false } }),
+      card({ status: { worker: { state: 'needs-you' }, unread: false } }),
+    ],
+  }), 'wants-you');
+
+  // Another lieutenant's card is another lieutenant's problem.
+  assert.strictEqual(L.livenessOf(lt, {
+    cards: [Object.assign(card({ status: { worker: { state: 'working' }, unread: false } }), { owner: 'rex' })],
+  }), 'idle');
+});
+
+test('the last word being theirs is a thing waiting on him — until he has read it', async () => {
+  const { unansweredReply } = await load('liveness.js');
+  const lt = (last) => ({ id: 'monica', chat: [{ author: 'user', text: 'x', ts: '2026-01-01T00:00:00Z' }, last] });
+  const said = { author: 'Monica', text: 'y', ts: '2026-01-02T00:00:00Z' };
+  const reads = (ts) => ({ user: { threads: { 'lieutenant:monica': ts } } });
+
+  assert.ok(unansweredReply(lt(said), reads('2026-01-01T12:00:00Z')), 'unread reply');
+  assert.ok(!unansweredReply(lt(said), reads('2026-01-03T00:00:00Z')), 'he has read it');
+  // Never opened at all counts as unread, which is the honest reading: he has
+  // not seen it, and a thread he has never looked at is exactly the one most
+  // likely to be waiting on him.
+  assert.ok(unansweredReply(lt(said), {}), 'a thread with no read marker is unread');
+  // The captain having the last word is never something waiting on the captain.
+  assert.ok(!unansweredReply(lt({ author: 'user', text: 'z', ts: '2026-01-02T00:00:00Z' }), reads('2026-01-01T00:00:00Z')));
+  assert.ok(!unansweredReply({ id: 'x', chat: [] }, reads('2026-01-01T00:00:00Z')), 'an empty chat says nothing');
+});
+
+test('nothing in the crew flickers, and idle really is still', async () => {
+  const L = await load('liveness.js');
+  for (const [state, m] of Object.entries(L.MOTION)) {
+    // The periphery is where flicker is felt hardest and this room is mostly
+    // periphery, so everything stays an order of magnitude under 3 Hz.
+    assert.ok(m.hz <= 0.3 * 3, `${state} moves at ${m.hz} Hz, too near the flicker floor`);
+  }
+  assert.strictEqual(L.MOTION.idle.hz, 0, 'idle has to be STILL — it is the signal');
+  assert.strictEqual(L.MOTION.idle.liftDeg, 0);
+  // Only the state that wants him leaves the rank. That break in the line is
+  // what makes it findable without reading anything.
+  assert.ok(L.MOTION['wants-you'].liftDeg > 0);
+  assert.strictEqual(L.MOTION.working.liftDeg, 0);
+  assert.ok(L.MOTION['wants-you'].pulse > 0 && L.MOTION.working.pulse === 0);
+
+  // A berth at rest sits exactly where world.js puts it — the motion is an
+  // offset from the geometry, never a replacement for it.
+  const at0 = L.motionAt('idle', 12.34, 1.1);
+  assert.strictEqual(at0.bobDeg, 0);
+  assert.strictEqual(at0.liftDeg, 0);
+  assert.strictEqual(at0.glow, 0);
+
+  // And two berths never move in unison, which is the difference between eight
+  // individuals and one system animation.
+  const a = L.motionAt('working', 3.0, 0);
+  const b = L.motionAt('working', 3.0, 2.399963);
+  assert.ok(Math.abs(a.bobDeg - b.bobDeg) > 1e-6, 'two berths in step reads as a spinner');
+
+  // Every amplitude is small enough to be peripheral rather than distracting:
+  // under a degree and a half of arc at the berth's own distance.
+  for (const [state, m] of Object.entries(L.MOTION)) {
+    assert.ok(m.bobDeg <= 1.5, `${state} bobs ${m.bobDeg}°, which is waving`);
+    assert.ok(m.liftDeg <= 3.0, `${state} lifts ${m.liftDeg}°, which is leaving`);
+  }
+});
+
 // ---- type carries its own background --------------------------------------
 
 test('no string in the room is drawn straight onto the world', async () => {

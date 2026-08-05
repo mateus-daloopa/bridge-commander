@@ -175,6 +175,7 @@ function openCard(card) {
 function repaint() {
   const lts = new Map((doc.lieutenants || []).map((l) => [l.id, l]));
   agents.paint(doc);
+  agents.paintLiveness(doc);
   // An open chat follows the board: the refresh is what makes a reply arrive
   // while he is standing there, rather than on the next time he opens it.
   const cardsById = new Map((doc.cards || []).map((c) => [c.id, c]));
