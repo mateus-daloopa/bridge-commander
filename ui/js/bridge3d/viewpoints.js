@@ -60,7 +60,8 @@ const ARC = {
   heightM: W.sizeForArc(W.AGENT.riseDeg, W.AGENT.distM) + W.AGENT.diaM,
 };
 
-const LIST = W.listPanel();
+const BOARD = W.pointAt(0, W.BOARD.elevDeg, W.BOARD.distM);
+const BOARD_SIZE = W.boardSize();
 const PLATE = W.plate();
 const DECAL = W.decalAt(1);
 
@@ -104,17 +105,17 @@ export const VIEWPOINTS = [
   },
   {
     name: 'landmarks', scene: 'world',
-    why: 'the floor: a baked decal under each shelf carrying its column name, and the plate that opens the list. The layout that lost in the research lost for lacking exactly these',
+    why: 'the floor: a baked decal under each shelf carrying its column name, and the mat that opens the board. The layout that lost in the research lost for lacking exactly these',
     eye: HERE,
     look: at(DECAL.pos), floor: true,
     frames: { panel: { widthM: DECAL.widthM, heightM: DECAL.depthM }, at: DECAL.pos },
   },
   {
-    name: 'list', scene: 'list',
-    why: 'the escape hatch, open: every card, searchable, one gesture away — because spatial memory failing is expected rather than exceptional',
+    name: 'board', scene: 'board',
+    why: 'the board open: every card, filterable, and each row a target the size of a target — can he read a title from where he stands, and is there air between two rows he might press',
     eye: HERE,
-    look: at(LIST.pos),
-    frames: { panel: { widthM: LIST.widthM, heightM: LIST.heightM }, at: LIST.pos },
+    look: at(BOARD),
+    frames: { panel: BOARD_SIZE, at: BOARD },
   },
   {
     name: 'chat', scene: 'chat',
@@ -145,13 +146,13 @@ const mat = W.plate();
 export const PROBES = [
   { name: 'a card slot', yaw: -slot.az, pitch: slot.el, expect: 'slot' },
   { name: 'a lieutenant', yaw: -agent.az, pitch: agent.el, expect: 'lieutenant' },
-  { name: 'the list mat', yaw: -mat.azimuth, pitch: mat.elevation, expect: 'list-plate' },
+  { name: 'the board mat', yaw: -mat.azimuth, pitch: mat.elevation, expect: 'list-plate' },
 ];
 
 // Everywhere the room actually stands something — what a viewpoint is allowed to
 // be aimed at. A viewpoint pointed anywhere else is a photograph of the floor.
 export function places() {
-  const out = [LIST.pos, PLATE.pos, { x: 0, y: W.EYE, z: -W.SHELF.radius }];
+  const out = [BOARD, PLATE.pos, { x: 0, y: W.EYE, z: -W.SHELF.radius }];
   // The panel slots. Nothing stands in them until he opens something, but they
   // are where a window lands, so a shot aimed at one is a shot of the room.
   for (const az of W.PANEL_SLOTS) out.push(W.panelAt(az).pos);

@@ -463,20 +463,42 @@ test('a shelf shows the active work and the tail goes to the list, in the board�
   assert.strictEqual(W.PER_SHELF, W.SLOT.cols * W.SLOT.rows);
 });
 
-test('the escape hatch exists, is flat, and stands where a panel is read', async () => {
+test('the board is the escape hatch: every card, filterable, and each row pressable', async () => {
   const W = await load('world.js');
-  const p = W.listPanel();
-  assert.ok(p.distM >= 1.0 && p.distM <= W.FAR, `the list stands at ${p.distM} m`);
-  const centre = -p.centreElevDeg;
-  assert.ok(centre >= 10 && centre <= 20, `the list is centred ${centre}° below the horizon`);
-  assert.ok(p.heightDeg / 2 - centre <= W.RISE, 'the list runs up over the horizon');
-  // Its rows are read, not pressed — so the only thing on it held to the hit
-  // floor is its own controls, and those are sized from the distance it stands.
-  const row = W.listRow();
-  assert.ok(Math.abs(row.heightM - W.sizeForArc(W.BUILD.hit, p.distM)) < 1e-12);
-  const src = fs.readFileSync(path.join(UI, 'list.js'), 'utf8');
-  assert.match(src, /new Input\(/, 'the list is searchable');
+  assert.ok(W.BOARD.distM >= W.NEAR && W.BOARD.distM <= W.FAR,
+    `the board stands at ${W.BOARD.distM} m, outside the comfort band`);
+  const centre = -W.BOARD.elevDeg;
+  assert.ok(centre >= 10 && centre <= 20, `the board is centred ${centre}° below the horizon`);
+  const top = W.BOARD.elevDeg + W.BOARD.heightDeg / 2;
+  const bottom = W.BOARD.elevDeg - W.BOARD.heightDeg / 2;
+  assert.ok(top <= W.RISE, `the board reaches ${top.toFixed(1)}°, over the +${W.RISE}° ceiling`);
+  assert.ok(bottom >= -W.SINK, `the board reaches ${bottom.toFixed(1)}°, under the -${W.SINK}° floor`);
+  assert.ok(W.BOARD.widthDeg / 2 <= 45, 'the board runs past the shoulders');
+
+  // Its rows ARE pressed — unlike the flat list this replaced, whose rows were
+  // read — so each one is the padded hit floor tall with clear air beside it,
+  // and the count of them falls out of the height rather than being declared.
+  const rows = W.boardRows();
+  assert.ok(rows >= 4, `${rows} rows is not a board`);
+  assert.ok(rows * W.PITCH <= W.BOARD.heightDeg - 2 * W.BUILD.hit + 1e-9,
+    'the rows do not fit under the bar and the filter at the lattice pitch');
+  assert.ok(rows * W.BOARD.cols >= 8, 'fewer than eight cards visible is a keyhole');
+  // And a title has to survive the row it sits in: 45 characters is the floor
+  // for a card title, below which he is guessing from a prefix.
+  const rowDeg = W.BOARD.widthDeg / W.BOARD.cols;
+  assert.ok(Math.floor(rowDeg / (W.TYPE.meta * 0.494)) >= 45,
+    `a row holds ${Math.floor(rowDeg / (W.TYPE.meta * 0.494))} characters of title`);
+
+  // A row is a target, so the arc it covers has to clear the same floor as
+  // every other target in the room — measured at the distance the board stands.
+  const rowW = W.boardSize().widthM / W.BOARD.cols;
+  assert.ok(W.arcDeg(rowW, W.BOARD.distM) >= W.BUILD.hit,
+    'a row is narrower than the hit floor');
+
+  const src = fs.readFileSync(path.join(UI, 'board.js'), 'utf8');
+  assert.match(src, /new Input\(/, 'the board is filterable');
   assert.match(src, /overflow: 'scroll'/, 'every card, which means it scrolls');
+  assert.match(src, /onCard/, 'a row opens the card it names');
 });
 
 // ---- the six states -------------------------------------------------------
@@ -612,10 +634,10 @@ test('every viewpoint is aimed at something the room really stands there', async
     const at = v.frames.at;
     assert.ok(where.some((p) => near(p.x || 0, at.x || 0) && near(p.y, at.y) && near(p.z, at.z)),
       `${v.name} frames (${at.x}, ${at.y}, ${at.z}) and nothing stands there`);
-    assert.ok(['world', 'list', 'chat'].includes(v.scene), `${v.name} wants an unknown scene`);
+    assert.ok(['world', 'board', 'chat'].includes(v.scene), `${v.name} wants an unknown scene`);
     assert.ok(v.why && v.why.length > 20, `${v.name} does not say what it is for`);
   }
-  assert.ok(VIEWPOINTS.some((v) => v.scene === 'list'), 'nothing photographs the escape hatch');
+  assert.ok(VIEWPOINTS.some((v) => v.scene === 'board'), 'nothing photographs the escape hatch');
   assert.ok(VIEWPOINTS.some((v) => v.scene === 'chat'),
     'nothing photographs a conversation, which is the thing he actually came here to do');
   assert.ok(VIEWPOINTS.some((v) => v.floor), 'nothing photographs the landmarks, which is the thing most likely to be missing');

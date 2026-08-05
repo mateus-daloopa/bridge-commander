@@ -142,12 +142,6 @@ export const AGENT_ORDER = [3, 4, 2, 5, 1, 6, 0, 7];
 // abstraction with no physical anchor gets read as a map of something else.
 export const DECAL = { radiusM: 1.37, depthM: 0.20 };
 
-// The escape hatch. Spatial memory failing is expected rather than exceptional,
-// so every card is one gesture away in a flat list — and a list is a panel,
-// because nobody in twenty-seven years of immersive analytics has made text
-// spatial and the three vendors say the same thing independently.
-export const LIST = { distM: 1.2, widthM: 0.90, heightM: 0.70, centreElevDeg: -15 };
-
 // And the thing you point at to summon it: a mat on the floor, nearer than the
 // ring of decals, dead ahead. It is the one thing in the room that sits below
 // the band everything readable is held to, and that is deliberate — the whole
@@ -200,6 +194,47 @@ export const PANEL = {
 // his business, not the room's: once he places one himself, the room never
 // touches it again, and he can carry as many as his attention will hold.
 export const PANEL_SLOTS = [-17.5, 17.5];
+
+// The board is not a hand panel and it cannot be one. Its rows are things he
+// PRESSES, so each is the 6.06° hit floor tall with 1.66° of air beside it —
+// and a 34° panel has room for three of those, which is not a board, it is a
+// keyhole. So the board gets its own surface: wider, taller, and a little
+// further out, carrying two columns of five.
+//
+// 56° x 44° at 1.35 m, centred 13° below the horizon: it spans ±28° of azimuth
+// and -35° to +9° of elevation, which is the TALLEST a surface can be in this
+// room — one degree under the +10° ceiling and exactly on the -35° floor. Two
+// columns of four, because at the 7.72° lattice pitch that is what fits once
+// the bar and the filter have taken their two 6.06° hit floors out of the
+// height, and eight is what is left.
+//
+// Eight of sixty-four sounds thin and is not: the rows are newest-first, nine
+// cards on the live board were touched in the last day, and the filter is one
+// field away. A third column would buy twelve rows at 18.7° each — 32
+// characters of title instead of 47 — and a title he has to guess at is worse
+// than four fewer rows.
+export const BOARD = {
+  distM: 1.35,
+  elevDeg: -13,
+  tiltDeg: 15,
+  widthDeg: 56,
+  heightDeg: 44,
+  cols: 2,
+};
+
+export function boardSize() {
+  return {
+    widthM: sizeForArc(BOARD.widthDeg, BOARD.distM),
+    heightM: sizeForArc(BOARD.heightDeg, BOARD.distM),
+  };
+}
+
+// How many rows fit, at the lattice pitch, in whatever height is left once the
+// bar and the filter have taken their hit floors.
+export function boardRows() {
+  const body = BOARD.heightDeg - 2 * BUILD.hit;
+  return Math.max(1, Math.floor(body / PITCH));
+}
 
 export function panelSize() {
   return {
@@ -476,22 +511,7 @@ export function agentColour(hex) {
   return '#' + ch.map((v) => v.toString(16).padStart(2, '0')).join('');
 }
 
-// ---- the panel and its plate ----------------------------------------------
-
-export function listPanel() {
-  return {
-    ...LIST,
-    pos: pointAt(0, LIST.centreElevDeg, LIST.distM),
-    widthDeg: arcDeg(LIST.widthM, LIST.distM),
-    heightDeg: arcDeg(LIST.heightM, LIST.distM),
-  };
-}
-
-// A row in the list is a target like anything else, so its height is the hit
-// floor measured at the distance the panel stands.
-export function listRow() {
-  return { heightM: sizeForArc(BUILD.hit, LIST.distM), gapM: sizeForArc(BUILD.gap, LIST.distM) };
-}
+// ---- the mat on the floor --------------------------------------------------
 
 export function plate() {
   const r = PLATE.radiusM;

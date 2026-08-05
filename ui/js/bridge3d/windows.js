@@ -48,6 +48,10 @@ export class Windows {
   // pick up.
   placeFree(panel) {
     if (panel.placed) return panel;
+    // A panel with a home of its own is furniture, not a window looking for a
+    // free slot: the board is one surface, dead ahead, and putting it in a
+    // hand-panel slot leaves it off to one side and turned away from him.
+    if (panel.homeAz != null) { panel.place(panel.homeAz); return panel; }
     const taken = new Set(this.open.filter((p) => p !== panel && p.open && !p.placed).map((p) => p.slot));
     const free = W.PANEL_SLOTS.find((s) => !taken.has(s));
     if (free !== undefined) { panel.place(free); return panel; }

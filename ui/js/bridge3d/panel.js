@@ -7,9 +7,14 @@
 //
 // Every size on it is authored in DEGREES at the distance it stands — see
 // `world.js` for the figures and the `vr-design` skill for why they are those
-// figures. At 1.10 m and 34° x 28° the body type is 1.4° of em box, which is
-// 49 characters across and 14 lines down. That number is the whole design: it
-// is what makes a card body readable rather than a scrolling chore.
+// figures. At 1.10 m and 34° x 34° the body type is 1.4° of em box, which is
+// 49 characters across and eleven lines down once the bar and the composer have
+// taken their two 6.06° hit floors. That number is the whole design: it is what
+// makes a card body readable rather than a scrolling chore.
+//
+// The geometry arrives as a `spec` rather than being baked in, because the
+// board is the same machinery at a different size: its rows are things he
+// PRESSES, so each needs the 6° hit floor, and three of those is not a board.
 //
 // Three parts, and the split is functional rather than decorative:
 //
@@ -26,15 +31,23 @@ import * as W from './world.js';
 import { root, Container, Text, COL, cm, fontFor, inert, safe } from './kit.js';
 import { Target } from './hover.js';
 
-const SIZE = W.panelSize();
-
 // The bar is a target, so it is the hit floor tall at the distance the panel
 // stands — 6.06°, which at 1.10 m is 116 mm. That is generous for a title bar
 // and it is not negotiable: it is the thing he has to hit to move the window.
 const BAR_DEG = W.BUILD.hit;
 
 export class Panel {
-  constructor({ name = 'panel', title = '', subtitle = '', tint = COL.accent, onClose = null }) {
+  // `spec` is the panel's own geometry — distance, elevation, tilt and size in
+  // degrees. It defaults to the hand panel in world.js; the board hands in its
+  // own, because a surface whose rows are targets cannot be the size of a
+  // surface you only read.
+  constructor({ name = 'panel', title = '', subtitle = '', tint = COL.accent, onClose = null, spec = W.PANEL }) {
+    this.spec = spec;
+    const SIZE = {
+      widthM: W.sizeForArc(spec.widthDeg, spec.distM),
+      heightM: W.sizeForArc(spec.heightDeg, spec.distM),
+    };
+    this.size = SIZE;
     this.name = name;
     this.placed = false;          // has he moved it himself? then the room never will
     this.slot = null;
@@ -45,8 +58,8 @@ export class Panel {
     this.group = new THREE.Group();
     this.group.visible = false;
 
-    const pad = W.sizeForArc(1.0, W.PANEL.distM);
-    const barM = W.sizeForArc(BAR_DEG, W.PANEL.distM);
+    const pad = W.sizeForArc(1.0, spec.distM);
+    const barM = W.sizeForArc(BAR_DEG, spec.distM);
 
     this.ui = root({
       sizeX: SIZE.widthM, sizeY: SIZE.heightM,
@@ -68,18 +81,18 @@ export class Panel {
 
     // The owner's colour, always beside a name — colour never travels alone.
     this.chip = new Container({
-      width: cm(W.sizeForArc(1.6, W.PANEL.distM)), height: '58%',
+      width: cm(W.sizeForArc(1.6, spec.distM)), height: '58%',
       borderRadius: cm(0.004), backgroundColor: tint, flexShrink: 0,
     });
     inert(this.chip);
 
     const stack = new Container({ flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden' });
     this.title = new Text({
-      text: safe(title), fontSize: fontFor(W.TYPE.head, W.PANEL.distM),
+      text: safe(title), fontSize: fontFor(W.TYPE.head, spec.distM),
       color: COL.text, fontWeight: 'semi-bold', wordBreak: 'keep-all',
     });
     this.subtitle = new Text({
-      text: safe(subtitle), fontSize: fontFor(W.TYPE.meta, W.PANEL.distM),
+      text: safe(subtitle), fontSize: fontFor(W.TYPE.meta, spec.distM),
       color: COL.dim, wordBreak: 'keep-all',
     });
     inert(this.title); inert(this.subtitle); inert(stack);
@@ -92,7 +105,7 @@ export class Panel {
       justifyContent: 'center', alignItems: 'center',
       hover: { backgroundColor: '#2a5f7a' }, active: { backgroundColor: COL.accent },
     });
-    const x = new Text({ text: 'x', fontSize: fontFor(W.TYPE.body, W.PANEL.distM), color: COL.text });
+    const x = new Text({ text: 'x', fontSize: fontFor(W.TYPE.body, spec.distM), color: COL.text });
     inert(x);
     this.closeBox.add(x);
 
@@ -102,7 +115,7 @@ export class Panel {
     this.body = new Container({
       flexGrow: 1, flexDirection: 'column', overflow: 'scroll',
       paddingX: cm(pad), paddingY: cm(pad * 0.7), gap: cm(pad * 0.5),
-      scrollbarWidth: cm(W.sizeForArc(0.4, W.PANEL.distM)),
+      scrollbarWidth: cm(W.sizeForArc(0.4, spec.distM)),
       scrollbarColor: COL.faint, scrollbarOpacity: 0.45,
       scrollbarBorderRadius: cm(0.004),
     });
@@ -142,11 +155,12 @@ export class Panel {
   // OWN horizontal axis. Order matters — tilting in the room's frame instead
   // would make the two outer slots lean sideways.
   place(azDeg) {
-    const at = W.panelAt(azDeg);
+    const s = this.spec;
+    const pos = W.pointAt(azDeg, s.elevDeg, s.distM);
     this.slot = azDeg;
-    this.group.position.set(at.pos.x, at.pos.y, at.pos.z);
+    this.group.position.set(pos.x, pos.y, pos.z);
     this.group.lookAt(0, W.EYE, 0);
-    this.group.rotateX(-W.PANEL.tiltDeg * Math.PI / 180);
+    this.group.rotateX(-s.tiltDeg * Math.PI / 180);
     return this;
   }
 
@@ -173,7 +187,7 @@ export class Panel {
   // rather than rebuilding the panel, which is what the 5 s refresh does.
   addText(text, { size = W.TYPE.body, color = COL.text, weight = undefined } = {}) {
     const t = new Text({
-      text: safe(text), fontSize: fontFor(size, W.PANEL.distM), color,
+      text: safe(text), fontSize: fontFor(size, this.spec.distM), color,
       // Without this every paragraph in a scrolling column is shrunk to fit the
       // container and they all land on top of each other — a wall of overtyped
       // glyphs that looks like a font bug and is a flex bug. A scroll container

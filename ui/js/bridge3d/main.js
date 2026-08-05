@@ -7,10 +7,12 @@
 // floor beneath them, cards as slabs standing in slots, eight lieutenants as
 // spheres at positions that never move, and a ray that lands on any of it.
 //
-// Nothing in here moves yet. Grabbing, breathing, the twitch per event, the card
-// detail panel and the chat are each their own card, and every one of them needs
-// this one still and correct underneath. What this card owes is a world whose
-// geometry is right, measured at the distance each thing actually sits.
+// It is now a room he can work in rather than look at. The lieutenants are the
+// arc above: point at one and its conversation opens as a panel he can read,
+// type into and put where he likes. The mat on the floor opens the board —
+// every card, filterable, one press deep — and a press on a card brings its
+// body and its thread forward on a surface of their own. Squeeze a title bar to
+// pick a window up; once he has placed it, the room never moves it again.
 //
 // Every number is authored in DEGREES and lives in `world.js`; why those are the
 // numbers lives in the `vr-design` skill and nowhere else. See the README beside
@@ -20,10 +22,11 @@ import * as THREE from 'three';
 import * as W from './world.js';
 import { Shelf, Decal } from './shelves.js';
 import { Agents } from './agents.js';
-import { CardList, ListPlate } from './list.js';
+import { ListPlate } from './list.js';
 import { Rays } from './hover.js';
 import { Windows } from './windows.js';
 import { ChatPanel } from './chat.js';
+import { BoardPanel, CardPanel } from './board.js';
 import { Grabs } from './grab.js';
 import { updateRoots, sortTransparent, rootCount, COL } from './kit.js';
 
@@ -101,11 +104,12 @@ for (let i = 0; i < W.SHELF.azimuths.length; i++) {
 const agents = new Agents();
 scene.add(agents.group);
 
-const list = new CardList();
-scene.add(list.group);
-const plate = new ListPlate(() => list.setOpen(!list.open));
+// The mat on the floor ahead. It opens the BOARD — the one surface with every
+// card on it, filterable, one press deep. There is no second flat list any
+// more: two "every card" surfaces in one room is clutter he would have to
+// learn his way around for no gain.
+const plate = new ListPlate(() => openBoard());
 scene.add(plate.group);
-list.setOpen(false);
 
 const rays = new Rays(renderer, scene, camera, renderer.domElement);
 
@@ -137,19 +141,53 @@ function openChat(lt) {
 }
 agents.onSelect = openChat;
 
+// The board: every card, filterable, and one press deep. It is its own size
+// rather than the hand panel's, because its rows are targets and a 34° surface
+// holds three of those.
+function openBoard() {
+  const p = windows.show('board', () => new BoardPanel({
+    onCard: openCard,
+    onClose: (panel) => windows.close(panel),
+  }));
+  p.paint(doc);
+  return p;
+}
+
+// A card, with its body and its thread on one surface — the deliverable and the
+// way to answer it, which are one thing.
+function openCard(card) {
+  const lts = new Map((doc.lieutenants || []).map((l) => [l.id, l]));
+  const cols = new Map((doc.columns || []).map((c) => [c.id, c.title || c.id]));
+  const lt = lts.get(card.owner);
+  const p = windows.show('card:' + card.id, () => new CardPanel({
+    card, tint: W.agentColour(lt && lt.color),
+    onClose: (panel) => windows.close(panel),
+  }));
+  p.setTint(W.agentColour(lt && lt.color));
+  p.paintCard(card, lt, cols.get(card.column));
+  return p;
+}
+
 function repaint() {
   const cols = W.columnsOf(doc);
   const lts = new Map((doc.lieutenants || []).map((l) => [l.id, l]));
   shelves.forEach((s, i) => s.paint(doc, cols[i], lts));
   decals.forEach((d, i) => d.paint(doc, cols[i]));
   agents.paint(doc);
-  list.paint(doc);
   // An open chat follows the board: the refresh is what makes a reply arrive
   // while he is standing there, rather than on the next time he opens it.
+  const cardsById = new Map((doc.cards || []).map((c) => [c.id, c]));
+  const colTitles = new Map((doc.columns || []).map((c) => [c.id, c.title || c.id]));
   for (const p of windows) {
-    if (!p.open || !p.paint) continue;
-    const m = /^lieutenant:(.+)$/.exec(p.key || '');
-    if (m) { const lt = lts.get(m[1]); if (lt) p.paint(lt.chat); }
+    if (!p.open) continue;
+    if (p.key === 'board') { p.paint(doc); continue; }
+    let m = /^lieutenant:(.+)$/.exec(p.key || '');
+    if (m) { const lt = lts.get(m[1]); if (lt) p.paint(lt.chat); continue; }
+    m = /^card:(.+)$/.exec(p.key || '');
+    if (m) {
+      const c = cardsById.get(m[1]);
+      if (c) p.paintCard(c, lts.get(c.owner), colTitles.get(c.column));
+    }
   }
 }
 
@@ -227,8 +265,9 @@ window.addEventListener('pointermove', (e) => {
 window.addEventListener('keydown', (e) => {
   const typing = document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
   if (typing) return;
-  if (e.key === 'l') list.setOpen(!list.open);
-  if (e.key === 'b') windows.closeFront();
+  if (e.key === 'b') openBoard();
+  if (e.key === 'c') { const lts = doc.lieutenants || []; if (lts[0]) openChat(lts[0]); }
+  if (e.key === 'x') windows.closeFront();
 });
 
 window.addEventListener('resize', () => {
@@ -248,7 +287,6 @@ renderer.setAnimationLoop((t) => {
   for (const s of shelves) s.tick(now);
   agents.tick(now);
   plate.tick(now);
-  list.tick(now);
   windows.tick(now);
   grabs.tick(dt);
   updateRoots(dt);
@@ -257,8 +295,8 @@ renderer.setAnimationLoop((t) => {
 
 // The handle the capture script and a console drive the room through.
 window.__bridge = {
-  shelves, decals, agents, list, plate, scene, camera, rays, windows, grabs,
-  openList: (on) => list.setOpen(on),
+  shelves, decals, agents, plate, scene, camera, rays, windows, grabs,
+  openBoard: () => !!openBoard(),
   // The capture script and a console drive the panels through these — a chat
   // that can only be reached by aiming a ray is a chat no test can photograph.
   // Named, or else whoever has actually been talked to — a photograph of an
@@ -273,7 +311,6 @@ window.__bridge = {
     key: p.key, slot: p.slot, placed: p.placed,
     at: W.angleOf(p.group.position),
   })),
-  search: (q) => { list.query = q || ''; list.repaint(); },
   stats: () => ({
     roots: rootCount(),
     calls: renderer.info.render.calls,
