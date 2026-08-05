@@ -33,9 +33,15 @@ export class Agents {
     g.lookAt(0, W.EYE, 0);
     this.group.add(g);
 
+    // A physically-shaded ball, not a flat one. Under the sky's image-based
+    // light this picks up the sun on one side, the sky on top and the deck
+    // underneath — which is the whole difference between a sphere and a
+    // coloured disc, and it is what made these read as placeholders before.
     const ball = new THREE.Mesh(
-      new THREE.SphereGeometry(W.AGENT.diaM / 2, 28, 20),
-      new THREE.MeshLambertMaterial({ color: COL.faint }),
+      new THREE.SphereGeometry(W.AGENT.diaM / 2, 32, 24),
+      new THREE.MeshStandardMaterial({
+        color: COL.faint, roughness: 0.28, metalness: 0.05, envMapIntensity: 1.1,
+      }),
     );
     g.add(ball);
 

@@ -421,6 +421,49 @@ test('the board is the escape hatch: every card, filterable, and each row pressa
   assert.match(src, /onCard/, 'a row opens the card it names');
 });
 
+// ---- the light, and what it costs -----------------------------------------
+
+test('the room is lit by somewhere, not by lights we put in it', async () => {
+  const sky = fs.readFileSync(path.join(UI, 'sky.js'), 'utf8');
+  assert.match(sky, /PMREMGenerator/, 'the sky has to become the environment, or nothing is lit by it');
+  assert.match(sky, /scene\.environment/, 'the environment is what a MeshStandardMaterial samples');
+  assert.match(sky, /ACESFilmicToneMapping/, 'a daylight sky with no tone mapping clips to a white sheet');
+  // The exposure is deliberately under 1: the eye adapts to the brightest thing
+  // in the field, so a sky exposed for its own sake is a sky that makes the
+  // prose in front of it hard to read.
+  const m = /toneMappingExposure = ([0-9.]+)/.exec(sky);
+  assert.ok(m && parseFloat(m[1]) < 1, 'exposure should be under 1 with a bright sky and dark panels');
+  // No shadow maps. It is the most expensive thing a mobile GPU can be asked
+  // for, and the contact gradient under each prop buys the same reading.
+  for (const f of ['sky.js', 'place.js']) {
+    const src = fs.readFileSync(path.join(UI, f), 'utf8');
+    assert.ok(!/castShadow|receiveShadow|shadowMap/.test(src), `${f} asks for a shadow map`);
+  }
+});
+
+test('the place is bounded, and the bound sits under the band he reads in', async () => {
+  const { TERRACE } = await import(path.join(UI, 'place.js')).catch(() => ({}))
+    // place.js pulls three through the page's import map, which node cannot
+    // resolve — so the figures are re-derived from its source rather than
+    // imported, the same way kit.js's are.
+    || {};
+  const src = fs.readFileSync(path.join(UI, 'place.js'), 'utf8');
+  const grab = (k) => parseFloat(new RegExp(k + ':\\s*([0-9.]+)').exec(src)[1]);
+  const wallR = grab('wallR'), wallH = grab('wallH'), deckR = grab('deckR');
+  const W = await load('world.js');
+  assert.ok(deckR >= wallR, 'the deck has to reach the parapet');
+  // A bound you cannot see is not a bound — but a bound that rises into the
+  // reading band is a wall behind every panel. The parapet's top has to sit
+  // below where a panel's lower edge is.
+  const top = Math.atan2(wallH - W.EYE, wallR) * 180 / Math.PI;
+  assert.ok(top < 0, `the parapet tops out at ${top.toFixed(1)}°, over the horizon`);
+  assert.ok(top < W.PANEL.elevDeg + W.PANEL.heightDeg / 2,
+    'the parapet rises through the panels');
+  // And it is far enough away to be scenery rather than something he keeps
+  // walking into: well outside every surface the room opens.
+  assert.ok(wallR > W.BOARD.distM * 2, 'the parapet crowds the board');
+});
+
 // ---- the six states -------------------------------------------------------
 
 test('every interactive thing has six states and a spotlight that closes', async () => {
@@ -460,11 +503,28 @@ test('the canvas-painted room is gone, not left standing beside the new one', as
   for (const f of ['surface.js', 'panels.js', 'room.js', 'faces.js']) {
     assert.ok(!fs.existsSync(path.join(UI, f)), `${f} is still here — there is meant to be one room`);
   }
+  // The rule this protects is about the INTERFACE, not about pixels: the old
+  // room painted its panels onto canvases and then had to convert every size
+  // back to degrees to know whether it was readable. uikit's MSDF text replaced
+  // that, and no surface he reads may go back to it.
+  //
+  // Environment textures are a different thing and are allowed — a sky gradient
+  // and a stone floor are images, not interface, and drawing them beats adding
+  // an HDRI and a texture folder to a repo with no build step. The line is
+  // drawn where it actually matters, below.
+  const UI_MODULES = ['panel.js', 'chat.js', 'board.js', 'list.js', 'agents.js', 'kit.js', 'hover.js'];
+  for (const f of UI_MODULES) {
+    const src = fs.readFileSync(path.join(UI, f), 'utf8');
+    assert.ok(!/getContext\(['"]2d['"]\)/.test(src), `${f} paints a surface he reads by hand`);
+    assert.ok(!/CanvasTexture/.test(src), `${f} hangs a hand-painted canvas on a plane`);
+  }
+  // And nothing anywhere paints TYPE into a texture. That is the actual failure
+  // mode — a label baked into an image has no arc, no font metrics and no way
+  // to be measured, and it is how the old room's text ended up unreadable.
   for (const f of fs.readdirSync(UI)) {
     if (!f.endsWith('.js')) continue;
     const src = fs.readFileSync(path.join(UI, f), 'utf8');
-    assert.ok(!/getContext\(['"]2d['"]\)/.test(src), `${f} still paints a canvas by hand`);
-    assert.ok(!/CanvasTexture/.test(src), `${f} still hangs a hand-painted canvas on a plane`);
+    assert.ok(!/\.fillText\(|\.strokeText\(/.test(src), `${f} paints type into a texture`);
   }
 });
 

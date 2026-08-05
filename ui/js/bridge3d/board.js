@@ -94,12 +94,23 @@ export class BoardPanel extends Panel {
       paddingX: cm(gap * 0.5), paddingY: cm(gap * 0.5),
       flexShrink: 0, display: 'none',
     });
+    // A row is a target, so its region has to be VISIBLE — and in a dark scheme
+    // its fill cannot do that job. Measured on the rendered frame, a row plate
+    // came out 1.03:1 against the panel behind it, and no pair of dark fills can
+    // do better: the +0.05 term in the contrast formula dominates down there, so
+    // 3:1 between two dark plates is arithmetically out of reach. Worse, a plate
+    // light enough to clear 3:1 is a plate its own text cannot clear 4.5:1 on.
+    //
+    // So the shape is carried by the RIM, which is bright and thin — 5.8:1
+    // against the panel, and it costs no legibility because no text sits on it.
     const inner = new Container({
       flexGrow: 1, flexDirection: 'row', alignItems: 'center',
       gap: cm(W.sizeForArc(0.7, D)), paddingX: cm(W.sizeForArc(0.8, D)),
       borderRadius: cm(0.008),
+      borderWidth: cm(0.004), borderColor: COL.rim, borderOpacity: 1,
       backgroundColor: COL.slot, backgroundOpacity: 1,
-      hover: { backgroundColor: COL.barLit }, active: { backgroundColor: '#2a5f7a' },
+      hover: { backgroundColor: COL.barLit, borderColor: COL.accent },
+      active: { backgroundColor: '#2a5f7a', borderColor: COL.accent },
     });
     const chip = new Container({
       width: cm(W.sizeForArc(0.9, D)), height: '64%', flexShrink: 0,

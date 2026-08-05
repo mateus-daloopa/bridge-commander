@@ -32,6 +32,8 @@ import { ChatPanel } from './chat.js';
 import { BoardPanel, CardPanel } from './board.js';
 import { Grabs } from './grab.js';
 import { Sound } from './sound.js';
+import { installSky, installToneMapping } from './sky.js';
+import { buildTerrace, crewInlay } from './place.js';
 import { updateRoots, sortTransparent, rootCount, COL } from './kit.js';
 
 const say = (m) => { const el = document.getElementById('status'); if (el) el.textContent = m; };
@@ -59,68 +61,32 @@ renderer.xr.setReferenceSpaceType('local-floor');
 // placed himself can be anywhere, so the default would blur exactly the prose
 // he is reading. A room of small type pays the GPU instead.
 renderer.xr.setFoveation(0);
+installToneMapping(renderer);
 sortTransparent(renderer);
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(COL.ink);
 // Near at 0.3 m: closer than that a thing is intersecting his face, and nothing
 // he reads is ever meant to be inside 0.5 m anyway.
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.3, 100);
 camera.position.set(0, W.EYE, 0);
 scene.add(camera);
 
-// One hemisphere light and nothing else. A sphere with no shading is a disc, so
-// the room needs SOME light — but dynamic lighting will exceed a mobile GPU and
-// the frame budget here is 11 ms, so it is one baked gradient, no shadows, no
-// point lights, and emissive is the only thing that ever changes.
-scene.add(new THREE.HemisphereLight(0xdfe9f5, 0x0a0f16, 2.1));
+// The sky, and the light it casts. Drawn into a canvas at startup and run
+// through PMREM, so every surface here is lit BY somewhere rather than by
+// lights we placed — see sky.js. One directional sun, one weak bounce, no
+// shadow maps: a shadow map is the most expensive thing a mobile GPU can be
+// asked for and the room buys nothing with it that a baked contact gradient
+// does not.
+const sky = installSky(renderer, scene);
 
-// ---- the ground, aligned to the real floor ---------------------------------
+// ---- the place, aligned to the real floor -----------------------------------
 //
 // Non-negotiable for orientation, and free: the session is `local-floor`, so
-// y = 0 IS the floor he is standing on.
-const ground = new THREE.Mesh(
-  new THREE.CircleGeometry(6, 48),
-  new THREE.MeshBasicMaterial({ color: '#0a1018' }),
-);
-ground.rotation.x = -Math.PI / 2;
-scene.add(ground);
-const grid = new THREE.PolarGridHelper(6, 8, 6, 64, 0x16202c, 0x101823);
-grid.material.opacity = 0.5;
-grid.material.transparent = true;
-scene.add(grid);
-
-// A horizon. Flat black in every direction reads as a void rather than as a
-// room, and a void gives the eye nothing to rest at — which is the difference
-// between a dark room and no room. One inverted sphere with a vertical
-// gradient baked into its vertex colours: no texture, no light, one draw call,
-// and it fades to the floor's own colour at the bottom so the two meet without
-// a seam. It is deliberately almost featureless, because anything with detail
-// in it out there is something the eye will keep going back to.
-const sky = new THREE.SphereGeometry(24, 24, 16);
-const cols = [];
-const pos = sky.getAttribute('position');
-const top = new THREE.Color('#070b12'), bottom = new THREE.Color('#0a1018');
-for (let i = 0; i < pos.count; i++) {
-  const k = Math.min(1, Math.max(0, (pos.getY(i) / 24) * 0.5 + 0.5));
-  const c = bottom.clone().lerp(top, k);
-  cols.push(c.r, c.g, c.b);
-}
-sky.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
-scene.add(new THREE.Mesh(sky, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
-
-// The landmark under the crew. People build accurate mental maps from passive
-// landmarks with no labels at all and cannot navigate abstract position
-// without one, so the arc of lieutenants gets a mark on the real floor beneath
-// it — a ring, drawn where they stand, going nowhere and doing nothing.
-const ring = new THREE.Mesh(
-  new THREE.RingGeometry(W.AGENT.distM - 0.06, W.AGENT.distM, 96, 1, Math.PI * 0.72, Math.PI * 1.56),
-  new THREE.MeshBasicMaterial({ color: COL.decal, transparent: true, opacity: 0.5, side: THREE.DoubleSide }),
-);
-ring.rotation.x = -Math.PI / 2;
-ring.position.y = 0.002;
-scene.add(ring);
+// y = 0 IS the floor he is standing on — and the terrace is built on it rather
+// than floating over it.
+const terrace = buildTerrace(scene);
+scene.add(crewInlay());
 
 // ---- the room's contents ---------------------------------------------------
 
@@ -347,7 +313,7 @@ renderer.setAnimationLoop((t) => {
 
 // The handle the capture script and a console drive the room through.
 window.__bridge = {
-  agents, plate, scene, camera, rays, windows, grabs, sound,
+  agents, plate, scene, camera, rays, windows, grabs, sound, sky,
   openBoard: () => !!openBoard(),
   // The capture script and a console drive the panels through these — a chat
   // that can only be reached by aiming a ray is a chat no test can photograph.
