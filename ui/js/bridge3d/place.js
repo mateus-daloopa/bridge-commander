@@ -22,6 +22,7 @@
 
 import * as THREE from 'three';
 import * as W from './world.js';
+import { GLTFLoader } from '../../vendor/three/loaders/GLTFLoader.js';
 
 // The terrace. 4.90 m to the parapet, which puts its top edge at -4.7° and the
 // deck edge at -16.5° from a 1.45 m eye — so it backs every panel he opens
@@ -177,7 +178,7 @@ export function buildTerrace(scene) {
   posts.instanceMatrix.needsUpdate = true;
   group.add(posts);
 
-  group.add(...planters(contact));
+  planters(contact, group);
   group.add(skyline());
   group.add(seaLevel());
 
@@ -186,60 +187,58 @@ export function buildTerrace(scene) {
 }
 
 // Six planters around the parapet, out of his way and in his peripheral vision.
-// They are the scale reference: a 62 cm pot beside a 18 cm sphere tells the eye
-// what both of them are, which no amount of correct arc can do on its own.
-function planters(contact) {
-  const out = [];
-  // Behind and to the sides — never in the forward arc, where they would sit
-  // behind a panel he is reading.
-  const at = [-150, -105, -60, 60, 105, 150].map((d) => d * Math.PI / 180);
-  const r = TERRACE.wallR - 0.62;
+// They are the scale reference: a real potted plant beside an 18 cm sphere tells
+// the eye what both of them are, which no amount of correct arc can do alone.
+//
+// They used to be a cylinder with four squashed spheres balanced on it, which is
+// what "a plant" looks like when you are forbidden from downloading one. This is
+// a photographed, modelled plant — CC0, Poly Haven — and it is the difference
+// between a room with props in it and a room with placeholders in it.
+//
+// Loaded once and CLONED, not loaded six times: the clones share geometry and
+// materials, so six plants cost six draw calls per mesh rather than six
+// downloads. Instancing them into one call would be better still and is not
+// worth the material rewiring for six objects.
+export const PLANT_URL = '/ui/env/plant/plant.gltf';
+const PLANT_AT = [-150, -105, -60, 60, 105, 150];
 
-  const pots = new THREE.InstancedMesh(
-    new THREE.CylinderGeometry(0.30, 0.24, 0.62, 16),
-    new THREE.MeshStandardMaterial({ color: '#b8b0a2', roughness: 0.85 }),
-    at.length,
-  );
-  // Foliage as a few overlapping spheres per pot, squashed — cheap, and at this
-  // distance a leaf is a lie nobody can check.
-  const perPlant = 4;
-  const leaves = new THREE.InstancedMesh(
-    new THREE.SphereGeometry(0.22, 10, 8),
-    new THREE.MeshStandardMaterial({ color: '#4f7a3f', roughness: 0.9 }),
-    at.length * perPlant,
-  );
-  const shadows = new THREE.Mesh(
+function planters(contact, group) {
+  // The shadows go down immediately — they are ours, they are cheap, and a plant
+  // that arrives without one looks like it is hovering.
+  const shadows = new THREE.Group();
+  const quad = new THREE.Mesh(
     new THREE.PlaneGeometry(1, 1),
     new THREE.MeshBasicMaterial({ map: contact, transparent: true, depthWrite: false }),
   );
-  const shadowGroup = new THREE.Group();
-
-  const m = new THREE.Matrix4();
-  const q = new THREE.Quaternion();
-  const s = new THREE.Vector3();
-  const p = new THREE.Vector3();
-  at.forEach((a, i) => {
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    m.makeTranslation(x, 0.31, z);
-    pots.setMatrixAt(i, m);
-    for (let k = 0; k < perPlant; k++) {
-      const t = (k / perPlant) * Math.PI * 2 + i;
-      p.set(x + Math.cos(t) * 0.16, 0.72 + (k % 2) * 0.20, z + Math.sin(t) * 0.16);
-      s.set(1, 0.72 + (k % 2) * 0.3, 1);
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), t);
-      m.compose(p, q, s);
-      leaves.setMatrixAt(i * perPlant + k, m);
-    }
-    const sh = shadows.clone();
+  const r = TERRACE.wallR - 0.62;
+  for (const deg of PLANT_AT) {
+    const a = deg * Math.PI / 180;
+    const sh = quad.clone();
     sh.rotation.x = -Math.PI / 2;
-    sh.position.set(x, 0.004, z);
-    sh.scale.setScalar(1.15);
-    shadowGroup.add(sh);
+    sh.position.set(Math.cos(a) * r, 0.004, Math.sin(a) * r);
+    sh.scale.setScalar(0.95);
+    shadows.add(sh);
+  }
+  group.add(shadows);
+
+  new GLTFLoader().load(PLANT_URL, (gltf) => {
+    const model = gltf.scene;
+    // Poly Haven models arrive in metres and Y-up, which is what this room is
+    // in — so no unit conversion, only the scale we actually want it at.
+    for (const deg of PLANT_AT) {
+      const a = deg * Math.PI / 180;
+      const p = model.clone(true);
+      p.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+      // Turned to face the middle of the room, and each one a little different
+      // in size: six identical plants at six identical angles reads as wallpaper.
+      p.rotation.y = -a + Math.PI / 2 + (deg / 90);
+      p.scale.setScalar(0.92 + ((Math.abs(deg) / 15) % 3) * 0.06);
+      group.add(p);
+    }
+  }, undefined, (e) => {
+    // No plants is a poorer room, not a broken one.
+    console.warn('the plants did not load:', e);
   });
-  pots.instanceMatrix.needsUpdate = true;
-  leaves.instanceMatrix.needsUpdate = true;
-  out.push(pots, leaves, shadowGroup);
-  return out;
 }
 
 // Far enough away to be scenery and never to be walked to. Its whole job is to

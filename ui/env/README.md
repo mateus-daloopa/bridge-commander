@@ -18,6 +18,7 @@ up waiting for.
 | `sky.hdr` | [Kloofendal 48d Partly Cloudy (Pure Sky)](https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky) | Greg Zaal, Jarod Guest | CC0 |
 | `deck-*.webp` | [Concrete031](https://ambientcg.com/view?id=Concrete031) | ambientCG | CC0 |
 | `wall-*.webp` | [Concrete034](https://ambientcg.com/view?id=Concrete034) | ambientCG | CC0 |
+| `plant/` | [Potted Plant 02](https://polyhaven.com/a/potted_plant_02) | Rico Cilliers | CC0 |
 
 ## How they were prepared
 
@@ -60,6 +61,15 @@ NormalGL, not NormalDX: three.js expects OpenGL-convention normals, and the DX
 one is the same map with its green channel inverted — which looks like the
 lighting is subtly wrong rather than like a bug.
 
+**`plant/`** — the 1k glTF from Poly Haven, with its six JPEG textures re-encoded
+to WebP at 1024² and the `images[].uri` entries in the `.gltf` rewritten to
+match. Diffuse at quality 82, normal and roughness at 90, because a compression
+artefact in a normal map is a dent in the surface. The `.bin` is copied
+unchanged and is 1.85 MB of the 2.39 — geometry, not texture, and the only thing
+here that would benefit from Draco or meshopt if the prop count ever grows.
+
+Loaded once and cloned six times, so the six plants share geometry and materials.
+
 ## The download budget
 
 **Ceiling: 12 MB for the whole environment.** He opens this over wifi, on a
@@ -71,7 +81,8 @@ to appear.
 | `sky.hdr` | 5.45 MB |
 | deck (3 files) | 0.50 MB |
 | wall (3 files) | 0.26 MB |
-| **total** | **6.21 MB** |
+| plant (gltf + bin + 6 textures) | 2.39 MB |
+| **total** | **8.60 MB** |
 
 Everything here is fetched after the first frame — the room paints, and the sky
 and the materials arrive into a room that is already standing. A failed fetch
