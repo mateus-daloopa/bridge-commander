@@ -51,10 +51,18 @@ const ARC = {
   heightM: W.sizeForArc(W.AGENT.riseDeg, W.AGENT.distM) + W.AGENT.diaM,
 };
 
-const BOARD = W.pointAt(0, W.BOARD.elevDeg, W.BOARD.distM);
-// Dead ahead at the board's own distance — where a surface stands when he opens
+// The wall: six flat tiles on a 120° arc. A shot cannot hold 120°, so the
+// board's shot is framed on the two CENTRE lanes — the same reasoning that
+// frames the crew on the middle pair of berths rather than on the whole arc —
+// and a second shot is aimed at lane four, which is the one you have to turn
+// your head for and therefore the one that proves the wall is a wall.
+const LANE = [0, 1, 2, 3, 4, 5].map((i) => W.wallLaneAt(i));
+const LANE_PAIR = { widthM: LANE[0].widthM * 2 + W.sizeForArc(W.BUILD.gap, W.WALL.distM), heightM: LANE[0].heightM };
+const RAIL = W.railTileAt(0);          // the faces
+const RAIL_R = W.railTileAt(1);        // the field, the clear and the close
+// Dead ahead at the wall's own distance — where a surface stands when he opens
 // one, and so what an empty room has to look right without.
-const AHEAD = { x: 0, y: W.EYE, z: -W.BOARD.distM };
+const AHEAD = { x: 0, y: W.EYE, z: -W.WALL.distM };
 
 // The middle pair of berths, as one thing. A shot of the room at rest is framed
 // on these rather than on the whole arc: the arc is 68.5° wide at 2 m and does
@@ -64,7 +72,6 @@ const CORE = {
   widthM: 2 * W.AGENT.distM * Math.sin((W.AGENT.pitchDeg / 2) * Math.PI / 180) + W.AGENT.diaM,
   heightM: W.sizeForArc(W.AGENT.riseDeg, W.AGENT.distM) + W.AGENT.diaM,
 };
-const BOARD_SIZE = W.boardSize();
 const PLATE = W.plate();
 
 // The first panel slot, which is where a chat opened from a cold room lands.
@@ -101,10 +108,24 @@ export const VIEWPOINTS = [
   },
   {
     name: 'board', scene: 'board',
-    why: 'the board open: every card, filterable, and each row a target the size of a target — can he read a title from where he stands, and is there air between two rows he might press',
+    why: 'the wall open, straight ahead: the two centre lanes, their column headers and their counts, and fifteen rows apiece — the shot the cap-height measurement is taken on, and the one that says whether sixty-two titles at once is reading or wallpaper',
     eye: HERE,
-    look: at(BOARD),
-    frames: { panel: BOARD_SIZE, at: BOARD },
+    look: at(LANE[2].pos),
+    frames: { panel: LANE_PAIR, at: LANE[2].pos },
+  },
+  {
+    name: 'wall-edge', scene: 'board',
+    why: 'lane four, 31° off centre: the tile you turn your head for. A wall is only a wall if the far tiles are still square-on and still legible, which is the whole reason it is tiles on an arc rather than one bent sheet',
+    eye: HERE,
+    look: at(LANE[4].pos),
+    frames: { panel: { widthM: LANE[4].widthM, heightM: LANE[4].heightM }, at: LANE[4].pos },
+  },
+  {
+    name: 'rail', scene: 'board',
+    why: 'the filter rail under the wall: eight faces at the full hit floor, each one a press away from showing only that lieutenant\'s cards, plus the field and the clear — filtering with no typing anywhere in the gesture',
+    eye: HERE,
+    look: at(RAIL.pos),
+    frames: { panel: { widthM: RAIL.widthM, heightM: RAIL.heightM }, at: RAIL.pos },
   },
   {
     name: 'chat', scene: 'chat',
@@ -138,15 +159,51 @@ export const byName = (name) => VIEWPOINTS.find((v) => v.name === name) || null;
 const agent = W.agentAt(4);
 const mat = W.plate();
 
+// `scene` says what has to be OPEN for the probe to have anything to land on:
+// the wall and its rail do not exist until the mat has been pressed.
 export const PROBES = [
-  { name: 'a lieutenant', yaw: -agent.az, pitch: agent.el, expect: 'lieutenant' },
-  { name: 'the board mat', yaw: -mat.azimuth, pitch: mat.elevation, expect: 'list-plate' },
+  { name: 'a lieutenant', scene: 'world', yaw: -agent.az, pitch: agent.el, expect: 'lieutenant' },
+  { name: 'the board mat', scene: 'world', yaw: -mat.azimuth, pitch: mat.elevation, expect: 'list-plate' },
+  // A row on the wall — the sub-floor target, and so the one most worth
+  // proving the ray can find. Lane zero is the first column's first lane, so
+  // it is the one lane that has cards on any board worth photographing.
+  {
+    name: 'a wall row', scene: 'board', expect: 'wall-row',
+    yaw: -LANE[0].az,
+    pitch: W.wallExtent().topDeg - W.WALL.headDeg - 2 * W.WALL.rowDeg,
+    reach: W.WALL.distM,
+  },
+  // A lane header, which is how a column filters itself. The aim is a little
+  // under its own centre because the hand is held BELOW the head and its ray
+  // therefore climbs — a probe pitched at the true centre lands above the top
+  // edge, which is a real thing to know and not a fudge.
+  {
+    name: 'a lane header', scene: 'board', expect: 'wall-head',
+    yaw: -LANE[3].az, pitch: W.wallExtent().topDeg - W.BUILD.hit, reach: W.WALL.distM,
+  },
+  // And a face on the rail, which is the whole point of the rail. The four
+  // faces fill the left 31° of a 34° tile, so the tile's own centre is inside
+  // the third of them — aiming at the middle of the upper strip lands on it.
+  {
+    name: 'a lieutenant\'s face', scene: 'board', expect: 'wall-face',
+    yaw: -RAIL.az, pitch: W.RAIL.elevDeg + (W.BUILD.hit + W.BUILD.gap) / 2, reach: W.RAIL.distM,
+  },
+  // And the way OUT. Inside a headset the close on the rail is the only one
+  // there is, so a wall you cannot shut is a wall you are stuck behind. It is
+  // the last control on the right-hand tile's lower strip.
+  {
+    name: 'the way out', scene: 'board', expect: 'wall-x',
+    yaw: -(RAIL_R.az + W.azSpan(W.RAIL.widthDeg, W.RAIL.elevDeg) / 2 - 2),
+    pitch: W.RAIL.elevDeg - (W.BUILD.hit + W.BUILD.gap) / 2, reach: W.RAIL.distM,
+  },
 ];
 
 // Everywhere the room actually stands something — what a viewpoint is allowed to
 // be aimed at. A viewpoint pointed anywhere else is a photograph of the floor.
 export function places() {
-  const out = [BOARD, PLATE.pos, AHEAD];
+  const out = [PLATE.pos, AHEAD];
+  for (const l of LANE) out.push(l.pos);
+  for (let i = 0; i < W.RAIL.tiles; i++) out.push(W.railTileAt(i).pos);
   // The panel slots. Nothing stands in them until he opens something, but they
   // are where a window lands, so a shot aimed at one is a shot of the room.
   for (const az of W.PANEL_SLOTS) out.push(W.panelAt(az).pos);

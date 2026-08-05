@@ -383,42 +383,104 @@ test('full white is clamped, and colour never travels alone', async () => {
 });
 
 
-test('the board is the escape hatch: every card, filterable, and each row pressable', async () => {
+test('the wall is a wall: fifty-odd cards at once, and every one of them legible', async () => {
   const W = await load('world.js');
-  assert.ok(W.BOARD.distM >= W.NEAR && W.BOARD.distM <= W.FAR,
-    `the board stands at ${W.BOARD.distM} m, outside the comfort band`);
-  const centre = -W.BOARD.elevDeg;
-  assert.ok(centre >= 10 && centre <= 20, `the board is centred ${centre}° below the horizon`);
-  const top = W.BOARD.elevDeg + W.BOARD.heightDeg / 2;
-  const bottom = W.BOARD.elevDeg - W.BOARD.heightDeg / 2;
-  assert.ok(top <= W.RISE, `the board reaches ${top.toFixed(1)}°, over the +${W.RISE}° ceiling`);
-  assert.ok(bottom >= -W.SINK, `the board reaches ${bottom.toFixed(1)}°, under the -${W.SINK}° floor`);
-  assert.ok(W.BOARD.widthDeg / 2 <= 45, 'the board runs past the shoulders');
+  assert.ok(W.WALL.distM >= W.NEAR && W.WALL.distM <= W.FAR,
+    `the wall stands at ${W.WALL.distM} m, outside the comfort band`);
+  // Measured after the turn and the tilt, not read off the two constants: a
+  // flat 44° tile does not subtend 44° symmetrically, and the tilt moves the
+  // whole thing. The authored numbers are the input, these are the room.
+  const ext = W.wallExtent();
+  assert.ok(ext.topDeg <= W.RISE, `the wall reaches ${ext.topDeg.toFixed(1)}°, over the +${W.RISE}° ceiling`);
+  assert.ok(ext.bottomDeg >= -W.SINK, `the wall reaches ${ext.bottomDeg.toFixed(1)}°, under the -${W.SINK}° floor`);
+  // And it stands IN FRONT of the crew. The tilt throws the top edge away from
+  // the eye, and a wall whose top is behind the lieutenants is a wall they are
+  // drawn through — which is exactly what the first rendered frame showed.
+  assert.ok(ext.maxDistM < W.AGENT.distM - W.AGENT.diaM / 2,
+    `the wall reaches ${ext.maxDistM.toFixed(2)} m and the crew's near side is ${(W.AGENT.distM - W.AGENT.diaM / 2).toFixed(2)} m`);
+  // Two flat neighbours on an arc must not saw into each other.
+  const a = W.wallLaneAt(0), b = W.wallLaneAt(1);
+  assert.ok(a.widthM < Math.hypot(a.pos.x - b.pos.x, a.pos.z - b.pos.z),
+    'a lane is wider than the gap between two lane centres, so the tiles intersect');
+  // It is deliberately wider than the ±45° a bounded region is held to — a
+  // board you scan by turning your head is the whole point of it — but a tile
+  // is still a flat surface and past about 34° off-normal a flat surface
+  // turned to face the eye stops facing it, which is why it is SIX tiles.
+  assert.ok(W.wallLaneDeg() <= 34, `a lane is ${W.wallLaneDeg().toFixed(1)}° of flat surface`);
+  assert.ok(W.WALL.spanDeg >= 100 && W.WALL.spanDeg <= 120,
+    `the wall spans ${W.WALL.spanDeg}°, and a neck does not`);
 
-  // Its rows ARE pressed — unlike the flat list this replaced, whose rows were
-  // read — so each one is the padded hit floor tall with clear air beside it,
-  // and the count of them falls out of the height rather than being declared.
-  const rows = W.boardRows();
-  assert.ok(rows >= 4, `${rows} rows is not a board`);
-  assert.ok(rows * W.PITCH <= W.BOARD.heightDeg - 2 * W.BUILD.hit + 1e-9,
-    'the rows do not fit under the bar and the filter at the lattice pitch');
-  assert.ok(rows * W.BOARD.cols >= 8, 'fewer than eight cards visible is a keyhole');
-  // And a title has to survive the row it sits in: 45 characters is the floor
-  // for a card title, below which he is guessing from a prefix.
-  const rowDeg = W.BOARD.widthDeg / W.BOARD.cols;
-  assert.ok(Math.floor(rowDeg / (W.TYPE.meta * 0.494)) >= 45,
-    `a row holds ${Math.floor(rowDeg / (W.TYPE.meta * 0.494))} characters of title`);
+  // The cap height the captain set — and it has to hold on the WORST row, not
+  // on the size the type is cut at. The top of a lane is further away and more
+  // turned than its middle, and reading the floor off `TYPE.wall × CAP` would
+  // have shipped the top two rows 10% under it.
+  const cap = W.wallCap();
+  assert.ok(cap.worstDeg >= 1.3,
+    `the worst row's cap is ${cap.worstDeg.toFixed(2)}°, under the 1.3° he asked for `
+    + `(the type is cut at ${cap.cutDeg.toFixed(2)}°)`);
+  assert.ok(cap.worstDeg <= cap.bestDeg && cap.bestDeg <= cap.cutDeg + 1e-9,
+    'the foreshortening runs the wrong way');
+  assert.ok(W.WALL.rowDeg >= W.TYPE.wall * 1.15,
+    `a ${W.WALL.rowDeg}° row cannot hold a ${(W.TYPE.wall * 1.15).toFixed(2)}° line`);
 
-  // A row is a target, so the arc it covers has to clear the same floor as
-  // every other target in the room — measured at the distance the board stands.
-  const rowW = W.boardSize().widthM / W.BOARD.cols;
-  assert.ok(W.arcDeg(rowW, W.BOARD.distM) >= W.BUILD.hit,
-    'a row is narrower than the hit floor');
+  // And the count, which is the whole card. Seventy-eight seats, and on the
+  // live shape of the board — 35 backlog, 4 working, 31 in review, 0 peer —
+  // fifty-six of them are filled with no filter applied.
+  assert.strictEqual(W.wallRows(), 13);
+  assert.ok(W.wallSeats() >= 50, `${W.wallSeats()} seats is not a wall`);
+  const live = [35, 4, 31, 0];
+  const per = W.wallLanesFor(live);
+  assert.strictEqual(per.reduce((a, b) => a + b), W.WALL.lanes, 'every lane belongs to a column');
+  assert.ok(per.every((n) => n >= 1), 'a column with no lane has no header and no count');
+  const shown = live.reduce((n, c, i) => n + Math.min(c, per[i] * W.wallRows()), 0);
+  assert.ok(shown >= 50, `only ${shown} of the live board's cards are on the wall at once`);
+
+  // A title has to survive the lane it sits in. Sixteen is short and it is what
+  // 1.3° of cap leaves; the assertion exists so that shrinking a lane to buy a
+  // seventh one fails loudly rather than quietly.
+  assert.ok(W.wallChars() >= 16, `a lane holds ${W.wallChars()} characters of title`);
 
   const src = fs.readFileSync(path.join(UI, 'board.js'), 'utf8');
-  assert.match(src, /new Input\(/, 'the board is filterable');
-  assert.match(src, /overflow: 'scroll'/, 'every card, which means it scrolls');
+  assert.match(src, /new Input\(/, 'the wall still takes free text');
+  assert.match(src, /overflow: 'scroll'/, 'every card, which means a lane scrolls');
   assert.match(src, /onCard/, 'a row opens the card it names');
+  // Filtering is PRESSING. A face, and a column header, and neither of them is
+  // a keystroke.
+  assert.match(src, /toggleOwner/, 'a face does not filter by its lieutenant');
+  assert.match(src, /toggleColumn/, 'a header does not filter by its column');
+  // And the pool: rows are built in the constructor and bound afterwards, never
+  // made on paint. `_row` called from anywhere but `_lane` is the regression.
+  assert.ok(!/repaint[\s\S]*?this\._row\(/.test(src), 'repaint builds rows');
+  assert.match(src, /nodes\(\)/, 'nothing reports the node count, so nothing can assert it');
+});
+
+test('the rail is under the wall, above the deck, and every control on it is a target', async () => {
+  const W = await load('world.js');
+  const top = W.RAIL.elevDeg + W.railHeightDeg() / 2;
+  const bottom = W.RAIL.elevDeg - W.railHeightDeg() / 2;
+  // It is below the wall with air between them, and it is a GLANCE down rather
+  // than a neck — the same budget the mat on the floor spends.
+  const wallBottom = W.wallExtent().bottomDeg;
+  assert.ok(top <= wallBottom - W.BUILD.gap,
+    `the rail's top edge is ${top.toFixed(1)}° and the wall's bottom is ${wallBottom.toFixed(1)}°`);
+  assert.ok(bottom >= -W.FLOOR_LOOK, `the rail reaches ${bottom.toFixed(1)}°, past a glance`);
+  // And it stands ABOVE the deck, which the wall's own distance cannot do down
+  // there: 1.80 m at this elevation is underground.
+  const low = W.pointAt(0, bottom, W.RAIL.distM);
+  assert.ok(low.y > 0.05, `the rail's bottom edge is ${low.y.toFixed(2)} m off the floor`);
+  assert.ok(W.pointAt(0, bottom, W.WALL.distM).y < low.y,
+    'the rail gains nothing by being nearer, so it should not be');
+
+  // Four faces to a strip at the full hit floor, and they have to fit.
+  const perStrip = 4;
+  const need = perStrip * W.BUILD.hit + (perStrip - 1) * W.BUILD.gap;
+  assert.ok(need <= W.RAIL.widthDeg,
+    `${perStrip} faces want ${need.toFixed(1)}° and a rail tile is ${W.RAIL.widthDeg}°`);
+  // The crew all fits on the left tile, four to a strip, two strips.
+  assert.ok(W.RAIL.rows * perStrip >= W.AGENT.slots,
+    `${W.RAIL.rows * perStrip} face slots for ${W.AGENT.slots} berths`);
+  assert.ok(W.RAIL.rows * W.BUILD.hit + (W.RAIL.rows - 1) * W.BUILD.gap <= W.railHeightDeg() + 1e-9,
+    'the strips do not fit in the rail');
 });
 
 // ---- the crew is alive, and on real state ----------------------------------
@@ -576,7 +638,7 @@ test('the place is bounded, and the bound sits under the band he reads in', asyn
     'the parapet rises through the panels');
   // And it is far enough away to be scenery rather than something he keeps
   // walking into: well outside every surface the room opens.
-  assert.ok(wallR > W.BOARD.distM * 2, 'the parapet crowds the board');
+  assert.ok(wallR > W.WALL.distM * 2, 'the parapet crowds the wall');
 });
 
 // ---- the six states -------------------------------------------------------
