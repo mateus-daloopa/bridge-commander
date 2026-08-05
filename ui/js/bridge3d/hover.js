@@ -24,6 +24,17 @@ import { STEP, ACK_MS, NEAR_M, spotlight } from './world.js';
 const ACCENT = new THREE.Color('#4cc2ff');
 const RING = new THREE.Color('#7fd8ff');
 
+// The room's voice for the two moments a press has. Set once by main.js — every
+// Target shares it, because a press sounds the same wherever it lands, and
+// wiring a sound into each of the fifty-odd targets by hand is fifty chances to
+// forget one. Haptics and sound are REDUNDANT channels: 57% of people never
+// notice controller haptics at all, so every buzz needs its visual and audio
+// twin and none of the three may be the only one carrying the message.
+let voice = null;
+export function setVoice(v) { voice = v; }
+
+const _at = new THREE.Vector3();
+
 // A thing you can point at. `mesh` answers the ray; `mark` is what visibly
 // reacts (usually the slab or sphere standing in front of it); `spot` is the
 // shrinking spotlight ring drawn on the surface.
@@ -57,13 +68,19 @@ export class Target {
     this._set(e.distance < NEAR_M ? 'hovered-near' : 'hovered-far');
   }
   _leave() { this.distance = Infinity; this._set('idle'); }
-  _down() { this._set('contact'); }
+  _down() {
+    this._set('contact');
+    if (voice) voice.press(this.mesh.getWorldPosition(_at));
+  }
   _up() {
     // Released, and only then does the thing actually happen — the same order a
     // button has had since buttons, so a press you slide off is a press you took
     // back.
     const was = this.state === 'contact' || this.state === 'held';
     this._set(this.distance === Infinity ? 'idle' : 'released');
+    // The unpress clicks HIGHER than the press, which is the whole grammar:
+    // down is a question and up is the answer.
+    if (was && voice) voice.released(this.mesh.getWorldPosition(_at));
     if (was && this.onSelect) this.onSelect(this);
   }
 

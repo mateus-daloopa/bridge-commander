@@ -23,11 +23,12 @@ import * as W from './world.js';
 import { Shelf, Decal } from './shelves.js';
 import { Agents } from './agents.js';
 import { ListPlate } from './list.js';
-import { Rays } from './hover.js';
+import { Rays, setVoice } from './hover.js';
 import { Windows } from './windows.js';
 import { ChatPanel } from './chat.js';
 import { BoardPanel, CardPanel } from './board.js';
 import { Grabs } from './grab.js';
+import { Sound } from './sound.js';
 import { updateRoots, sortTransparent, rootCount, COL } from './kit.js';
 
 const say = (m) => { const el = document.getElementById('status'); if (el) el.textContent = m; };
@@ -122,6 +123,12 @@ const rays = new Rays(renderer, scene, camera, renderer.domElement);
 const windows = new Windows(scene);
 const grabs = new Grabs(scene);
 
+// The room's sound. Armed by the gesture that enters it, because every browser
+// refuses audio until the page has been touched once — which is why this is
+// created here and started in enter() rather than on load.
+const sound = new Sound();
+setVoice(sound);
+
 // Click a lieutenant, get its chat. This is the shortest path between "I can
 // see my crew" and "I am talking to them", and it is the whole reason the
 // spheres were worth drawing.
@@ -132,11 +139,12 @@ function openChat(lt) {
     title: lt.name || lt.id,
     subtitle: 'chat',
     tint: W.agentColour(lt.color),
-    onClose: (panel) => windows.close(panel),
+    onClose: (panel) => { sound.close(panel.group.position); windows.close(panel); },
   }));
   p.setTitle(lt.name || lt.id, 'chat');
   p.setTint(W.agentColour(lt.color));
   p.paint(lt.chat);
+  sound.open(p.group.position);
   return p;
 }
 agents.onSelect = openChat;
@@ -145,11 +153,13 @@ agents.onSelect = openChat;
 // rather than the hand panel's, because its rows are targets and a 34° surface
 // holds three of those.
 function openBoard() {
+  const fresh = !windows.find('board');
   const p = windows.show('board', () => new BoardPanel({
     onCard: openCard,
-    onClose: (panel) => windows.close(panel),
+    onClose: (panel) => { sound.close(panel.group.position); windows.close(panel); },
   }));
   p.paint(doc);
+  if (fresh) sound.open(p.group.position);
   return p;
 }
 
@@ -161,10 +171,11 @@ function openCard(card) {
   const lt = lts.get(card.owner);
   const p = windows.show('card:' + card.id, () => new CardPanel({
     card, tint: W.agentColour(lt && lt.color),
-    onClose: (panel) => windows.close(panel),
+    onClose: (panel) => { sound.close(panel.group.position); windows.close(panel); },
   }));
   p.setTint(W.agentColour(lt && lt.color));
   p.paintCard(card, lt, cols.get(card.column));
+  sound.open(p.group.position);
   return p;
 }
 
@@ -212,6 +223,9 @@ const emulated = DEV.get('xr') === 'emulate'
   : null;
 
 async function enter() {
+  // Inside the gesture, before any await: a browser only allows audio to start
+  // from a real user action, and an await here would put us outside it.
+  sound.start(DEV.get('track'));
   if (emulated) await emulated;
   const flat = (why) => { say(why); gate.hidden = true; };
   if (!navigator.xr) return flat('no WebXR in this browser — flat view: drag to look, click to point');
@@ -238,9 +252,12 @@ async function enter() {
 for (const c of rays.controllers) {
   c.addEventListener('squeezestart', () => {
     const p = grabs.start(c, rays.hits.get(c));
-    if (p) windows.touch(p);
+    if (p) { windows.touch(p); sound.grab(p.group.getWorldPosition(new THREE.Vector3())); }
   });
-  c.addEventListener('squeezeend', () => grabs.end(c));
+  c.addEventListener('squeezeend', () => {
+    const p = grabs.end(c);
+    if (p) sound.drop(p.group.getWorldPosition(new THREE.Vector3()));
+  });
 }
 document.getElementById('enter').addEventListener('click', enter);
 
@@ -295,7 +312,7 @@ renderer.setAnimationLoop((t) => {
 
 // The handle the capture script and a console drive the room through.
 window.__bridge = {
-  shelves, decals, agents, plate, scene, camera, rays, windows, grabs,
+  shelves, decals, agents, plate, scene, camera, rays, windows, grabs, sound,
   openBoard: () => !!openBoard(),
   // The capture script and a console drive the panels through these — a chat
   // that can only be reached by aiming a ray is a chat no test can photograph.

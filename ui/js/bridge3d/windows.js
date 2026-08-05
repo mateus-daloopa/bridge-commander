@@ -60,6 +60,8 @@ export class Windows {
     return panel;
   }
 
+  find(key) { return this.open.find((p) => p.key === key) || null; }
+
   touch(panel) {
     const i = this.open.indexOf(panel);
     if (i >= 0) this.open.splice(i, 1);
