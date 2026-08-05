@@ -66,6 +66,25 @@ export class Sound {
     return this.ctx;
   }
 
+  // Where the ears are. A panner places a SOURCE in world coordinates; without
+  // this the listener stays at the origin facing -Z, so every spatialised sound
+  // is correct only while he happens to be looking straight ahead and swings
+  // the wrong way the moment he turns. Called from the loop with the camera's
+  // own world position and orientation.
+  setEars(pos, forward, up) {
+    const l = this.ctx && this.ctx.listener;
+    if (!l) return;
+    if (l.positionX) {
+      l.positionX.value = pos.x; l.positionY.value = pos.y; l.positionZ.value = pos.z;
+      l.forwardX.value = forward.x; l.forwardY.value = forward.y; l.forwardZ.value = forward.z;
+      l.upX.value = up.x; l.upY.value = up.y; l.upZ.value = up.z;
+    } else if (l.setPosition) {
+      // Safari still ships the deprecated pair and nothing else.
+      l.setPosition(pos.x, pos.y, pos.z);
+      l.setOrientation(forward.x, forward.y, forward.z, up.x, up.y, up.z);
+    }
+  }
+
   setLevel(v) {
     this.level = Math.max(0, Math.min(1, v));
     if (this.music) this.music.setLevel(this.level);

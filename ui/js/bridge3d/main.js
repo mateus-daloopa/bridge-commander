@@ -316,6 +316,13 @@ window.addEventListener('resize', () => {
 
 // ---- loop -------------------------------------------------------------------
 
+// Scratch vectors for the ear update, allocated once: the loop runs 90 times a
+// second and three Vector3s a frame is garbage the frame budget will notice.
+const _ear = new THREE.Vector3();
+const _fwd = new THREE.Vector3();
+const _up = new THREE.Vector3();
+const _q = new THREE.Quaternion();
+
 let last = 0;
 renderer.setAnimationLoop((t) => {
   const dt = last ? Math.min(0.1, (t - last) / 1000) : 0.016;
@@ -327,6 +334,14 @@ renderer.setAnimationLoop((t) => {
   windows.tick(now);
   grabs.tick(dt);
   updateRoots(dt);
+  // Inside a session the camera three.js renders with is the XR one, and it is
+  // that transform the ears have to follow — the room's sounds are placed in
+  // world coordinates and mean nothing without a listener that turns with him.
+  const eye = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  eye.getWorldPosition(_ear);
+  eye.getWorldDirection(_fwd);
+  _up.set(0, 1, 0).applyQuaternion(eye.getWorldQuaternion(_q));
+  sound.setEars(_ear, _fwd, _up);
   renderer.render(scene, camera);
 });
 
