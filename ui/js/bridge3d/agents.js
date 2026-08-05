@@ -15,7 +15,7 @@
 
 import * as THREE from 'three';
 import * as W from './world.js';
-import { root, Text, COL, fontFor, inert, safe } from './kit.js';
+import { root, Container, Text, COL, cm, fontFor, inert, safe } from './kit.js';
 import { Target } from './hover.js';
 
 export class Agents {
@@ -66,19 +66,43 @@ export class Agents {
 
     // Colour never travels alone: the name under the sphere is the second
     // channel, and it is what makes two lieutenants of similar hue two people.
+    //
+    // **It sits on a plate, and that is not decoration.** As bare type against
+    // the sky it measured 1.3:1 to 2.2:1 on the rendered frame against a 4.5:1
+    // floor — every single label, over sky and over parapet alike. Light type
+    // has nothing to be light against once the room stopped being black, and
+    // there is no colour that survives a background which changes as he turns
+    // his head. So the label carries its own background with it, the same
+    // grammar as every panel: dark plate, light type, a rim for the shape.
+    // Darkening the sky would have been the other fix and it is the wrong one —
+    // the sky is the thing that made this a place.
     const ui = root({
       sizeX: W.sizeForArc(W.AGENT.pitchDeg - W.BUILD.gap, at.dist),
-      sizeY: W.sizeForArc(W.TYPE.body * 1.6, at.dist),
+      sizeY: W.sizeForArc(W.TYPE.body * 2.0, at.dist),
       justifyContent: 'center', alignItems: 'center', backgroundOpacity: 0,
     });
     inert(ui);
-    ui.position.y = -(W.AGENT.diaM / 2 + W.sizeForArc(W.TYPE.body * 1.3, at.dist));
+    ui.position.y = -(W.AGENT.diaM / 2 + W.sizeForArc(W.TYPE.body * 1.5, at.dist));
     g.add(ui);
+    // The plate hugs the name rather than filling the berth: a nameplate as wide
+    // as its slot is a row of bars, and the arc between two of them is the thing
+    // that keeps eight spheres reading as eight people.
+    const plate = new Container({
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+      paddingX: cm(W.sizeForArc(0.9, at.dist)),
+      paddingY: cm(W.sizeForArc(0.28, at.dist)),
+      borderRadius: cm(0.010),
+      backgroundColor: COL.panel, backgroundOpacity: 0.96,
+      borderWidth: cm(0.0022), borderColor: COL.rim, borderOpacity: 0.75,
+    });
+    inert(plate);
+    ui.add(plate);
     const label = new Text({
-      text: '', color: COL.dim, fontWeight: 'semi-bold',
+      text: '', color: COL.text, fontWeight: 'semi-bold',
       fontSize: fontFor(W.TYPE.body, at.dist),
     });
-    ui.add(label);
+    inert(label);
+    plate.add(label);
 
     // Pointing at a lieutenant and pressing opens its chat. The sphere is the
     // shortest route to the thing he actually came here to do, so it is the one
@@ -99,7 +123,7 @@ export class Agents {
       spot.visible = lit;
     };
 
-    return { i, at, group: g, ball, hit, spot, ui, label, target, lt: null };
+    return { i, at, group: g, ball, hit, spot, ui, plate, label, target, lt: null };
   }
 
   // Who sits where. `index` is the lieutenant's place in the board's own roster,
@@ -124,6 +148,9 @@ export class Agents {
       s.hit.pointerEvents = on ? 'listener' : 'none';
       // An empty berth is still a place — it says the arc holds eight and four
       // of them are not crewed, which is information rather than a gap.
+      // An empty berth shows no nameplate at all — a plate with no name on it
+      // is a thing he would try to read.
+      s.plate.setProperties({ display: on ? 'flex' : 'none' });
       if (!on) { s.label.setProperties({ text: '' }); s.spot.visible = false; }
     }
   }

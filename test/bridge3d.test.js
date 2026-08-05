@@ -421,6 +421,30 @@ test('the board is the escape hatch: every card, filterable, and each row pressa
   assert.match(src, /onCard/, 'a row opens the card it names');
 });
 
+// ---- type carries its own background --------------------------------------
+
+test('no string in the room is drawn straight onto the world', async () => {
+  // The room used to be black, so light type against "the background" was safe.
+  // It is not a room any more, it is a place with a sky in it, and a background
+  // that changes as he turns his head is a background nothing can be legible
+  // against: the crew labels measured 1.29:1 to 2.17:1 on the rendered frame
+  // against a 4.5:1 floor — every one of them, over sky and over parapet alike.
+  //
+  // So every string carries its own plate. The panels always did; the crew
+  // labels and the floor mat now do too. This is the structural half of that —
+  // the arc and the ratios are measured on real frames, but a plate either
+  // exists in the source or it does not.
+  const agents = fs.readFileSync(path.join(UI, 'agents.js'), 'utf8');
+  assert.match(agents, /const plate = new Container\(/, 'the crew label has no plate behind it');
+  assert.match(agents, /backgroundColor: COL\.panel/, "the crew label's plate is not opaque enough to be one");
+  assert.match(agents, /borderColor: COL\.rim/, 'the plate has no rim to carry its shape');
+  assert.match(agents, /color: COL\.text/, 'the crew label is not the room\'s light type');
+
+  const mat = fs.readFileSync(path.join(UI, 'list.js'), 'utf8');
+  assert.match(mat, /color: COL\.panel/, 'the floor mat is not an opaque plate');
+  assert.match(mat, /LineBasicMaterial\(\{ color: COL\.rim/, 'the floor mat has no rim');
+});
+
 // ---- the light, and what it costs -----------------------------------------
 
 test('the room is lit by somewhere, not by lights we put in it', async () => {
