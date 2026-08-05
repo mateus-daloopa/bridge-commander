@@ -29,7 +29,7 @@ import { ListPlate } from './list.js';
 import { Rays, setVoice } from './hover.js';
 import { Windows } from './windows.js';
 import { ChatPanel } from './chat.js';
-import { BoardPanel, CardPanel } from './board.js';
+import { BoardWall, CardPanel } from './board.js';
 import { Grabs } from './grab.js';
 import { Sound } from './sound.js';
 import { installSky, installToneMapping } from './sky.js';
@@ -141,12 +141,12 @@ function openChat(lt) {
 }
 agents.onSelect = openChat;
 
-// The board: every card, filterable, and one press deep. It is its own size
-// rather than the hand panel's, because its rows are targets and a 34° surface
-// holds three of those.
+// The wall: sixty-odd cards at once across six tiles on a 120° arc, filtered by
+// pressing a face rather than by typing a name, and one press deep. It is not a
+// panel and it never was one — see board.js.
 function openBoard() {
   const fresh = !windows.find('board');
-  const p = windows.show('board', () => new BoardPanel({
+  const p = windows.show('board', () => new BoardWall({
     onCard: openCard,
     onClose: (panel) => { sound.close(panel.group.position); windows.close(panel); },
   }));
@@ -341,6 +341,17 @@ window.__bridge = {
     key: p.key, slot: p.slot, placed: p.placed,
     at: W.angleOf(p.group.position),
   })),
+  // The wall, for the capture run and for a console: what it is showing, what
+  // is filtering it, and how many uikit nodes it is made of — the last of which
+  // is the number that has to be the same before and after a scroll.
+  wall: () => { const p = windows.find('board'); return p && p.report ? p.report() : null; },
+  wallFilter: (owner) => {
+    const p = windows.find('board');
+    if (!p || !p.toggleOwner) return null;
+    p.toggleOwner(owner || ((doc.cards || []).find((c) => c.owner) || {}).owner);
+    return p.report();
+  },
+  wallScroll: () => { const p = windows.find('board'); return p && p.scrollDeepestToEnd ? p.scrollDeepestToEnd() : null; },
   stats: () => ({
     roots: rootCount(),
     calls: renderer.info.render.calls,

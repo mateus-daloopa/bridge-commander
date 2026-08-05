@@ -1,198 +1,550 @@
-// board.js — every card, findable, and the card you found.
+// board.js — the wall, and the card you took off it.
 //
 // Two surfaces, and the split between them is the one the whole room is built
 // around: **what you HUNT for and what you READ are not the same thing.**
 //
-// The BOARD is hunting. Ten rows, each one a target the size of a target, each
-// carrying a title you can read at a glance and a colour that says whose it is.
-// You are scanning it, not dwelling in it, so it is wide and shallow and one
-// press deep.
+// The WALL is hunting, and it is a wall rather than a panel because eight rows
+// out of sixty-eight is a peephole with a search box attached. It is FOUR flat
+// tiles laid along a 120° arc at 1.50 m — one per board column, flat text on a
+// curved surface — carrying eighteen rows each. Every figure in it is derived in
+// world.js and the arithmetic is written out there; this file spends them.
+//
+// The lane is sized by the TITLE and not the other way round: 32 characters is
+// the floor and it lands at 36, and that is what makes a lane 27.75° instead of
+// 18.6°. The version that solved for cap height first fitted six lanes and
+// sixteen characters, and sixteen characters of a fifty-three-character title
+// is not a title.
+//
+// The RAIL under it is how you filter, and the point of it is that **filtering
+// is one press and never a keystroke**. The lieutenants' faces are the control:
+// press a face and the wall is that lieutenant's, press it again and it clears.
+// A lane header does the same for its column. The text field is still there for
+// free text and it ANDs with the rest.
 //
 // The CARD is reading. It is the hand panel — near, narrow, prose-shaped — and
 // it carries the body, which is the deliverable, plus the thread, which is how
-// you answer it. He asked for the card and its chat together, and this is that,
-// stacked rather than side by side: two 34° panels side by side is 68° of the
-// 90° a comfortable field has, and the second one would be at the edge where a
-// flat panel turned to face the eye stops facing it.
+// you answer it.
 //
-// The board's filter is one field and it matches everything — title, id, owner,
-// column, label. Typing a lieutenant's name IS filtering by lieutenant, which
-// is why there is no second control for it.
+// ---- the row pool, which is the part that is load-bearing ------------------
+//
+// Seventy-two rows are built ONCE at startup and never again. Scrolling a lane
+// re-binds data into rows that already exist; it never makes or destroys a
+// uikit node. The version of this that held a live node per card is the version
+// that killed his headset browser at about sixty rows. `nodes()` is here so the
+// claim can be checked rather than believed — dev/room-shots.js scrolls a lane
+// to its end and asserts the count did not move by one.
 
+import * as THREE from 'three';
 import * as W from './world.js';
-import { Container, Text, Input, Image, COL, cm, fontFor, inert, safe } from './kit.js';
+import { root, Container, Text, Input, Image, COL, cm, fontFor, inert, safe } from './kit.js';
 import { avatarTexture } from './avatars3d.js';
-import { Panel } from './panel.js';
 import { ChatPanel } from './chat.js';
 import { Target } from './hover.js';
 
-const D = W.BOARD.distM;
-const ROWS = W.boardRows();
-const SEATS = ROWS * W.BOARD.cols;
+const D = W.WALL.distM;
+const ROWS = W.wallRows();
+const LANES = W.WALL.lanes;
+const CHARS = W.wallChars();
 
-export class BoardPanel extends Panel {
+// Everything on the wall, in metres at the distance the wall stands.
+const ROW_M = W.sizeForArc(W.WALL.rowDeg, D);
+const HEAD_M = W.sizeForArc(W.WALL.headDeg, D);
+const PAD_M = W.sizeForArc(0.7, D);
+// The row's own chrome, and it adds up to WALL_ROW_CHROME exactly — 0.5° of
+// padding each side, a 0.9° owner bar, 0.3° of gap. What is left is the title,
+// and the title is what the lane was sized for.
+const ROW_PAD_M = W.sizeForArc(0.5, D);
+const ROW_BAR_M = W.sizeForArc(0.9, D);
+const ROW_GAP_M = W.sizeForArc(0.3, D);
+
+// A tile: one flat uikit surface, turned to face the eye. Every tile stands at
+// exactly WALL.distM and every one of them faces the head — the outer ones look
+// bigger in a wide-angle frame because a 90° projection stretches its own
+// edges, which is a property of the picture and not of the wall.
+function tile(spec, properties) {
+  const group = new THREE.Group();
+  const ui = root({
+    sizeX: spec.widthM, sizeY: spec.heightM, flexDirection: 'column',
+    backgroundColor: COL.panel, backgroundOpacity: 0.98,
+    borderRadius: cm(0.012),
+    borderWidth: cm(0.0022), borderColor: COL.rim, borderOpacity: 0.5,
+    ...properties,
+  });
+  group.add(ui);
+  group.position.set(spec.pos.x, spec.pos.y, spec.pos.z);
+  group.lookAt(0, W.EYE, 0);
+  group.rotateX(-spec.tilt * Math.PI / 180);
+  return { group, ui };
+}
+
+export class BoardWall {
   constructor({ onCard, onClose }) {
-    super({ name: 'board', title: 'the board', subtitle: '', spec: W.BOARD, tint: COL.accent, onClose });
+    this.name = 'wall';
     this.onCard = onCard;
-    // Dead ahead. The board is the surface he turns to, so it has a place
-    // rather than a slot — though once he picks it up, it is his.
-    this.homeAz = 0;
-    this.query = '';
+    this.onClose = onClose;
+    this.open = false;
+    this.placed = false;
+    this.slot = null;
+    this.homeAz = 0;                 // furniture: it has a place, not a slot
     this.doc = { cards: [] };
+    this.query = '';
+    this.owner = null;               // a lieutenant id, or nothing
+    this.column = null;              // a column id, or nothing
+    this.spec = W.WALL;
 
-    const pad = W.sizeForArc(1.0, D);
-    const barM = W.sizeForArc(W.BUILD.hit, D);
+    this.group = new THREE.Group();
+    this.group.visible = false;
+    this.targets = [];
+    this.uis = [];
+    this._nodes = 0;
 
-    // The rows live in a wrapping row rather than a column, which is what makes
-    // two columns of five out of one flex container.
-    this.grid = new Container({
-      flexDirection: 'row', flexWrap: 'wrap', alignContent: 'flex-start',
-      flexGrow: 1, overflow: 'scroll',
-      scrollbarWidth: cm(W.sizeForArc(0.4, D)), scrollbarColor: COL.faint, scrollbarOpacity: 0.45,
+    this.lanes = [];
+    for (let i = 0; i < LANES; i++) this.lanes.push(this._lane(i));
+    this._rail();
+  }
+
+  // ---- a lane: a header you press, and eighteen rows that recycle ----------
+  _lane(i) {
+    const spec = W.wallLaneAt(i);
+    const t = tile(spec, {});
+    this.group.add(t.group);
+    this.uis.push(t.ui);
+
+    const head = new Container({
+      flexDirection: 'row', alignItems: 'center', flexShrink: 0,
+      height: cm(HEAD_M), paddingX: cm(PAD_M), gap: cm(PAD_M),
+      backgroundColor: COL.bar, backgroundOpacity: 1,
+      borderTopLeftRadius: cm(0.012), borderTopRightRadius: cm(0.012),
+      borderBottomWidth: cm(0.003), borderColor: COL.rim, borderOpacity: 0.5,
+      hover: { backgroundColor: COL.barLit },
+      active: { backgroundColor: '#2a5f7a' },
     });
-    this.body.setProperties({ padding: cm(pad * 0.5), gap: 0 });
-    this.body.add(this.grid);
-    this._kids.push(this.grid);
+    const title = new Text({
+      text: '', flexGrow: 1, flexShrink: 1, flexBasis: 0, overflow: 'hidden',
+      fontSize: fontFor(W.TYPE.wall, D), color: COL.text, fontWeight: 'semi-bold',
+      wordBreak: 'keep-all',
+    });
+    const count = new Text({
+      text: '', flexShrink: 0, fontSize: fontFor(W.TYPE.wall, D), color: COL.dim,
+      wordBreak: 'keep-all',
+    });
+    inert(title); inert(count);
+    head.add(title, count);
+    t.ui.add(head);
+    this._nodes += 3;
 
-    this.seats = [];
-    for (let i = 0; i < SEATS; i++) this.seats.push(this._seat());
+    // The lane body scrolls, and what scrolls inside it is TWO SPACERS and the
+    // pool. The spacers carry the height of the rows that are not built, so the
+    // scrollbar tells the truth about how much is under there while the node
+    // count stays flat — which is the whole trick.
+    const body = new Container({
+      flexGrow: 1, flexDirection: 'column', overflow: 'scroll',
+      scrollbarWidth: cm(W.sizeForArc(0.35, D)), scrollbarColor: COL.faint,
+      scrollbarOpacity: 0.45, scrollbarBorderRadius: cm(0.003),
+    });
+    t.ui.add(body);
+    const padTop = new Container({ width: '100%', height: 0, flexShrink: 0 });
+    const padBottom = new Container({ width: '100%', height: 0, flexShrink: 0 });
+    inert(padTop); inert(padBottom);
+    body.add(padTop);
+    this._nodes += 3;
 
-    // ---- the filter --------------------------------------------------------
+    const lane = {
+      i, tile: t, head, title, count, body, padTop, padBottom,
+      rows: [], cards: [], first: 0, scrolled: 0, column: null, cont: false,
+    };
+    for (let r = 0; r < ROWS; r++) lane.rows.push(this._row(lane, r));
+    body.add(padBottom);
+
+    const headTarget = new Target({
+      mesh: head, name: 'wall-head',
+      onSelect: () => { if (lane.column) this.toggleColumn(lane.column.id); },
+    });
+    headTarget._paint = () => {};
+    this.targets.push(headTarget);
+    return lane;
+  }
+
+  // One row. A colour bar for the owner and a title, and the whole row is the
+  // target — at 27.75° wide the horizontal scatter of a hand-held ray is
+  // absorbed whole, and only the vertical is left to aim.
+  _row(lane, r) {
+    const box = new Container({
+      width: '100%', height: cm(ROW_M), flexShrink: 0,
+      flexDirection: 'row', alignItems: 'center',
+      paddingX: cm(ROW_PAD_M), gap: cm(ROW_GAP_M),
+      // Zebra rather than a rim: seventy-two rimmed boxes is a grid, and the shape
+      // of a row at this density is carried better by an alternating fill. The
+      // hover rim is what says "this one" — and it is the only affordance the
+      // wall has, so it is loud.
+      backgroundColor: r % 2 ? COL.slot : COL.panel, backgroundOpacity: 1,
+      // The rim is always THERE and only ever changes COLOUR, so hovering a row
+      // cannot reflow the seventy-two rows under it. It hides by matching the
+      // plate rather than by going to zero opacity — `borderOpacity: 0` drew a
+      // full-strength accent line on every row in the rendered frame, and a
+      // wall where every row is lit is a wall with no hover state at all.
+      borderWidth: cm(0.0025), borderColor: COL.panel,
+      hover: { backgroundColor: COL.barLit, borderColor: COL.accent },
+      active: { backgroundColor: '#2a5f7a' },
+      display: 'none',
+    });
+    const bar = new Container({
+      width: cm(ROW_BAR_M), height: '62%', flexShrink: 0,
+      borderRadius: cm(0.002), backgroundColor: COL.faint,
+    });
+    const title = new Text({
+      text: '', flexGrow: 1, flexShrink: 1, flexBasis: 0, overflow: 'hidden',
+      fontSize: fontFor(W.TYPE.wall, D), lineHeight: 1.15,
+      color: COL.text, wordBreak: 'keep-all',
+    });
+    inert(bar); inert(title);
+    box.add(bar, title);
+    lane.body.add(box);
+    this._nodes += 3;
+
+    const row = { box, bar, title, card: null };
+    const t = new Target({
+      mesh: box, name: 'wall-row',
+      onSelect: () => {
+        // A drag that scrolled the lane is not a press. uikit's scroll and this
+        // row's pointerup arrive from the same gesture, so the guard is time:
+        // if the lane moved in the last quarter second, he was scrolling.
+        if (performance.now() - lane.scrolled < 250) return;
+        if (row.card && this.onCard) this.onCard(row.card);
+      },
+    });
+    t._paint = () => {};
+    this.targets.push(t);
+    return row;
+  }
+
+  // ---- the rail: eight faces, a field, and a way out -----------------------
+  _rail() {
+    const RD = W.RAIL.distM;
+    const barM = W.sizeForArc(W.BUILD.hit, RD);
+    const gapM = W.sizeForArc(W.BUILD.gap, RD);
+    const padM = W.sizeForArc(W.RAIL.padDeg, RD);
+
+    const left = tile(W.railTileAt(0), { padding: cm(padM), gap: cm(gapM) });
+    const right = tile(W.railTileAt(1), { padding: cm(padM), gap: cm(gapM) });
+    this.group.add(left.group, right.group);
+    this.uis.push(left.ui, right.ui);
+
+    // Eight faces, in the crew's own fixed order, four to a row. The order is
+    // the arc's order and it never sorts — a control that moves is a control
+    // you have to read every time instead of reaching for.
+    this.faces = [];
+    for (let r = 0; r < 2; r++) {
+      // NOT `inert`. `pointerEvents: 'none'` is inherited the way CSS inherits
+      // it, so a strip marked inert takes the eight faces inside it down with
+      // it — which is exactly how the rail shipped dead the first time. A
+      // container holding targets stays pointable and lets them answer.
+      const strip = new Container({
+        flexDirection: 'row', alignItems: 'center', gap: cm(gapM), height: cm(barM), flexShrink: 0,
+      });
+      left.ui.add(strip);
+      this._nodes += 1;
+      for (let k = 0; k < 4; k++) this.faces.push(this._face(strip, r * 4 + k, barM));
+    }
+
+    // The field: still here, still free text, and it ANDs with the faces rather
+    // than replacing them.
     this.field = new Input({
-      flexGrow: 1, height: cm(barM),
-      backgroundColor: COL.field, backgroundOpacity: 1, borderRadius: cm(0.010),
+      width: '100%', height: cm(barM), flexShrink: 0,
+      backgroundColor: COL.field, backgroundOpacity: 1, borderRadius: cm(0.008),
       borderWidth: cm(0.0018), borderColor: COL.faint, borderOpacity: 0.6,
-      paddingX: cm(pad * 0.7), verticalAlign: 'center',
-      fontSize: fontFor(W.TYPE.body, D), color: COL.text, caretColor: COL.accent,
-      placeholder: 'filter - a word, a lieutenant, a column',
+      paddingX: cm(padM), verticalAlign: 'center',
+      fontSize: fontFor(W.TYPE.body, RD), color: COL.text, caretColor: COL.accent,
+      placeholder: 'or type a word',
       hover: { borderColor: COL.accent, borderOpacity: 1 },
       onValueChange: (v) => { this.query = v || ''; this.repaint(); },
     });
-    this.count = new Text({
-      text: '', fontSize: fontFor(W.TYPE.meta, D), color: COL.faint,
-      flexShrink: 0, wordBreak: 'keep-all',
-    });
-    inert(this.count);
-    this.foot.add(this.field, this.count);
-    this.foot.setProperties({ display: 'flex' });
-
+    right.ui.add(this.field);
+    this._nodes += 1;
     const fieldTarget = new Target({
-      mesh: this.field, name: 'board-filter',
+      mesh: this.field, name: 'wall-field',
       onSelect: () => { if (this.field.element) this.field.element.focus(); },
     });
     fieldTarget._paint = () => {};
     this.targets.push(fieldTarget);
+
+    const foot = new Container({
+      flexDirection: 'row', alignItems: 'center', gap: cm(gapM), height: cm(barM), flexShrink: 0,
+    });
+    right.ui.add(foot);          // holds the two buttons, so never inert
+    // What the wall is showing and what is filtering it, in words. A state you
+    // cannot read is a state you cannot undo — and every filter named here is
+    // undone by pressing the thing that set it, or all of them by `clear`.
+    this.status = new Text({
+      text: '', flexGrow: 1, flexShrink: 1, flexBasis: 0, overflow: 'hidden',
+      fontSize: fontFor(W.TYPE.body, RD), color: COL.dim, wordBreak: 'keep-all',
+    });
+    inert(this.status);
+    foot.add(this.status);
+    this._nodes += 2;
+    this.clearBox = this._button(foot, 'clear', barM, RD, () => this.clearFilters());
+    this.closeBox = this._button(foot, 'x', barM, RD, () => {
+      this.setOpen(false);
+      if (this.onClose) this.onClose(this);
+    });
   }
 
-  // One row: a colour bar for the owner, a title, and the column it is in.
-  // The whole row is the target — a press anywhere on it opens the card, which
-  // is the only sane rule when the mark is 27° wide and the ray scatters.
-  _seat() {
-    const rowH = W.sizeForArc(W.BUILD.hit, D);
-    const gap = W.sizeForArc(W.BUILD.gap, D);
+  _face(strip, slot, barM) {
+    const RD = W.RAIL.distM;
     const box = new Container({
-      width: (100 / W.BOARD.cols) + '%', height: cm(rowH + gap),
-      paddingX: cm(gap * 0.5), paddingY: cm(gap * 0.5),
-      flexShrink: 0, display: 'none',
+      width: cm(barM), height: cm(barM), flexShrink: 0,
+      flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      borderRadius: cm(0.008), backgroundColor: COL.slot, backgroundOpacity: 1,
+      borderWidth: cm(0.002), borderColor: COL.rim, borderOpacity: 0.5,
+      hover: { borderColor: COL.accent, borderOpacity: 1 },
+      active: { backgroundColor: '#2a5f7a' },
     });
-    // A row is a target, so its region has to be VISIBLE — and in a dark scheme
-    // its fill cannot do that job. Measured on the rendered frame, a row plate
-    // came out 1.03:1 against the panel behind it, and no pair of dark fills can
-    // do better: the +0.05 term in the contrast formula dominates down there, so
-    // 3:1 between two dark plates is arithmetically out of reach. Worse, a plate
-    // light enough to clear 3:1 is a plate its own text cannot clear 4.5:1 on.
-    //
-    // So the shape is carried by the RIM, which is bright and thin — 5.8:1
-    // against the panel, and it costs no legibility because no text sits on it.
-    const inner = new Container({
-      flexGrow: 1, flexDirection: 'row', alignItems: 'center',
-      gap: cm(W.sizeForArc(0.7, D)), paddingX: cm(W.sizeForArc(0.8, D)),
-      borderRadius: cm(0.008),
-      borderWidth: cm(0.004), borderColor: COL.rim, borderOpacity: 1,
-      backgroundColor: COL.slot, backgroundOpacity: 1,
-      hover: { backgroundColor: COL.barLit, borderColor: COL.accent },
-      active: { backgroundColor: '#2a5f7a', borderColor: COL.accent },
-    });
-    const chip = new Container({
-      width: cm(W.sizeForArc(0.9, D)), height: '64%', flexShrink: 0,
-      borderRadius: cm(0.003), backgroundColor: COL.faint,
-    });
-    // The owner's face in the row itself. A glance down the board should say
-    // whose each card is without reading a word — which is the whole reason the
-    // owner was allowed to stop being a position on the deck.
     const face = new Image({
-      width: cm(W.sizeForArc(3.4, D)), height: cm(W.sizeForArc(3.4, D)),
-      flexShrink: 0, borderRadius: cm(0.005), display: 'none', objectFit: 'fill',
-      borderWidth: cm(0.0012), borderColor: COL.rim, borderOpacity: 0.8,
+      width: '76%', height: '76%', flexShrink: 0, objectFit: 'fill',
+      borderRadius: cm(0.005), display: 'none',
     });
-    const title = new Text({
-      text: '', flexGrow: 1, flexShrink: 1, flexBasis: 0, overflow: 'hidden',
-      fontSize: fontFor(W.TYPE.meta, D), color: COL.text, wordBreak: 'keep-all',
+    // The colour under the face, so a lieutenant is never only a colour and
+    // never only a picture — and it is the same colour the rows carry.
+    const chip = new Container({
+      width: '76%', height: cm(W.sizeForArc(0.8, RD)), flexShrink: 0,
+      marginTop: cm(W.sizeForArc(0.3, RD)),
+      borderRadius: cm(0.002), backgroundColor: COL.faint,
     });
-    const where = new Text({
-      text: '', flexShrink: 0, textAlign: 'right',
-      fontSize: fontFor(W.TYPE.meta, D), color: COL.faint, wordBreak: 'keep-all',
-    });
-    inert(chip); inert(face); inert(title); inert(where);
-    inner.add(chip, face, title, where);
-    box.add(inner);
-    this.grid.add(box);
+    inert(face); inert(chip);
+    box.add(face, chip);
+    strip.add(box);
+    this._nodes += 3;
 
-    const seat = { box, inner, chip, face, title, where, card: null };
+    const seat = { box, face, chip, lt: null };
     const t = new Target({
-      mesh: inner, name: 'board-row',
-      onSelect: () => { if (seat.card && this.onCard) this.onCard(seat.card); },
+      mesh: box, name: 'wall-face',
+      onSelect: () => { if (seat.lt) this.toggleOwner(seat.lt.id); },
     });
     t._paint = () => {};
     this.targets.push(t);
     return seat;
   }
 
-  paint(doc) { this.doc = doc || { cards: [] }; if (this.open) this.repaint(); }
+  _button(parent, label, barM, distM, onSelect) {
+    const box = new Container({
+      height: cm(barM), paddingX: cm(W.sizeForArc(1.4, distM)), flexShrink: 0,
+      justifyContent: 'center', alignItems: 'center',
+      borderRadius: cm(0.008), backgroundColor: COL.slot, backgroundOpacity: 1,
+      borderWidth: cm(0.002), borderColor: COL.rim, borderOpacity: 0.5,
+      hover: { backgroundColor: '#2a5f7a', borderColor: COL.accent },
+      active: { backgroundColor: COL.accent },
+    });
+    const t = new Text({ text: safe(label), fontSize: fontFor(W.TYPE.body, distM), color: COL.text });
+    inert(t);
+    box.add(t);
+    parent.add(box);
+    this._nodes += 2;
+    const target = new Target({ mesh: box, name: 'wall-' + label, onSelect });
+    target._paint = () => {};
+    this.targets.push(target);
+    return box;
+  }
 
+  // ---- filtering, which is pressing ----------------------------------------
+
+  toggleOwner(id) { this.owner = this.owner === id ? null : id; this.repaint(); }
+  toggleColumn(id) { this.column = this.column === id ? null : id; this.repaint(); }
+  clearFilters() {
+    this.owner = null; this.column = null; this.query = '';
+    if (this.field) this.field.setProperties({ value: '' });
+    this.repaint();
+  }
+  filters() {
+    const lts = new Map((this.doc.lieutenants || []).map((l) => [l.id, l]));
+    const cols = new Map((this.doc.columns || []).map((c) => [c.id, c.title || c.id]));
+    const on = [];
+    if (this.owner) on.push((lts.get(this.owner) || {}).name || this.owner);
+    if (this.column) on.push(shortColumn(cols.get(this.column) || this.column));
+    if (this.query.trim()) on.push('"' + this.query.trim() + '"');
+    return on;
+  }
+
+  // ---- painting -------------------------------------------------------------
+
+  paint(doc) {
+    this.doc = doc || { cards: [] };
+    if (this.open) this.repaint();
+  }
+
+  // Which lanes belong to which column. Recomputed on OPEN and never while he
+  // is standing in front of it — see world.js.
   repaint() {
     const q = this.query.trim().toLowerCase();
     const lts = new Map((this.doc.lieutenants || []).map((l) => [l.id, l]));
     const cols = new Map((this.doc.columns || []).map((c) => [c.id, c.title || c.id]));
     const all = this.doc.cards || [];
     const hit = (c) => {
+      if (this.owner && c.owner !== this.owner) return false;
+      if (this.column && c.column !== this.column) return false;
       if (!q) return true;
       const lt = lts.get(c.owner);
       return [c.title, c.id, c.column, cols.get(c.column), c.owner, lt && lt.name, (c.labels || []).join(' ')]
         .some((s) => String(s || '').toLowerCase().includes(q));
     };
-    // Newest activity first. The board's own order is arbitrary here — this is
-    // the finding surface, and the thing he is looking for is nearly always
-    // something that moved recently.
-    const cards = all.filter(hit).slice().sort((a, b) => String(b.activity || b.updated || '')
-      .localeCompare(String(a.activity || a.updated || '')));
+    const kept = all.filter(hit);
 
-    this.count.setProperties({ text: safe(q ? cards.length + ' of ' + all.length : all.length + ' cards') });
-    this.setTitle('the board', q ? 'filtered' : 'newest first');
-
-    this.seats.forEach((s, i) => {
-      const c = cards[i];
-      s.card = c || null;
-      s.box.setProperties({ display: c ? 'flex' : 'none' });
-      if (!c) return;
-      const lt = lts.get(c.owner);
-      s.chip.setProperties({ backgroundColor: W.agentColour(lt && lt.color) });
-      const tex = avatarTexture(lt && lt.avatar);
-      s.face.setProperties(tex ? { src: tex, display: 'flex' } : { display: 'none' });
-      s.title.setProperties({ text: safe(c.title || c.id) });
-      s.where.setProperties({ text: safe(shortColumn(cols.get(c.column) || c.column)) });
+    // **One lane per board column.** That is what makes a column a column, and
+    // it is the whole reason a lane is 27.75° wide and a title is 36 characters
+    // rather than 16: sharing lanes out by how full a column was bought twenty
+    // more rows and cost half of every title.
+    const frame = this.doc.columns || [];
+    let shown = 0;
+    this.lanes.forEach((lane, i) => {
+      lane.column = frame[i] || null;
+      const id = lane.column && lane.column.id;
+      const mine = id
+        ? kept.filter((c) => c.column === id).sort((a, b) => String(b.activity || b.updated || '')
+          .localeCompare(String(a.activity || a.updated || '')))
+        : [];
+      lane.cards = mine;
+      lane.title.setProperties({ text: safe(shortColumn((lane.column && lane.column.title) || id || '')) });
+      lane.count.setProperties({ text: safe(String(mine.length)) });
+      lane.head.setProperties({ backgroundColor: this.column && this.column === id ? '#2a5f7a' : COL.bar });
+      lane.first = Math.max(0, Math.min(lane.first, lane.cards.length - ROWS));
+      this._bind(lane, lts);
+      shown += Math.max(0, Math.min(lane.cards.length - lane.first, ROWS));
     });
-    // Saying it out loud rather than silently showing the first ten: a surface
-    // that truncates without admitting it reads as "this is everything".
-    this._more = Math.max(0, cards.length - SEATS);
-    if (this._more) {
-      this.count.setProperties({ text: safe(cards.length + ' - ' + this._more + ' more, filter to see them') });
-    }
+
+    const on = this.filters();
+    this.status.setProperties({
+      text: safe(on.length ? shown + ' of ' + all.length + ' - ' + on.join(', ') : shown + ' of ' + all.length),
+    });
+    this.clearBox.setProperties({ backgroundOpacity: on.length ? 1 : 0.25 });
+
+    // The crew, in the arc's own fixed order: face `i` on the rail is the
+    // lieutenant standing in berth `i` above it, so reaching for a face is the
+    // same reach as reaching for the sphere.
+    const roster = this.doc.lieutenants || [];
+    this.faces.forEach((seat, i) => {
+      const lt = roster[W.AGENT_ORDER.indexOf(i)] || null;
+      seat.lt = lt;
+      // An empty berth KEEPS ITS PLACE. Hiding it slides every face left, and a
+      // control that moves when the crew changes is a control he has to read
+      // instead of reach for — the same rule the arc of spheres is built on.
+      seat.box.setProperties({
+        backgroundOpacity: !lt ? 0.25 : (!this.owner || this.owner === lt.id ? 1 : 0.3),
+        borderColor: lt && this.owner === lt.id ? COL.accent : COL.rim,
+        borderOpacity: lt ? (this.owner === lt.id ? 1 : 0.5) : 0.2,
+      });
+      if (!lt) { seat.face.setProperties({ display: 'none' }); seat.chip.setProperties({ backgroundColor: COL.slot }); return; }
+      // A crew that is not the filter goes quiet — on the FACE and not only on
+      // the box behind it, or the picture stays at full strength and the state
+      // is carried by a rim alone.
+      const dim = this.owner && this.owner !== lt.id ? 0.35 : 1;
+      const tex = avatarTexture(lt.avatar);
+      seat.face.setProperties(tex ? { src: tex, display: 'flex', opacity: dim } : { display: 'none' });
+      seat.chip.setProperties({ backgroundColor: W.agentColour(lt.color) });
+    });
   }
 
+  // The recycling itself: every row already exists, so this only ever rewrites
+  // text and colour. The two spacers carry the height of what is not built.
+  _bind(lane, lts) {
+    const first = lane.first;
+    lane.rows.forEach((row, r) => {
+      const c = lane.cards[first + r];
+      row.card = c || null;
+      row.box.setProperties({ display: c ? 'flex' : 'none' });
+      if (!c) return;
+      const lt = lts.get(c.owner);
+      row.bar.setProperties({ backgroundColor: W.agentColour(lt && lt.color) });
+      const full = safe(c.title || c.id);
+      row.whole = full.length <= CHARS;
+      // Cut in JS with an ellipsis rather than letting the glyphs run into the
+      // lane's edge. A title that stops dead at the panel boundary reads as a
+      // title hidden BEHIND the next panel — that is exactly how this surface
+      // was read on review, and the tiles were never overlapping. Three dots
+      // inside the plate say "shortened here" and cannot be mistaken for it.
+      row.title.setProperties({ text: row.whole ? full : full.slice(0, CHARS - 3).trimEnd() + '...' });
+    });
+    const rowU = cm(ROW_M);
+    lane.padTop.setProperties({ height: first * rowU });
+    lane.padBottom.setProperties({ height: Math.max(0, lane.cards.length - first - ROWS) * rowU });
+  }
+
+  // ---- the room's panel contract -------------------------------------------
+
+  place() { return this; }           // a wall has a place, and this is it
+
   setOpen(on) {
-    super.setOpen(on);
+    this.open = on;
+    this.group.visible = on;
+    for (const ui of this.uis) ui.setProperties({ display: on ? 'flex' : 'none' });
     if (on) this.repaint();
+  }
+
+  // How many uikit components the wall is made of. Constant from construction
+  // to close — that is the assertion, and dev/room-shots.js makes it.
+  nodes() { return this._nodes; }
+
+  // What the wall is currently showing, for the capture run and for a console.
+  //
+  // **`legible` is the number, and `shown` is not.** Counting rows that exist
+  // is what put "53 of 70" on a wall of sixteen-character stubs. A title counts
+  // as legible only when all three hold: it is BOUND to a row, its text is
+  // WHOLE — no ellipsis, the card's own title end to end — and nothing covers
+  // it, which `wallTileGap` decides for the whole wall at once because the
+  // tiles either clear each other or they do not.
+  report() {
+    const gap = W.wallTileGap(0);
+    const clear = gap > 0;
+    let shown = 0, legible = 0;
+    const lens = [];
+    for (const lane of this.lanes) {
+      const n = Math.max(0, Math.min(lane.cards.length - lane.first, ROWS));
+      shown += n;
+      for (const row of lane.rows) if (row.card) { if (row.whole && clear) legible++; }
+    }
+    for (const c of this.doc.cards || []) lens.push(safe(c.title || c.id).length);
+    lens.sort((a, b) => a - b);
+    return {
+      nodes: this._nodes,
+      rows: ROWS, lanes: LANES, seats: W.wallSeats(), chars: CHARS,
+      cards: (this.doc.cards || []).length,
+      shown,
+      legible,
+      tileGapDeg: +gap.toFixed(2),
+      tileGapLeaningDeg: +W.wallTileGap(0.20).toFixed(2),
+      titleLen: lens.length ? { min: lens[0], median: lens[Math.floor(lens.length / 2)], max: lens[lens.length - 1] } : null,
+      filters: this.filters(),
+      lane: this.lanes.map((l) => ({
+        column: (l.column && l.column.id) || null, held: l.cards.length, first: l.first,
+      })),
+    };
+  }
+
+  // Drive the deepest lane to the bottom of its own column. The node count is
+  // read either side of this in dev/room-shots.js, and the whole design of the
+  // pool is the claim that it does not move.
+  scrollDeepestToEnd() {
+    let lane = null;
+    for (const l of this.lanes) if (!lane || l.cards.length > lane.cards.length) lane = l;
+    if (!lane) return null;
+    const max = lane.body.maxScrollPosition && lane.body.maxScrollPosition.value;
+    lane.body.scrollPosition.value = [0, max ? max[1] : 0];
+    return { lane: lane.i, held: lane.cards.length, to: max ? max[1] : 0 };
+  }
+
+  tick(now) {
+    for (const t of this.targets) t.tick(now);
+    // Scrolling is the only thing that moves a card into a row, and it is read
+    // rather than subscribed to: one number per lane per frame against a signal
+    // subscription per lane is not a trade worth making.
+    for (const lane of this.lanes) {
+      const pos = lane.body.scrollPosition && lane.body.scrollPosition.value;
+      if (!pos) continue;
+      const first = Math.max(0, Math.min(Math.round(pos[1] / cm(ROW_M)),
+        Math.max(0, lane.cards.length - ROWS)));
+      if (first === lane.first) continue;
+      lane.first = first;
+      lane.scrolled = now;
+      this._bind(lane, new Map((this.doc.lieutenants || []).map((l) => [l.id, l])));
+    }
   }
 }
 

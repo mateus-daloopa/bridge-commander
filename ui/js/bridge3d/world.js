@@ -35,8 +35,29 @@ export function sphereForArc(deg, distM) { return distM * Math.sin(deg * D / 2);
 
 // Em-box degrees. The floor is 0.7° of CAP height; `meta`, the smallest thing
 // painted anywhere in the room, is 1.15 × 0.72 = 0.83°, clear of it.
+//
+// `wall` is not chosen, it is SOLVED, and the thing it is solved for is the
+// TITLE. Sized the other way round — cap height first, characters last — the
+// lane came out at sixteen characters against a median card title of fifty-
+// three, and every row on the wall read "Archon as the exe". A row you cannot
+// tell from its neighbour is not a row, whatever its cap height.
+//
+// So: the floor is 32 characters, the lane is what the arc has left once four
+// columns have taken theirs, and the em box is what fits. Characters and rows
+// do NOT trade against each other — both come out of the type size and both are
+// bought with cap height — so the em box is pushed down until the CUT cap meets
+// the size the room's own body prose is set at, and stops there. That is
+// **1.43°**, and it buys 36 characters and 18 rows a lane — one character more
+// and the cut cap goes under the room's own prose, which is where it stops.
+//
+// It is deliberately BELOW the 1.3° of cap this was first built to. That is the
+// trade said out loud: 1.3° costs twelve of the thirty-six characters and four
+// of the eighteen rows, and a title you can read every letter of and still not
+// recognise is not legibility. `wallCap()` measures what it lands at — 1.04° cut
+// and 0.93° at the worst row, a third clear of the 0.7° floor — and
+// `wallTrade()` has the rest of the curve.
 export const CAP = 0.72;
-export const TYPE = { head: 2.0, body: 1.4, meta: 1.15 };
+export const TYPE = { head: 2.0, body: 1.4, meta: 1.15, wall: 1.43 };
 
 // The floors, corrected. 3° is the floor for the DRAWN MARK and it is not a
 // specification for the hit box: a hand-held ray scatters to an effective width
@@ -144,45 +165,272 @@ export const PANEL = {
 // touches it again, and he can carry as many as his attention will hold.
 export const PANEL_SLOTS = [-17.5, 17.5];
 
-// The board is not a hand panel and it cannot be one. Its rows are things he
-// PRESSES, so each is the 6.06° hit floor tall with 1.66° of air beside it —
-// and a 34° panel has room for three of those, which is not a board, it is a
-// keyhole. So the board gets its own surface: wider, taller, and a little
-// further out, carrying two columns of five.
+// ---- the wall -------------------------------------------------------------
 //
-// 56° x 44° at 1.35 m, centred 13° below the horizon: it spans ±28° of azimuth
-// and -35° to +9° of elevation, which is the TALLEST a surface can be in this
-// room — one degree under the +10° ceiling and exactly on the -35° floor. Two
-// columns of four, because at the 7.72° lattice pitch that is what fits once
-// the bar and the filter have taken their two 6.06° hit floors out of the
-// height, and eight is what is left.
+// The board was a single flat panel 56° wide carrying eight rows, and eight of
+// sixty-eight is not a board, it is a peephole with a search box attached. The
+// captain's verdict was that filtering to see your own board is useless. He is
+// right, and the fix is not a bigger panel: **a panel becomes a wall.**
 //
-// Eight of sixty-four sounds thin and is not: the rows are newest-first, nine
-// cards on the live board were touched in the last day, and the filter is one
-// field away. A third column would buy twelve rows at 18.7° each — 32
-// characters of title instead of 47 — and a title he has to guess at is worse
-// than four fewer rows.
-export const BOARD = {
-  distM: 1.35,
-  elevDeg: -13,
-  tiltDeg: 15,
-  widthDeg: 56,
-  heightDeg: 44,
-  cols: 2,
+// A wall is a run of FLAT TILES laid along an arc — flat text on each tile,
+// curved surface overall, which is what "text stays flat" actually buys you.
+// One tile per LANE. A tile 18.6° wide is 9.3° off-normal at its edges, which
+// costs 1.3% of its width to foreshortening and nothing to legibility.
+//
+// ---- the arithmetic, and it is the whole design ---------------------------
+//
+// **The lane is sized by the TITLE, and everything else falls out of that.**
+// This is the correction that matters, and it was paid for by a rendered
+// frame: sized the other way round — cap height first, characters last — the
+// lane came out at sixteen characters against a median card title of FIFTY-
+// THREE, and every row on the wall read "Archon as the exe". A row you cannot
+// tell apart from its neighbour is not a row, whatever its cap height.
+//
+// So the fixed numbers are now:
+//
+//   · **32 characters of title**, minimum, unoccluded. The floor. It lands at
+//     36, because that is where the type stops being pushed down.
+//   · **four lanes, one per board column** — the board has four columns, so
+//     six lanes was a number with nothing behind it.
+//   · **120° of azimuth**, which is about as far as a neck turns and already
+//     wider than the ±45° a bounded region is normally held to. Wider makes
+//     the outer tiles worse to look at, not better — see below.
+//
+// HORIZONTALLY: four lanes with 3° of air between them is (120 - 3×3)/4 =
+// **27.75° per lane**. Inside that, 1.0° of padding, a 0.9° owner bar and 0.3°
+// of gap leave 25.55° of title, and at 1.43° em with Inter's measured 0.494
+// mean advance that is **36 characters**.
+//
+// VERTICALLY: the tallest a surface gets in this room is +10° to -34°, on the
+// ceiling and inside the floor. That is 44°. The lane header takes one 6.06°
+// hit floor, leaving 37.94°; a line of 1.43° type is 1.64° and the row pitch
+// is that plus air, **2.07°**, so 37.94 / 2.07 is **18 rows**.
+//
+// So the wall holds 4 × 18 = **72 rows**, and on the live board — 35 backlog,
+// 4 working, 31 in review, 0 peer — it shows **40 cards at once**, every one
+// of them 36 characters wide. Against eight before, and against sixteen-
+// character stubs on the version this replaces.
+//
+// ---- and what it cost, said out loud --------------------------------------
+//
+// **Forty, not fifty-six.** One lane per column is what makes a column a
+// column, and it means a column shows at most eighteen of its cards however
+// many it holds — Backlog has 35 and shows 18. Sharing lanes out by fullness
+// bought twenty more rows and cost half the title, which is the trade that
+// failed review. `wallTrade()` has the whole curve; the honest summary is that
+// 32 characters and 50-at-once do not both fit in 120° × 44°, and readable
+// won.
+//
+// A 2.07° row is also UNDER the 6.06° hit floor, so a wall row is aimed at,
+// not swiped at. The mitigation is the one the six hover states exist for: the
+// row lights before the trigger is pulled, a mis-aim is visible, and the worst
+// outcome is a card he closes again. Everything pressed DELIBERATELY — a lane
+// header, a face, the field, the clear — is the full 6.06° and lives on the
+// rail, not on the wall.
+export const WALL = {
+  distM: 1.50,
+  lanes: 4,                         // one per board column, and the board has four
+  spanDeg: 120,                     // total azimuth, ends included
+  laneGapDeg: 3.0,                  // air between two lanes — a column separator
+  topDeg: 10,
+  bottomDeg: -34,
+  // NOT tilted. A hand panel is tilted back 15° so its face points up at the
+  // eye; a lane is 44° tall and no tilt makes both of its ends face you. What
+  // the tilt does do is throw the top edge away from the eye and squash the top
+  // rows: 15° of it cost the worst row 21% of its cap height and put the wall's
+  // top behind the crew. Turned to face the eye and left there is what a wall
+  // wants.
+  tiltDeg: 0,
+  rowDeg: 2.07,
+  headDeg: BUILD.hit,               // the lane header is pressed: it filters
 };
 
-export function boardSize() {
+// 1.50 m and not the 2.6 m this was first drawn at. Two things decide it, and
+// **the character count is not one of them** — arc is what a person perceives,
+// and a lane subtends 27.75° at any radius you like. Moving the wall out buys
+// no letters at all.
+//
+// What the distance does decide: the crew stand at 2.0 m, and at 1.80 m with a
+// 15° tilt a lane's top edge measured 2.11 m — behind them, and the
+// lieutenants drew straight through the wall in the photograph. It also has to
+// clear the parapet at 4.90 m and stay inside the comfort band, which ends at
+// FAR. 1.50 m and no tilt does all of it, with the furthest point on the wall
+// at 1.62 m.
+
+// What the wall really covers, once it has been turned to face the eye and
+// tilted. A flat surface 44° tall does not subtend 44° symmetrically — its
+// lower half is nearer and so bigger in the eye — and the tilt shifts the whole
+// thing. Both facts bit, so the extremes are derived here rather than read off
+// `topDeg` and `bottomDeg`, and the tests measure THESE.
+//
+// The arithmetic is in the vertical plane through a lane's centre, with the eye
+// at the origin: `s` along the line of sight, `u` the tile's own up.
+function wallSeen(h) {
+  const el = wallElevDeg() * D, t = WALL.tiltDeg * D;
+  const s = [Math.cos(el), Math.sin(el)];               // [horizontal, up]
+  const u = [-Math.sin(el), Math.cos(el)];
+  const p = [WALL.distM * s[0] + h * Math.cos(t) * u[0] + h * Math.sin(t) * s[0],
+    WALL.distM * s[1] + h * Math.cos(t) * u[1] + h * Math.sin(t) * s[1]];
+  return { deg: Math.atan2(p[1], p[0]) / D, dist: Math.hypot(p[0], p[1]) };
+}
+
+export function wallExtent() {
+  const half = sizeForArc(wallHeightDeg(), WALL.distM) / 2;
+  const top = wallSeen(half), bottom = wallSeen(-half);
   return {
-    widthM: sizeForArc(BOARD.widthDeg, BOARD.distM),
-    heightM: sizeForArc(BOARD.heightDeg, BOARD.distM),
+    topDeg: top.deg, bottomDeg: bottom.deg,
+    maxDistM: Math.max(top.dist, bottom.dist, WALL.distM),
   };
 }
 
-// How many rows fit, at the lattice pitch, in whatever height is left once the
-// bar and the filter have taken their hit floors.
-export function boardRows() {
-  const body = BOARD.heightDeg - 2 * BUILD.hit;
-  return Math.max(1, Math.floor(body / PITCH));
+// The cap height a title really covers, row by row, and the two ends of it.
+//
+// `TYPE.wall × CAP` is what the type is CUT at; it is not what the eye gets.
+// A row near the top of the tile is further away and turned further from the
+// line of sight, so it covers less arc than the same row at the middle — 10%
+// less across a 44° lane, and the captain's 1.3° floor has to hold on the
+// worst of them, not the best. This is the figure the tests assert and the
+// figure the rendered frame was checked against.
+export function wallCap() {
+  const half = sizeForArc(wallHeightDeg(), WALL.distM) / 2;
+  const head = sizeForArc(WALL.headDeg, WALL.distM);
+  const row = sizeForArc(WALL.rowDeg, WALL.distM);
+  const cut = TYPE.wall * CAP;
+  let worst = Infinity, best = 0;
+  for (let k = 0; k < wallRows(); k++) {
+    const h = half - head - k * row;
+    const seen = (wallSeen(h).deg - wallSeen(h - row).deg) / WALL.rowDeg;
+    worst = Math.min(worst, cut * seen);
+    best = Math.max(best, cut * seen);
+  }
+  return { cutDeg: cut, worstDeg: worst, bestDeg: best };
+}
+
+export function wallLaneDeg() {
+  return (WALL.spanDeg - (WALL.lanes - 1) * WALL.laneGapDeg) / WALL.lanes;
+}
+export function wallHeightDeg() { return WALL.topDeg - WALL.bottomDeg; }
+export function wallElevDeg() { return (WALL.topDeg + WALL.bottomDeg) / 2; }
+
+// How many rows fit under the header, at the row pitch.
+export function wallRows() {
+  return Math.max(1, Math.floor((wallHeightDeg() - WALL.headDeg) / WALL.rowDeg));
+}
+export function wallSeats() { return wallRows() * WALL.lanes; }
+
+export function wallLaneSize() {
+  return {
+    widthM: sizeForArc(wallLaneDeg(), WALL.distM),
+    heightM: sizeForArc(wallHeightDeg(), WALL.distM),
+  };
+}
+
+// Where lane `i` stands. The lane pitch is authored as TRUE ARC and converted
+// to azimuth at the wall's centre elevation, so the 3° of air between two
+// neighbouring lanes is 3° as the eye sees it — and because the conversion
+// fans outward as it goes down, the gap only ever grows away from the centre.
+export function wallLaneAt(i) {
+  const step = azSpan(wallLaneDeg() + WALL.laneGapDeg, wallElevDeg());
+  const az = (i - (WALL.lanes - 1) / 2) * step;
+  const el = wallElevDeg();
+  return { az, el, dist: WALL.distM, tilt: WALL.tiltDeg, pos: pointAt(az, el, WALL.distM), ...wallLaneSize() };
+}
+
+// Characters of title a lane holds, once the padding, the owner bar and its
+// gap are out of the way. 0.494 em is Inter's measured mean advance over real
+// card titles.
+export const WALL_ROW_CHROME = 2.2;        // padding + owner bar + gap, degrees
+export const WALL_CHARS = 32;              // the floor the whole geometry is solved from
+export function wallChars(emDeg = TYPE.wall) {
+  return Math.floor((wallLaneDeg() - WALL_ROW_CHROME) / (emDeg * 0.494));
+}
+
+// **Do two flat tiles on an arc ever cover one another?** This is the question
+// a photograph is worst at answering — a title cut off at its lane's edge and
+// a title hidden behind the next panel look identical — and it was asked
+// directly of this wall. The answer is measured here rather than argued.
+//
+// Each tile is a chord of the circle, turned to face the eye, so from the arc
+// centre its angular half-width is exactly half its arc and the gap between
+// two of them is exactly `laneGapDeg`. Off centre it is not: move the eye
+// sideways and the near edge of one tile swings across its neighbour. This
+// returns the SMALLEST gap left between any two neighbours for an eye
+// displaced `eyeOffsetM` along the wall — negative means one really does eat
+// the other.
+export function wallTileGap(eyeOffsetM = 0) {
+  const w = sizeForArc(wallLaneDeg(), WALL.distM) / 2;
+  const edges = [];
+  for (let i = 0; i < WALL.lanes; i++) {
+    const l = wallLaneAt(i), a = l.az * D;
+    const t = [Math.cos(a), Math.sin(a)];                 // the tile's own width axis
+    const az = (p) => Math.atan2(p[0] - eyeOffsetM, -p[1]) / D;
+    edges.push([az([l.pos.x - w * t[0], l.pos.z - w * t[1]]),
+      az([l.pos.x + w * t[0], l.pos.z + w * t[1]])]);
+  }
+  let worst = Infinity;
+  for (let i = 0; i < edges.length - 1; i++) worst = Math.min(worst, edges[i + 1][0] - edges[i][1]);
+  return worst;
+}
+
+// The curve behind the choice, so the trade is arguable instead of asserted:
+// at a given character floor, what does the wall hold and what cap height does
+// the type land at? `visible` is against the live shape of the board.
+export function wallTrade(chars, counts = [35, 4, 31, 0]) {
+  const em = (wallLaneDeg() - WALL_ROW_CHROME) / (chars * 0.494);
+  const rowDeg = em * 1.15 + 0.42;
+  const rows = Math.max(1, Math.floor((wallHeightDeg() - WALL.headDeg) / rowDeg));
+  return {
+    chars, emDeg: em, capCutDeg: em * CAP, rowDeg, rows, seats: rows * WALL.lanes,
+    visible: counts.reduce((n, c) => n + Math.min(c, rows), 0),
+  };
+}
+
+// ---- the rail --------------------------------------------------------------
+//
+// Filtering by typing is not filtering, it is a search box. The rail is where
+// one press does it: the eight lieutenants' FACES, which is the honest use for
+// them — they came off the rows this morning for being noise at 90 of them,
+// and here each one is a control at the full 6.06° hit floor. Press a face,
+// the wall is that lieutenant's; press it again, it clears.
+//
+// It sits BELOW the wall and NEARER, at 1.20 m, because at the wall's own
+// distance the same elevation is underground: 1.80 m at -50° is 0.07 m below
+// the deck. Near and low is also where a control belongs — you glance down at
+// it, the way you glance down at the mat, and the whole reading band above
+// stays spent on cards.
+export const RAIL = {
+  distM: 1.20,
+  elevDeg: -44.5,
+  tiltDeg: 15,
+  tiles: 2,
+  widthDeg: 34,                     // each tile
+  rows: 2,
+  padDeg: 0.6,                      // and the tile's own margin, both sides
+};
+
+// The padding is IN the height, not decoration on top of it. Left out, the two
+// 6.06° strips plus their air came to exactly the tile's height, the padding
+// pushed the second strip past the bottom edge, and the clear and the close
+// were simply not there — a control squeezed out of its container looks the
+// same as a control that is merely small.
+export function railHeightDeg() {
+  return RAIL.rows * BUILD.hit + (RAIL.rows - 1) * BUILD.gap + 2 * RAIL.padDeg;
+}
+
+export function railSize() {
+  return {
+    widthM: sizeForArc(RAIL.widthDeg, RAIL.distM),
+    heightM: sizeForArc(railHeightDeg(), RAIL.distM),
+  };
+}
+
+export function railTileAt(i) {
+  const step = azSpan(RAIL.widthDeg + BUILD.gap, RAIL.elevDeg);
+  const az = (i - (RAIL.tiles - 1) / 2) * step;
+  return {
+    az, el: RAIL.elevDeg, dist: RAIL.distM, tilt: RAIL.tiltDeg,
+    pos: pointAt(az, RAIL.elevDeg, RAIL.distM), ...railSize(),
+  };
 }
 
 export function panelSize() {

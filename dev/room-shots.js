@@ -263,8 +263,17 @@ async function main() {
     // hidden panel that is still pointable at, a pointer flag the library
     // rewrites the moment you set it. So the run points at one of each kind of
     // thing and checks it lights up.
-    await evaluate(cdp, setScene('world'));
+    let probeScene = '';
     for (const p of PROBES) {
+      const want = p.scene || 'world';
+      if (want !== probeScene) {
+        probeScene = want;
+        await evaluate(cdp, setScene(want));
+        await evaluate(cdp, 'window.__xr.frames(3)');
+      }
+      // The hand converges with the gaze at 1.75 m unless it is told otherwise,
+      // and a ray converging out there sails straight past the rail at 1.20 m.
+      if (p.reach) await evaluate(cdp, `window.__xr.reach(${p.reach})`);
       await evaluate(cdp, `window.__xr.aim(${p.yaw}, ${p.pitch})`);
       await evaluate(cdp, 'window.__xr.frames(4)');
       const lit = await evaluate(cdp, 'window.__bridge.lit()');
@@ -272,6 +281,91 @@ async function main() {
       probes.push({ ...p, lit, ok: !!on });
       console.log((on ? '· ' : '✗ ') + ('ray on ' + p.name).padEnd(24)
         + (on ? on.state + ' at ' + on.distance.toFixed(2) + ' m' : 'NOTHING — the ray reaches nothing there'));
+    }
+
+    // ---- the wall, worked ------------------------------------------------
+    //
+    // Three things a still photograph of the wall cannot tell you, and the
+    // third one is the reason the wall is built the way it is.
+    //
+    //   · how many titles are LEGIBLE at once — bound to a row, shown whole
+    //     with no ellipsis, and with nothing covering them. Counting rows that
+    //     merely exist is what put "53 of 70" on a wall of 16-character stubs
+    //   · that pressing a lieutenant's FACE filters it, with no typing
+    //   · that scrolling a lane to the bottom of its column changes the uikit
+    //     node count by exactly zero
+    //
+    // The last one is not a nicety. The version of this surface that held one
+    // live node per card killed his headset browser at about sixty rows, and
+    // the wall holds ninety. So the pool is fixed and this is the proof.
+    //
+    // The frame time here is measured on whatever GPU this machine has, which
+    // in CI is a software rasteriser — an absolute figure off it means nothing
+    // against a 13.9 ms budget. What DOES travel is the ratio: the same room
+    // with the wall shut and with the wall open, on the same renderer, plus
+    // the draw calls and triangles, which are the same numbers everywhere.
+    const BEAT = `(async () => {
+      const t = [];
+      let last = performance.now();
+      for (let i = 0; i < 40; i++) {
+        await new Promise((r) => requestAnimationFrame(r));
+        const now = performance.now(); t.push(now - last); last = now;
+      }
+      t.sort((a, b) => a - b);
+      return { median: t[Math.floor(t.length / 2)], p95: t[Math.floor(t.length * 0.95)], frames: t.length };
+    })()`;
+    let wall = null;
+    try {
+      await evaluate(cdp, setScene('world'));
+      await evaluate(cdp, 'window.__xr.frames(4)');
+      const shut = await evaluate(cdp, BEAT);
+      const shutRoom = await evaluate(cdp, 'window.__bridge.stats()');
+      await evaluate(cdp, setScene('board'));
+      await evaluate(cdp, 'window.__xr.look("board")');
+      await evaluate(cdp, 'window.__xr.frames(4)');
+      const full = await evaluate(cdp, 'window.__bridge.wall()');
+      const openRoom = await evaluate(cdp, 'window.__bridge.stats()');
+      const beat = await evaluate(cdp, BEAT);
+      const scrolled = await evaluate(cdp, 'window.__bridge.wallScroll()');
+      await evaluate(cdp, 'window.__xr.frames(6)');
+      const after = await evaluate(cdp, 'window.__bridge.wall()');
+      await evaluate(cdp, `window.__xr.look("board")`);
+      await evaluate(cdp, 'window.__xr.frames(3)');
+      let { data } = await cdp.send('Page.captureScreenshot', { format: 'png' });
+      fs.writeFileSync(path.join(args.out, 'wall-scrolled.png'), Buffer.from(data, 'base64'));
+
+      const filtered = await evaluate(cdp, 'window.__bridge.wallFilter()');
+      await evaluate(cdp, 'window.__xr.frames(4)');
+      ({ data } = await cdp.send('Page.captureScreenshot', { format: 'png' }));
+      fs.writeFileSync(path.join(args.out, 'wall-filtered.png'), Buffer.from(data, 'base64'));
+      const afterFilter = await evaluate(cdp, 'window.__bridge.wall()');
+
+      const flat = !!(full && after && afterFilter
+        && full.nodes === after.nodes && full.nodes === afterFilter.nodes);
+      wall = { full, scrolled, after, filtered: afterFilter, beat, shut, shutRoom, openRoom, poolHeldFlat: flat };
+      console.log('· ' + 'the wall'.padEnd(24) + full.legible + ' of ' + full.cards
+        + ' titles LEGIBLE at once (' + full.shown + ' rows bound, ' + full.chars
+        + ' chars a lane, titles run ' + full.titleLen.min + '-' + full.titleLen.max
+        + ', median ' + full.titleLen.median + ')');
+      console.log('· ' + 'do tiles cover tiles'.padEnd(24)
+        + full.tileGapDeg + '° between neighbours from the arc centre, '
+        + full.tileGapLeaningDeg + '° leaning 20 cm — '
+        + (Math.min(full.tileGapDeg, full.tileGapLeaningDeg) > 0 ? 'no tile covers another' : 'OCCLUDED'));
+      console.log('· ' + 'what it costs'.padEnd(24)
+        + shutRoom.calls + ' -> ' + openRoom.calls + ' draws, '
+        + shut.median.toFixed(1) + ' -> ' + beat.median.toFixed(1) + ' ms median frame ('
+        + (beat.median / shut.median).toFixed(2) + 'x, on THIS machine\'s renderer, not a headset)');
+      console.log((flat ? '· ' : '✗ ') + 'the row pool'.padEnd(24)
+        + (flat
+          ? 'scrolled lane ' + scrolled.lane + ' (' + scrolled.held + ' cards) to its end and filtered — '
+            + after.nodes + ' nodes throughout, unchanged'
+          : 'GREW: ' + full.nodes + ' -> ' + after.nodes + ' -> ' + afterFilter.nodes));
+      console.log((afterFilter.shown < full.shown ? '· ' : '✗ ') + 'a face filters'.padEnd(24)
+        + 'pressing a face left ' + afterFilter.shown + ' of ' + afterFilter.cards
+        + ' showing (' + (afterFilter.filters.join(', ') || 'nothing') + ')');
+    } catch (e) {
+      wall = { error: String((e && e.message) || e) };
+      console.log('✗ the wall'.padEnd(26) + 'could not be driven: ' + wall.error);
     }
 
     // And can he MOVE a window? Grabbing is the one interaction the captain
@@ -315,7 +409,7 @@ async function main() {
 
     const manifest = {
       generatedAt: new Date().toISOString(),
-      grab,
+      grab, wall,
       url, size: args.width + 'x' + args.height,
       chrome: bin, board: args.url ? 'live server' : 'dev/ui-server.js fixture',
       note: 'Screenshots are structural evidence only — every arc figure is asserted in test/bridge3d.test.js, and every design number lives in the vr-design skill.',

@@ -40,6 +40,20 @@ all invisible in a PNG. So the run aims the head at one of each kind of thing �
 a lieutenant, the mat that opens the board — and fails if any of them does not
 light up.
 
+Then it **works the wall**, which is where the three things a photograph cannot
+show live: how many titles are on it with nothing filtered, that pressing a
+lieutenant's face filters it with no typing, and that scrolling a lane to the
+bottom of its column changes the uikit node count by **exactly zero**. The last
+one is the reason the wall is built out of a fixed row pool at all — the surface
+that held one live node per card is the one that killed the headset browser at
+about sixty rows, and the wall holds seventy-eight. It writes `wall-scrolled.png`
+and `wall-filtered.png` beside the viewpoints, and the numbers into the manifest.
+
+Frame time is in there too, as a RATIO: the same room with the wall shut and
+with it open, on whatever renderer this machine has. An absolute millisecond
+figure off a software rasteriser means nothing against a 13.9 ms headset budget;
+the ratio and the draw-call count travel.
+
 And it **grabs a window**: opens a chat, aims at its title bar, squeezes, turns
 its head, releases, and checks the panel came along. Moving a window is the one
 interaction he named as a requirement rather than a nicety, and it is invisible
@@ -166,7 +180,7 @@ emulate; `window.__bridge` is not, so the room can still be driven by hand.
 | `agents.js` | the eight fixed berths and the lieutenants in them |
 | `panel.js` | a surface with prose on it he can read, move and put down — the bar is the handle, the body scrolls, the foot holds a composer |
 | `chat.js` | a conversation on a panel: the thread, and a composer that really sends |
-| `board.js` | the board (every card, filterable, each row one press deep) and the card it opens |
+| `board.js` | the wall — six flat tiles on a 120° arc carrying 78 rows out of one fixed pool, the rail of faces that filters it by pressing, and the card a row opens |
 | `windows.js` | how many panels are open, where they land, and the rule that the room never moves one he has placed |
 | `grab.js` | squeeze to pick a window up, and what happens when he lets go |
 | `sound.js` | the music bed, and the sound a press, a grab and a release make |

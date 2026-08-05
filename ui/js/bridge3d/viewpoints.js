@@ -51,10 +51,23 @@ const ARC = {
   heightM: W.sizeForArc(W.AGENT.riseDeg, W.AGENT.distM) + W.AGENT.diaM,
 };
 
-const BOARD = W.pointAt(0, W.BOARD.elevDeg, W.BOARD.distM);
-// Dead ahead at the board's own distance — where a surface stands when he opens
+// The wall: four flat tiles on a 120° arc, one per board column. A shot cannot
+// hold 120°, so the board's shot is framed on the two CENTRE lanes — the same
+// reasoning that frames the crew on the middle pair of berths rather than on
+// the whole arc — and a second shot is aimed at the outer lane, which is the
+// one you turn your head for and therefore the one that proves the wall is a
+// wall and that its far tiles are still square-on.
+const LANE = [0, 1, 2, 3].map((i) => W.wallLaneAt(i));
+const LANE_PAIR = { widthM: LANE[0].widthM * 2 + W.sizeForArc(W.WALL.laneGapDeg, W.WALL.distM), heightM: LANE[0].heightM };
+const RAIL = W.railTileAt(0);          // the faces
+const RAIL_R = W.railTileAt(1);        // the field, the clear and the close
+// Dead ahead at the wall's own distance — where a surface stands when he opens
 // one, and so what an empty room has to look right without.
-const AHEAD = { x: 0, y: W.EYE, z: -W.BOARD.distM };
+const AHEAD = { x: 0, y: W.EYE, z: -W.WALL.distM };
+// And the middle of the wall itself: dead ahead, but at the elevation the wall
+// is CENTRED on rather than at the horizon. Aimed at AHEAD the shot came back
+// half sky, which is a picture of the weather.
+const WALL_MID = W.pointAt(0, W.wallElevDeg(), W.WALL.distM);
 
 // The middle pair of berths, as one thing. A shot of the room at rest is framed
 // on these rather than on the whole arc: the arc is 68.5° wide at 2 m and does
@@ -64,7 +77,6 @@ const CORE = {
   widthM: 2 * W.AGENT.distM * Math.sin((W.AGENT.pitchDeg / 2) * Math.PI / 180) + W.AGENT.diaM,
   heightM: W.sizeForArc(W.AGENT.riseDeg, W.AGENT.distM) + W.AGENT.diaM,
 };
-const BOARD_SIZE = W.boardSize();
 const PLATE = W.plate();
 
 // The first panel slot, which is where a chat opened from a cold room lands.
@@ -101,10 +113,34 @@ export const VIEWPOINTS = [
   },
   {
     name: 'board', scene: 'board',
-    why: 'the board open: every card, filterable, and each row a target the size of a target — can he read a title from where he stands, and is there air between two rows he might press',
+    why: 'the wall open, straight ahead: the two centre lanes, their column headers and their counts, and sixteen rows apiece at 32 characters of title — the shot the legibility count is taken on, and the one that says whether a title identifies a card or only hints at one',
     eye: HERE,
-    look: at(BOARD),
-    frames: { panel: BOARD_SIZE, at: BOARD },
+    // Dead ahead, which with four lanes is the seam between the two centre
+    // ones — so the shot is the wall as he meets it rather than one tile with
+    // its neighbours falling off both edges.
+    look: at(WALL_MID),
+    frames: { panel: LANE_PAIR, at: WALL_MID },
+  },
+  {
+    name: 'wall-edge', scene: 'board',
+    why: 'the outer lane, 47° off centre: the tile you turn your head for. Every tile stands at exactly the same radius and faces the head — this is the shot that says so, against a wide-angle frame that stretches whatever sits at its edge',
+    eye: HERE,
+    // A 46° turn, and it is declared rather than smuggled: a 120° wall is a
+    // surface you READ BY TURNING, so its outer lane sits past the 45° a single
+    // viewpoint is otherwise held to. That is the cost of the width, and the
+    // shot exists to show what he gets for it.
+    turn: W.WALL.spanDeg / 2,
+    // The FIRST lane, not the last: it is the one carrying Backlog, and a
+    // photograph of the empty end of the board proves nothing about type.
+    look: at(LANE[0].pos),
+    frames: { panel: { widthM: LANE[0].widthM, heightM: LANE[0].heightM }, at: LANE[0].pos },
+  },
+  {
+    name: 'rail', scene: 'board',
+    why: 'the filter rail under the wall: eight faces at the full hit floor, each one a press away from showing only that lieutenant\'s cards, plus the field and the clear — filtering with no typing anywhere in the gesture',
+    eye: HERE,
+    look: at(RAIL.pos),
+    frames: { panel: { widthM: RAIL.widthM, heightM: RAIL.heightM }, at: RAIL.pos },
   },
   {
     name: 'chat', scene: 'chat',
@@ -138,15 +174,51 @@ export const byName = (name) => VIEWPOINTS.find((v) => v.name === name) || null;
 const agent = W.agentAt(4);
 const mat = W.plate();
 
+// `scene` says what has to be OPEN for the probe to have anything to land on:
+// the wall and its rail do not exist until the mat has been pressed.
 export const PROBES = [
-  { name: 'a lieutenant', yaw: -agent.az, pitch: agent.el, expect: 'lieutenant' },
-  { name: 'the board mat', yaw: -mat.azimuth, pitch: mat.elevation, expect: 'list-plate' },
+  { name: 'a lieutenant', scene: 'world', yaw: -agent.az, pitch: agent.el, expect: 'lieutenant' },
+  { name: 'the board mat', scene: 'world', yaw: -mat.azimuth, pitch: mat.elevation, expect: 'list-plate' },
+  // A row on the wall — the sub-floor target, and so the one most worth
+  // proving the ray can find. Lane zero is the first column's first lane, so
+  // it is the one lane that has cards on any board worth photographing.
+  {
+    name: 'a wall row', scene: 'board', expect: 'wall-row',
+    yaw: -LANE[0].az,
+    pitch: W.wallExtent().topDeg - W.WALL.headDeg - 2 * W.WALL.rowDeg,
+    reach: W.WALL.distM,
+  },
+  // A lane header, which is how a column filters itself. The aim is a little
+  // under its own centre because the hand is held BELOW the head and its ray
+  // therefore climbs — a probe pitched at the true centre lands above the top
+  // edge, which is a real thing to know and not a fudge.
+  {
+    name: 'a lane header', scene: 'board', expect: 'wall-head',
+    yaw: -LANE[3].az, pitch: W.wallExtent().topDeg - W.BUILD.hit, reach: W.WALL.distM,
+  },
+  // And a face on the rail, which is the whole point of the rail. The four
+  // faces fill the left 31° of a 34° tile, so the tile's own centre is inside
+  // the third of them — aiming at the middle of the upper strip lands on it.
+  {
+    name: 'a lieutenant\'s face', scene: 'board', expect: 'wall-face',
+    yaw: -RAIL.az, pitch: W.RAIL.elevDeg + (W.BUILD.hit + W.BUILD.gap) / 2, reach: W.RAIL.distM,
+  },
+  // And the way OUT. Inside a headset the close on the rail is the only one
+  // there is, so a wall you cannot shut is a wall you are stuck behind. It is
+  // the last control on the right-hand tile's lower strip.
+  {
+    name: 'the way out', scene: 'board', expect: 'wall-x',
+    yaw: -(RAIL_R.az + W.azSpan(W.RAIL.widthDeg, W.RAIL.elevDeg) / 2 - 2),
+    pitch: W.RAIL.elevDeg - (W.BUILD.hit + W.BUILD.gap) / 2, reach: W.RAIL.distM,
+  },
 ];
 
 // Everywhere the room actually stands something — what a viewpoint is allowed to
 // be aimed at. A viewpoint pointed anywhere else is a photograph of the floor.
 export function places() {
-  const out = [BOARD, PLATE.pos, AHEAD];
+  const out = [PLATE.pos, AHEAD, WALL_MID];
+  for (const l of LANE) out.push(l.pos);
+  for (let i = 0; i < W.RAIL.tiles; i++) out.push(W.railTileAt(i).pos);
   // The panel slots. Nothing stands in them until he opens something, but they
   // are where a window lands, so a shot aimed at one is a shot of the room.
   for (const az of W.PANEL_SLOTS) out.push(W.panelAt(az).pos);
