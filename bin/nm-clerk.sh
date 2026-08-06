@@ -126,6 +126,16 @@ gates=0
 # is already open and parked; the human's decision IS the first gate answer, and
 # everything after it is the clerk's ordinary job again.
 if [ -n "$RESPOND" ]; then
+  # A bare `fix` means "fix everything you offered me" — which is what the
+  # escalation message tells the human it means. no-mistakes will not take
+  # `--action fix` without ids, so the ids are read back off the parked gate
+  # here rather than asked of a human who is holding a phone.
+  if [ "$RESPOND" = fix ] && [ -z "$FINDINGS" ]; then
+    FINDINGS=$(parse_findings <<<"$("$NM" axi status 2>>"$LOG")" \
+      | awk -F'\t' '$2 == "auto-fix" || $2 == "ask-user" { print $1 }' | paste -sd,)
+    [ -n "$FINDINGS" ] || finish failed \
+      "--respond fix with no --findings, and the parked gate offers nothing actionable"
+  fi
   printf 'clerk: answering the parked gate — %s%s\n' "$RESPOND" "${FINDINGS:+ ($FINDINGS)}"
   if [ "$RESPOND" = fix ] && [ -n "$FINDINGS" ]; then
     out=$("$NM" axi respond --action fix --findings "$FINDINGS" 2>>"$LOG")
