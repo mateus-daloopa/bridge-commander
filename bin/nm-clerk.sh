@@ -2,7 +2,8 @@
 # nm-clerk.sh — drive `no-mistakes axi` through its gates with no model in the loop.
 #
 #   nm-clerk.sh --intent-file <file> [extra axi run flags...]   start a run
-#   nm-clerk.sh --respond <fix|approve|skip> [--findings id,id] answer a parked gate
+#   nm-clerk.sh --respond <fix|approve|skip> [--findings id,id]
+#               [--instructions "<guidance>"]                   answer a parked gate
 #
 # The gate is a mapping, not a judgement: `auto-fix` findings get fixed, a gate
 # with nothing actionable left gets approved, and an `ask-user` finding stops the
@@ -12,6 +13,13 @@
 # refused — the run is still alive and still parked on it — and then drives the
 # rest exactly as the first entry point does, to the same files. So one card can
 # go run → park → human → outcome without anyone finishing it by hand.
+#
+# `--instructions` is how that human ARGUES rather than obeys. A `fix` with no
+# guidance tells the fixer "you were right, go ahead"; a `fix` carrying
+# instructions tells it what the finding got wrong and what to do instead. It is
+# the difference between a lieutenant who rubber-stamps and one who rules, and
+# it is the only way a wrong finding gets fixed the right way. no-mistakes takes
+# it on `--action fix` only, which is why nothing else here accepts it.
 #
 # ALWAYS EXITS 0. This runs as a bash node inside an Archon `loop_group`, where a
 # non-zero exit kills the whole run and a crashed run looks exactly like a broken
@@ -35,9 +43,6 @@
 # was never the problem. A refusal is about the ENVIRONMENT, so it escalates to
 # a human like an ask-user finding does, and never bounces to the implementer.
 #
-# and the reason it stopped goes to stdout, which is the node's output and the
-# next round's only account of what happened.
-#
 # Env:
 #   NM_BIN              the no-mistakes binary (default: no-mistakes)
 #   NM_MAX_FIX_ROUNDS   fix rounds before giving up (default: 3). The fixer can
@@ -57,6 +62,7 @@ LOG=${NM_CLERK_LOG:-/dev/stderr}
 INTENT_FILE=
 RESPOND=
 FINDINGS=
+INSTRUCTIONS=
 while [ $# -gt 0 ]; do
   case "$1" in
     --intent-file) INTENT_FILE=${2:-}; shift 2 ;;
@@ -65,6 +71,8 @@ while [ $# -gt 0 ]; do
     --respond=*) RESPOND=${1#*=}; shift ;;
     --findings) FINDINGS=${2:-}; shift 2 ;;
     --findings=*) FINDINGS=${1#*=}; shift ;;
+    --instructions) INSTRUCTIONS=${2:-}; shift 2 ;;
+    --instructions=*) INSTRUCTIONS=${1#*=}; shift ;;
     *) break ;;
   esac
 done
@@ -109,7 +117,13 @@ if [ -n "$RESPOND" ]; then
   esac
   [ -z "$INTENT_FILE" ] \
     || refuse "The clerk was given both --respond and --intent-file; those are two different entry points."
+  # Guidance only means something to the fixer. Silently dropping it on an
+  # approve is how a human's argument disappears without anyone noticing.
+  [ -z "$INSTRUCTIONS" ] || [ "$RESPOND" = fix ] \
+    || refuse "The clerk was given --instructions with --respond $RESPOND; no-mistakes takes guidance only on a fix."
 else
+  [ -z "$INSTRUCTIONS" ] \
+    || refuse "The clerk was given --instructions on the --intent-file door; guidance answers a parked gate, it does not start a run."
   [ -n "$INTENT_FILE" ] && [ -r "$INTENT_FILE" ] \
     || refuse "The clerk got no readable --intent-file, so the reviewer would have had no acceptance criteria to read the diff against."
 fi
@@ -175,9 +189,14 @@ if [ -n "$RESPOND" ]; then
     [ -n "$FINDINGS" ] || refuse \
       "A human answered \`fix\`, but the parked gate offers nothing actionable to fix."
   fi
-  printf 'clerk: answering the parked gate — %s%s\n' "$RESPOND" "${FINDINGS:+ ($FINDINGS)}"
+  printf 'clerk: answering the parked gate — %s%s%s\n' \
+    "$RESPOND" "${FINDINGS:+ ($FINDINGS)}" "${INSTRUCTIONS:+ with guidance}"
   if [ "$RESPOND" = fix ] && [ -n "$FINDINGS" ]; then
-    out=$("$NM" axi respond --action fix --findings "$FINDINGS" 2>>"$LOG")
+    if [ -n "$INSTRUCTIONS" ]; then
+      out=$("$NM" axi respond --action fix --findings "$FINDINGS" --instructions "$INSTRUCTIONS" 2>>"$LOG")
+    else
+      out=$("$NM" axi respond --action fix --findings "$FINDINGS" 2>>"$LOG")
+    fi
   else
     out=$("$NM" axi respond --action "$RESPOND" 2>>"$LOG")
   fi

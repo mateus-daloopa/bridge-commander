@@ -233,6 +233,54 @@ test('--respond keeps the fix-round cap', () => {
   assert.match(r.stdout, /fix-round cap \(3\) reached at gate fix_review/);
 });
 
+// ---------- --instructions: the human arguing back ----------
+
+test('--instructions rides along with the fix so the fixer hears the argument', () => {
+  const r = run([fixture('outcome-passed')], {}, [
+    '--respond', 'fix', '--findings', 'lint-1',
+    '--instructions', 'the unused export is deliberate — re-export it instead of deleting it',
+  ]);
+
+  assert.equal(r.outcome, 'passed');
+  assert.equal(
+    r.calls[0],
+    'axi respond --action fix --findings lint-1 --instructions the unused export is deliberate — re-export it instead of deleting it'
+  );
+  assert.match(r.stdout, /with guidance/);
+});
+
+test('a bare fix carrying instructions still resolves the ids off the parked gate', () => {
+  // Reply one is the gate being read for its ids; reply two answers it.
+  const r = run([fixture('gate-awaiting-approval'), fixture('outcome-passed')], {}, [
+    '--respond', 'fix', '--instructions', 'keep the guard, widen the type',
+  ]);
+
+  assert.equal(r.outcome, 'passed');
+  assert.equal(r.calls[0], 'axi status');
+  assert.match(r.calls[1], /^axi respond --action fix --findings \S+ --instructions keep the guard, widen the type$/);
+});
+
+test('instructions on anything but a fix is refused rather than silently dropped', () => {
+  for (const action of ['approve', 'skip']) {
+    const r = run([fixture('outcome-passed')], {}, ['--respond', action, '--instructions', 'because I said so']);
+
+    assert.equal(r.status, 0);
+    assert.equal(r.outcome, 'refused', `${action} swallowed the guidance`);
+    assert.equal(r.calls.length, 0);
+  }
+});
+
+test('instructions on the --intent-file door is refused — guidance answers a gate', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-clerk-'));
+  const intent = path.join(dir, 'intent.md');
+  fs.writeFileSync(intent, 'REQUIRED: nothing.\n');
+  const r = run([fixture('outcome-passed')], {}, ['--intent-file', intent, '--instructions', 'go easy']);
+
+  assert.equal(r.status, 0);
+  assert.equal(r.outcome, 'refused');
+  assert.equal(r.calls.length, 0);
+});
+
 test('an unknown --respond action is refused, not sent', () => {
   const r = run([fixture('outcome-passed')], {}, ['--respond', 'merge-it']);
 
