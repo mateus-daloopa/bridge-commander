@@ -663,7 +663,8 @@ async function cmdArtifactAdd() {
   const id = positional[0];
   if (!id || !opts.uri) {
     die('usage: bc-axi card artifact add <card-id> --uri <attachment://id | file://path | path> [--label L]\n' +
-      '  Promote a file to the card\'s curated artifacts list (deliberate — a chat upload alone never does this).');
+      '  Promote a file to the card\'s curated artifacts list (deliberate — a chat upload alone never does this).\n' +
+      '  A bare path is resolved against the SERVER\'s working directory, not the caller\'s — from a worktree pass file://<abs path> or an absolute path.');
   }
   const body = { uri: opts.uri, actor: opts.actor || 'agent' };
   if (opts.labels.length) body.label = opts.labels[0]; // --label L
@@ -1176,7 +1177,9 @@ if (!commands[cmd]) {
     '                                         worker refuses — pause it instead). Timeline event\n' +
     '  card artifact add <card-id> --uri <attachment://id | file://path | path> [--label L]\n' +
     '                                         promote a file to the card\'s curated artifacts list\n' +
-    '                                         (deliberate — a chat upload alone never does this). Idempotent\n' +
+    '                                         (deliberate — a chat upload alone never does this). Idempotent.\n' +
+    '                                         A bare path resolves against the SERVER\'s cwd, not yours —\n' +
+    '                                         from a worktree pass file://<abs path> or an absolute path\n' +
     '  card artifact rm <card-id> --uri <...>  remove an artifact entry by uri\n' +
     '\nartifact (co-edited files — the captain may have one open RIGHT NOW):\n' +
     '  artifact read <uri> [--json]           read a card artifact through the board: content on\n' +

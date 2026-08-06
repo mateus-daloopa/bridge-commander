@@ -6,6 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { startServerWithLieutenant, withOwner, runCli, LT } = require('./helper');
 
 const b64 = (s) => Buffer.from(s).toString('base64');
@@ -236,6 +237,22 @@ test('cli: card artifact add/rm on the currently-open card', async () => {
     assert.strictEqual((card.attributes.artifacts || []).length, 0);
   } finally {
     await s.stop();
+  }
+});
+
+test('cli: card artifact add usage names the server-side path resolution hazard', async () => {
+  // --workspace, because the usage message is only reached once a workspace has
+  // resolved: run from a checkout that is not inside one and the CLI dies on
+  // "no workspace found" instead, which is what made this test pass in a
+  // worktree under .bridge-commander/ and fail on a clean clone.
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-usage-'));
+  fs.mkdirSync(path.join(ws, '.bridge-commander'), { recursive: true });
+  try {
+    const r = await runCli(['card', 'artifact', 'add', '--workspace', ws]);
+    assert.strictEqual(r.code, 1);
+    assert.match(r.stderr, /server/i);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
   }
 });
 
