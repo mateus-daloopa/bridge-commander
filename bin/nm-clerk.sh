@@ -17,7 +17,6 @@
 # non-zero exit kills the whole run and a crashed run looks exactly like a broken
 # one. So the outcome travels in files:
 #
-#
 #   $ARTIFACTS_DIR/nm-outcome     passed | escalated | refused | failed
 #   $ARTIFACTS_DIR/escalation.md  the whole payload, when a finding is ask-user
 #                                 OR when the gate refused to start at all
@@ -34,9 +33,6 @@
 # `no-mistakes init`ed: three one-second refusals, three rewrites of code that
 # was never the problem. A refusal is about the ENVIRONMENT, so it escalates to
 # a human like an ask-user finding does, and never bounces to the implementer.
-#
-# and the reason it stopped goes to stdout, which is the node's output and the
-# next round's only account of what happened.
 #
 # Env:
 #   NM_BIN              the no-mistakes binary (default: no-mistakes)
