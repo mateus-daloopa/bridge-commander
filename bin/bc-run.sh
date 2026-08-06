@@ -79,6 +79,8 @@ hang() {
 #   fix lint-1,lint-2              exactly these
 #   fix lint-1 : re-export it      ...and what the finding got wrong
 #   approve | skip                 the findings stand / the step is skipped
+#   go <instruction>               planning stop only: build it anyway, and here
+#                                  is what to fix on the way
 #   abort <reason>                 stop the run; park the card, open no PR
 #
 # Sets RULE_ACTION, RULE_IDS, RULE_INSTRUCTIONS, RULE_REST (everything after the
@@ -94,12 +96,14 @@ rule() {
   read -r RULE_ACTION RULE_REST <<<"${1:-}"
   RULE_REST=${RULE_REST:-}
   case "$RULE_ACTION" in
-    fix|approve|skip|abort) ;;
+    fix|approve|skip|abort|go) ;;
     *) return 1 ;;
   esac
-  if [ "$RULE_ACTION" = abort ]; then
-    return 0    # everything after `abort` is the reason, colons and all
-  fi
+  # `abort` takes a reason and `go` takes an instruction; both are free text to
+  # the end of the line, colons and all. Only the finding-shaped answers split.
+  case "$RULE_ACTION" in
+    abort|go) return 0 ;;
+  esac
   RULE_IDS=$RULE_REST
   case "$RULE_REST" in
     *:*) RULE_IDS=${RULE_REST%%:*}; RULE_INSTRUCTIONS=${RULE_REST#*:} ;;

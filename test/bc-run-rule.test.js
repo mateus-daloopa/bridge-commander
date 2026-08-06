@@ -106,6 +106,25 @@ test('abort with no reason is still an abort', () => {
   assert.equal(r.rest, '');
 });
 
+test('go keeps its whole instruction, colons and all', () => {
+  const r = rule('go the judge is right but it is one sentence: say the freshness change in the PR body');
+  assert.equal(r.status, 0);
+  assert.equal(r.action, 'go');
+  assert.equal(
+    r.rest,
+    'the judge is right but it is one sentence: say the freshness change in the PR body'
+  );
+  assert.equal(r.instructions, '', 'go instructs the implementer, not the fixer');
+  assert.equal(r.ids, '', 'a planning stop has no findings to name');
+});
+
+test('a bare go is still a go', () => {
+  const r = rule('go');
+  assert.equal(r.status, 0);
+  assert.equal(r.action, 'go');
+  assert.equal(r.rest, '');
+});
+
 test('an unknown action is rejected rather than guessed at', () => {
   for (const d of ['merge-it', 'yes please', 'LGTM']) {
     assert.equal(rule(d).status, 1, `${d} was let through`);
