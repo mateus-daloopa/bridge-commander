@@ -2102,6 +2102,14 @@ async function workerSend(card, body) {
 // own alive() await, closing the mark/kill race) and the registry entry +
 // worktree/branch stay intact, so `card start --resume` revives the worker
 // exactly like a died one. body.park composes the park (Working → Backlog).
+//
+// body.expectExit — the OTHER kind of deliberate stop, and the one an
+// automated `--command` worker needs: the session is about to end BY ITSELF
+// and the caller is inside it. A command that stops at an approval gate and
+// returns leaves nothing running, and without a word beforehand that reads as
+// WORKER DIED. Killing here would kill the caller mid-sentence, so the marker
+// is recorded and nothing is killed. body.reason replaces the resume hint,
+// because how you revive one of those is not `card start --resume`.
 async function pauseWorker(card, body) {
   const w = findWorker(card.id);
   if (!w) return { error: 'no worker recorded for card ' + card.id + ' — nothing to pause', code: 404 };
@@ -2114,15 +2122,19 @@ async function pauseWorker(card, body) {
   w.paused = now(); // BEFORE the kill: the death must never look like a crash
   delete w.stopNotified;
   delete w.staleNotified;
-  try {
-    await harnessFor(w.ref).kill(w.ref);
-  } catch (e) {
-    delete w.paused; // the session may still be alive — stay honest, let supervision judge
-    return { error: 'pause failed killing session ' + workerName(w.ref) + ': ' + String((e && e.message) || e), code: 502 };
+  if (!(body && body.expectExit)) {
+    try {
+      await harnessFor(w.ref).kill(w.ref);
+    } catch (e) {
+      delete w.paused; // the session may still be alive — stay honest, let supervision judge
+      return { error: 'pause failed killing session ' + workerName(w.ref) + ': ' + String((e && e.message) || e), code: 502 };
+    }
   }
   const actor = String((body && body.actor) || 'agent').slice(0, 60);
+  const reason = String((body && body.reason) || '').trim().slice(0, 500)
+    || 'resume: card start ' + card.id + ' --resume';
   const ev = mkEvent({
-    text: 'worker ' + workerName(w.ref) + ' paused (deliberate) — resume: card start ' + card.id + ' --resume',
+    text: 'worker ' + workerName(w.ref) + ' paused (deliberate) — ' + reason,
     actor,
   }, { kind: 'worker-paused' });
   card.events.push(ev);

@@ -17,8 +17,23 @@
 # non-zero exit kills the whole run and a crashed run looks exactly like a broken
 # one. So the outcome travels in files:
 #
-#   $ARTIFACTS_DIR/nm-outcome     passed | escalated | failed
+#
+#   $ARTIFACTS_DIR/nm-outcome     passed | escalated | refused | failed
 #   $ARTIFACTS_DIR/escalation.md  the whole payload, when a finding is ask-user
+#                                 OR when the gate refused to start at all
+#
+# and the reason it stopped goes to stdout, which is the node's output and the
+# next round's only account of what happened.
+#
+# `refused` and `failed` are the same word to no-mistakes and must not be to us.
+# `failed` is a VERDICT ON THE CHANGE: the gate read the diff and said no, so
+# the next round belongs to the implementer. `refused` is the gate declining to
+# look — repo not initialised, detached HEAD, a missing dependency, no remote —
+# and no amount of rewriting the code fixes it. MNC-17 burned three implement
+# rounds at full model price against a `bridge-commander` that had never been
+# `no-mistakes init`ed: three one-second refusals, three rewrites of code that
+# was never the problem. A refusal is about the ENVIRONMENT, so it escalates to
+# a human like an ask-user finding does, and never bounces to the implementer.
 #
 # and the reason it stopped goes to stdout, which is the node's output and the
 # next round's only account of what happened.
@@ -63,16 +78,40 @@ finish() {
   exit 0
 }
 
+# refuse <reason> [payload] — the gate never looked at the diff. Same exit as
+# an ask-user finding, and the same file, because it needs the same person: it
+# is the environment that is wrong, and the implementer cannot fix it by
+# writing different code.
+refuse() {
+  {
+    echo "# no-mistakes never got as far as reading the change"
+    echo
+    echo "$1"
+    echo
+    echo "This is the ENVIRONMENT, not the diff — repo not initialised, detached"
+    echo "HEAD, a missing dependency, no remote, or the clerk meeting a shape it"
+    echo "does not know. Another implement round cannot fix it, so the run stops"
+    echo "here and asks instead of asking the implementer to rewrite working code."
+    if [ -n "${2:-}" ]; then
+      echo
+      echo '```'
+      printf '%s\n' "$2"
+      echo '```'
+    fi
+  } > "$ART/escalation.md"
+  finish refused "$1"
+}
+
 if [ -n "$RESPOND" ]; then
   case "$RESPOND" in
     fix|approve|skip) ;;
-    *) finish failed "--respond takes fix, approve or skip — not '$RESPOND'" ;;
+    *) refuse "The clerk was called with --respond '$RESPOND', which is not fix, approve or skip." ;;
   esac
   [ -z "$INTENT_FILE" ] \
-    || finish failed "--respond answers a gate that is already open; --intent-file starts a new run. Pick one."
+    || refuse "The clerk was given both --respond and --intent-file; those are two different entry points."
 else
   [ -n "$INTENT_FILE" ] && [ -r "$INTENT_FILE" ] \
-    || finish failed "usage: nm-clerk.sh --intent-file <readable file> [axi run flags...] | --respond <fix|approve|skip> [--findings id,id]"
+    || refuse "The clerk got no readable --intent-file, so the reviewer would have had no acceptance criteria to read the diff against."
 fi
 
 # Pull `<id>\t<action>` out of the TOON tabular block `findings[N]{cols}:`.
@@ -133,8 +172,8 @@ if [ -n "$RESPOND" ]; then
   if [ "$RESPOND" = fix ] && [ -z "$FINDINGS" ]; then
     FINDINGS=$(parse_findings <<<"$("$NM" axi status 2>>"$LOG")" \
       | awk -F'\t' '$2 == "auto-fix" || $2 == "ask-user" { print $1 }' | paste -sd,)
-    [ -n "$FINDINGS" ] || finish failed \
-      "--respond fix with no --findings, and the parked gate offers nothing actionable"
+    [ -n "$FINDINGS" ] || refuse \
+      "A human answered \`fix\`, but the parked gate offers nothing actionable to fix."
   fi
   printf 'clerk: answering the parked gate — %s%s\n' "$RESPOND" "${FINDINGS:+ ($FINDINGS)}"
   if [ "$RESPOND" = fix ] && [ -n "$FINDINGS" ]; then
@@ -158,11 +197,11 @@ while :; do
   fi
 
   if grep -q '^error:' <<<"$out"; then
-    finish failed "no-mistakes refused to run: $(sed -n 's/^error:[[:space:]]*//p' <<<"$out" | head -1)"
+    refuse "no-mistakes refused to run: $(sed -n 's/^error:[[:space:]]*//p' <<<"$out" | head -1)" "$out"
   fi
 
   grep -q '^gate:' <<<"$out" \
-    || finish failed "unrecognised no-mistakes output: no gate:, outcome: or error: line"
+    || refuse "Unrecognised no-mistakes output: no gate:, outcome: or error: line." "$out"
 
   gates=$((gates + 1))
   [ "$gates" -gt "$MAX_GATES" ] \
@@ -177,11 +216,11 @@ while :; do
   status=$(gate_status <<<"$out")
   case "$status" in
     awaiting_approval|fix_review) ;;
-    *) finish failed "unknown gate status: ${status:-<none>} — refusing to guess at it" ;;
+    *) refuse "Unknown gate status: ${status:-<none>} — the clerk refuses to guess at a shape it has not seen." "$out" ;;
   esac
 
   rows=$(parse_findings <<<"$out")
-  case "$rows" in PARSE_ERROR*) finish failed "$rows" ;; esac
+  case "$rows" in PARSE_ERROR*) refuse "The clerk could not parse the gate's findings table: $rows" "$out" ;; esac
 
   ask=$(awk -F'\t' '$2 == "ask-user" { print $1 }' <<<"$rows" | paste -sd,)
   if [ -n "$ask" ]; then
