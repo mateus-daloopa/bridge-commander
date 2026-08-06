@@ -36,6 +36,42 @@ test('card events: default level 2, explicit level 1, open kind tokens, monotoni
   }
 });
 
+test('wakeOwner queues the event to the card owner without ringing the captain', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Paged' }));
+
+    let r = await s.api('POST', '/api/cards/paged/events',
+      { text: 'the gate needs a decision', kind: 'pipeline', actor: 'archon', wakeOwner: true });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.event.level, 2); // waking the owner is not a captain bell
+
+    // on the timeline
+    const card = (await s.api('GET', '/api/cards/paged')).body;
+    const ev = card.events[card.events.length - 1];
+    assert.strictEqual(ev.kind, 'pipeline');
+    assert.strictEqual(ev.text, 'the gate needs a decision');
+
+    // in the owner's queue, carrying card, event kind and text
+    const items = (await s.api('GET', '/api/feed?lieutenant=' + LT)).body.items;
+    const item = items.find((i) => i.kind === 'card-event');
+    assert.ok(item, items.map((i) => i.kind).join(','));
+    assert.strictEqual(item.card, 'paged');
+    assert.strictEqual(item.eventKind, 'pipeline');
+    assert.strictEqual(item.text, 'the gate needs a decision');
+
+    // and NOT in the captain's notifications
+    assert.strictEqual((await s.api('GET', '/api/notifications')).body.items.length, 0);
+
+    // without the flag: timeline only, no new queue item
+    await s.api('POST', '/api/cards/paged/events', { text: 'quiet' });
+    const after = (await s.api('GET', '/api/feed?lieutenant=' + LT)).body.items;
+    assert.strictEqual(after.filter((i) => i.kind === 'card-event').length, 1);
+  } finally {
+    await s.stop();
+  }
+});
+
 test('board-level events default to level 1', async () => {
   const s = await startServerWithLieutenant();
   try {
