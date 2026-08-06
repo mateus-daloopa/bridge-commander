@@ -2963,6 +2963,15 @@ const server = http.createServer(async (req, res) => {
         const ev = mkEvent(body, { level: 2 });
         card.events.push(ev);
         card.updated = now();
+        // wakeOwner: the door an outside process (a workflow, a cron, a CI hook)
+        // uses to wake a card's lieutenant. Same pair every server-side wake
+        // already uses — timeline entry AND a queue item — so the escalation is
+        // on the record instead of interjecting in the captain's chat thread.
+        // Orthogonal to level: level 1 rings THE CAPTAIN and always has. Both
+        // flags together does both, deliberately — the caller asked for both.
+        if (body.wakeOwner) {
+          queuePush(card.owner, { kind: 'card-event', card: card.id, eventKind: ev.kind || null, text: ev.text });
+        }
         saveBoard(); broadcast();
         return sendJson(res, 200, { ok: true, event: ev });
       }

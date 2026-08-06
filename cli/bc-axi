@@ -48,6 +48,7 @@ const opts = {
   title: null, column: null, id: null, type: null, owner: null, lieutenant: null,
   name: null, color: null, avatar: null, prefix: null,
   level: null, kind: null, actor: null, reason: null, note: null, attrs: [], labels: [], json: false,
+  wakeOwner: false,
   worker: null, ttl: null, spawn: false, harness: null,
   mode: null, briefFile: null, resume: false, outcome: null, model: null, effort: null, park: false,
   command: null,
@@ -89,6 +90,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--mode') opts.mode = argv[++i];
   else if (a === '--brief-file') opts.briefFile = argv[++i];
   else if (a === '--command') opts.command = argv[++i];
+  else if (a === '--wake-owner') opts.wakeOwner = true;
   else if (a === '--resume') opts.resume = true;
   else if (a === '--park') opts.park = true;
   else if (a === '--outcome') opts.outcome = argv[++i];
@@ -612,13 +614,14 @@ async function cmdPatch() {
 
 async function cmdEvent() {
   const id = positional[0];
-  if (!id) die('usage: bc-axi event <card-id> [--level 1|2] [--kind K] [--text-file f|-]\n  (text from --text-file or stdin; kind is an open token — a kind in the board\'s\n  kinds map sets the default level and emoji; explicit --level wins, else level 2)');
+  if (!id) die('usage: bc-axi event <card-id> [--level 1|2] [--kind K] [--wake-owner] [--text-file f|-]\n  (text from --text-file or stdin; kind is an open token — a kind in the board\'s\n  kinds map sets the default level and emoji; explicit --level wins, else level 2)\n  --wake-owner also queues the event to the card owner\'s drain (wakes the\n  LIEUTENANT, leaves the chat thread alone; --level 1 is what rings the captain)');
   const text = readInput(opts.textFile).trim();
   const body = { text, actor: opts.actor || 'agent' };
   if (opts.level) body.level = opts.level;
   if (opts.kind) body.kind = opts.kind;
+  if (opts.wakeOwner) body.wakeOwner = true;
   const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/events', body);
-  console.log('event #' + r.event.seq + ' L' + r.event.level + ' -> ' + id);
+  console.log('event #' + r.event.seq + ' L' + r.event.level + ' -> ' + id + (opts.wakeOwner ? ' (owner woken)' : ''));
 }
 
 async function cmdNotify() {
@@ -987,6 +990,9 @@ async function cmdDrain() {
     } else if (it.kind === 'card-created') {
       head = 'new card for you — ' + cardBit(it.card);
       hint = 'read it: bc-axi card show ' + it.card;
+    } else if (it.kind === 'card-event') {
+      head = 'CARD EVENT' + (it.eventKind ? ' [' + it.eventKind + ']' : '') + ' — ' + cardBit(it.card);
+      hint = 'an outside process (a workflow, a cron, a CI hook) put this on the timeline and woke you: read the text and act';
     } else if (it.kind === 'card-moved') {
       head = 'captain moved ' + cardBit(it.card) + ': ' + it.from + ' -> ' + it.to;
     }
@@ -1185,8 +1191,11 @@ if (!commands[cmd]) {
     '                                         move (the lieutenant verifies, then hands off). PR URLs in\n' +
     '                                         the outcome auto-populate the card\'s prs attribute\n' +
     '\nevents & chat:\n' +
-    '  event <card-id> [--level 1|2] [--kind K] [--text-file f|-]   append timeline event\n' +
-    '                                         level 1 rings the captain; level 2 = timeline only\n' +
+    '  event <card-id> [--level 1|2] [--kind K] [--wake-owner] [--text-file f|-]   append timeline event\n' +
+    '                                         level 1 rings the captain; level 2 = timeline only.\n' +
+    '                                         --wake-owner also queues a card-event item to the card\n' +
+    '                                         owner\'s drain — the door a workflow, cron or CI hook uses\n' +
+    '                                         to wake a lieutenant without interjecting in the thread\n' +
     '  notify [--kind K] [--text-file f|-]    board-level notification (no card)\n' +
     '  say <lieutenant:ID|card:ID> [--actor a] [--text-file f|-]\n' +
     '                                         post a chat message; a card thread\'s interlocutor is\n' +
