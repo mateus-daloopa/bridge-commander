@@ -79,6 +79,9 @@ hang() {
 #   fix lint-1,lint-2              exactly these
 #   fix lint-1 : re-export it      ...and what the finding got wrong
 #   approve | skip                 the findings stand / the step is skipped
+#   retry <what you fixed>         the gate REFUSED to start and the environment
+#                                  is fixed now — run it again on the branch as
+#                                  it stands, nothing to re-implement
 #   go <instruction>               planning stop only: build it anyway, and here
 #                                  is what to fix on the way
 #   abort <reason>                 stop the run; park the card, open no PR
@@ -96,13 +99,14 @@ rule() {
   read -r RULE_ACTION RULE_REST <<<"${1:-}"
   RULE_REST=${RULE_REST:-}
   case "$RULE_ACTION" in
-    fix|approve|skip|abort|go) ;;
+    fix|approve|skip|abort|go|retry) ;;
     *) return 1 ;;
   esac
-  # `abort` takes a reason and `go` takes an instruction; both are free text to
-  # the end of the line, colons and all. Only the finding-shaped answers split.
+  # `abort`, `go` and `retry` all take free text to the end of the line — a
+  # reason, an instruction, an account of what was fixed — colons and all. Only
+  # the finding-shaped answers split on the colon.
   case "$RULE_ACTION" in
-    abort|go) return 0 ;;
+    abort|go|retry) return 0 ;;
   esac
   RULE_IDS=$RULE_REST
   case "$RULE_REST" in

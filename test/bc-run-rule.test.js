@@ -125,6 +125,18 @@ test('a bare go is still a go', () => {
   assert.equal(r.rest, '');
 });
 
+test('retry keeps its whole account of what was fixed', () => {
+  const r = rule('retry deleted a stale bc/MNC-14 ref in the gate repo: a dead run left it behind');
+  assert.equal(r.status, 0);
+  assert.equal(r.action, 'retry');
+  assert.equal(
+    r.rest,
+    'deleted a stale bc/MNC-14 ref in the gate repo: a dead run left it behind'
+  );
+  assert.equal(r.ids, '', 'a refusal has no findings to name');
+  assert.equal(r.instructions, '');
+});
+
 test('an unknown action is rejected rather than guessed at', () => {
   for (const d of ['merge-it', 'yes please', 'LGTM']) {
     assert.equal(rule(d).status, 1, `${d} was let through`);
