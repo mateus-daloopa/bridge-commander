@@ -2103,14 +2103,13 @@ async function workerSend(card, body) {
 // worktree/branch stay intact, so `card start --resume` revives the worker
 // exactly like a died one. body.park composes the park (Working → Backlog).
 //
-// body.expectExit — the OTHER kind of deliberate stop, and the one a pipeline
-// needs: the session is about to end BY ITSELF and the caller is inside it.
-// A `--command` worker running an interactive archon workflow hits a gate,
-// pauses the run, and its process returns; without a word beforehand that
-// reads as WORKER DIED. Killing here would kill the caller mid-sentence — so
-// the marker is recorded and nothing is killed. body.reason replaces the
-// resume hint, because how you revive a paused pipeline run is not
-// `card start --resume`.
+// body.expectExit — the OTHER kind of deliberate stop, and the one an
+// automated `--command` worker needs: the session is about to end BY ITSELF
+// and the caller is inside it. A command that stops at an approval gate and
+// returns leaves nothing running, and without a word beforehand that reads as
+// WORKER DIED. Killing here would kill the caller mid-sentence, so the marker
+// is recorded and nothing is killed. body.reason replaces the resume hint,
+// because how you revive one of those is not `card start --resume`.
 async function pauseWorker(card, body) {
   const w = findWorker(card.id);
   if (!w) return { error: 'no worker recorded for card ' + card.id + ' — nothing to pause', code: 404 };

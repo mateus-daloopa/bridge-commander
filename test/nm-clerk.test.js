@@ -131,7 +131,7 @@ test('an ask-user finding parks: escalation.md written, nothing resolved', () =>
   assert.match(r.stdout, /ask-user finding\(s\) at gate awaiting_approval: drag-starting-on-tile-no-longer-selects,tests-assert-helper-not-behavior,tile-prefix-string-heuristic/);
 });
 
-// ---------- failed ----------
+// ---------- failed: a verdict on the change ----------
 
 test('a fixer that keeps producing findings stops at the round cap', () => {
   // The real shape: run 1's fixer committed __pycache__ and the next gate
@@ -146,22 +146,32 @@ test('a fixer that keeps producing findings stops at the round cap', () => {
   assert.equal(r.calls.filter(c => c.includes('--action fix')).length, 3);
 });
 
-test('a precondition error is failed, not a crash', () => {
+// ---------- refused: the gate never read the change ----------
+// The distinction that stops the pipeline asking the wrong agent to fix the
+// wrong thing. `failed` bounces back to the implementer; `refused` escalates,
+// because no rewrite of the code fixes an uninitialised repo.
+
+test('a precondition error is REFUSED, not failed — the environment is wrong, not the diff', () => {
   const r = run(['error: uncommitted changes in the working tree\nhelp[1]: Commit your work before validating\n']);
 
   assert.equal(r.status, 0);
-  assert.equal(r.outcome, 'failed');
+  assert.equal(r.outcome, 'refused');
   assert.match(r.stdout, /refused to run: uncommitted changes in the working tree/);
   assert.equal(r.calls.length, 1);
+  // Same file an ask-user finding writes: it needs the same person.
+  assert.ok(r.escalation, 'a refusal writes escalation.md so the round loop ends and a human is paged');
+  assert.match(r.escalation, /never got as far as reading the change/);
+  assert.match(r.escalation, /uncommitted changes in the working tree/);
 });
 
-test('an unfamiliar gate status is failed rather than guessed at', () => {
+test('an unfamiliar gate status is refused rather than guessed at', () => {
   const r = run([fixture('gate-awaiting-approval').replace('status: awaiting_approval', 'status: awaiting_something_new')]);
 
   assert.equal(r.status, 0);
-  assert.equal(r.outcome, 'failed');
-  assert.match(r.stdout, /unknown gate status: awaiting_something_new/);
+  assert.equal(r.outcome, 'refused');
+  assert.match(r.stdout, /nknown gate status: awaiting_something_new/);
   assert.equal(r.calls.length, 1, 'it answered nothing');
+  assert.ok(r.escalation, 'a shape the clerk does not know is a human question, not another round');
 });
 
 // ---------- --respond: the human coming back ----------
@@ -223,12 +233,12 @@ test('--respond keeps the fix-round cap', () => {
   assert.match(r.stdout, /fix-round cap \(3\) reached at gate fix_review/);
 });
 
-test('an unknown --respond action is failed, not sent', () => {
+test('an unknown --respond action is refused, not sent', () => {
   const r = run([fixture('outcome-passed')], {}, ['--respond', 'merge-it']);
 
   assert.equal(r.status, 0);
-  assert.equal(r.outcome, 'failed');
-  assert.match(r.stdout, /--respond takes fix, approve or skip/);
+  assert.equal(r.outcome, 'refused');
+  assert.match(r.stdout, /not fix, approve or skip/);
   assert.equal(r.calls.length, 0);
 });
 
@@ -236,7 +246,7 @@ test('--respond and --intent-file together is refused rather than half-honoured'
   const r = run([fixture('outcome-passed')], {}, ['--respond', 'approve', '--intent-file', '/dev/null']);
 
   assert.equal(r.status, 0);
-  assert.equal(r.outcome, 'failed');
+  assert.equal(r.outcome, 'refused');
   assert.equal(r.calls.length, 0);
 });
 
@@ -272,7 +282,7 @@ test('a description full of commas and escaped quotes does not shift the columns
   assert.equal(r.outcome, 'escalated');
 });
 
-test('a missing --intent-file is failed, not a usage crash', () => {
+test('a missing --intent-file is refused, not a usage crash', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-clerk-'));
   let status = 0;
   try {
@@ -285,5 +295,5 @@ test('a missing --intent-file is failed, not a usage crash', () => {
     status = e.status;
   }
   assert.equal(status, 0);
-  assert.equal(fs.readFileSync(path.join(dir, 'nm-outcome'), 'utf8').trim(), 'failed');
+  assert.equal(fs.readFileSync(path.join(dir, 'nm-outcome'), 'utf8').trim(), 'refused');
 });

@@ -815,10 +815,10 @@ async function cmdWorkerSend() {
 // WORKER DIED alarm); the record + worktree stay resumable. --park composes
 // card park (Working → Backlog) in the same call.
 //
-// --expect-exit is the pipeline's door, called from INSIDE the session that is
-// about to end (an archon run holding on a gate). Nothing is killed; the stop
-// is recorded so the exit that follows reads as waiting, not dying. --reason
-// replaces the resume hint with the one that actually revives that worker.
+// --expect-exit is called from INSIDE the session that is about to end — an
+// automated `--command` worker holding on an approval gate. Nothing is killed;
+// the stop is recorded so the exit that follows reads as waiting, not dying.
+// --reason replaces the resume hint with the one that revives that worker.
 async function cmdWorkerPause() {
   const id = positional[0];
   if (!id) {
@@ -827,7 +827,7 @@ async function cmdWorkerPause() {
       '  record and worktree survive for card start <card-id> --resume.\n' +
       '  --park also moves the card Working -> Backlog (card park) in the same step.\n' +
       '  --expect-exit records the stop WITHOUT killing anything — for a session that is\n' +
-      '  about to end by itself (a pipeline holding on a gate calling this from inside it).');
+      '  about to end by itself (a --command worker holding on a gate, calling from inside it).');
   }
   const body = { actor: opts.actor || 'agent' };
   if (opts.park) body.park = true;
@@ -1197,7 +1197,7 @@ if (!commands[cmd]) {
     '                                         worktree survive for card start --resume. --park also\n' +
     '                                         moves the card Working -> Backlog (run by the lieutenant).\n' +
     '                                         --expect-exit kills NOTHING — for a session ending by\n' +
-    '                                         itself (a pipeline holding on a gate, calling from inside)\n' +
+    '                                         itself (a --command worker on a gate, calling from inside)\n' +
     '\nworker (run by the worker itself, from its worktree):\n' +
     '  worker signal <card-id> "<milestone>" [--text-file f|-]\n' +
     '                                         real milestone -> level-2 card event + QueueItem to owner\n' +
