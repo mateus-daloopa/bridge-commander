@@ -106,6 +106,43 @@ test('worker pause: deliberate stop — session killed, worker-paused event, NO 
   } finally { await teardown(); }
 });
 
+// The pipeline's half of the same lifecycle: an archon run holding on its
+// `answer` gate calls this from INSIDE the session that is about to end. Killing
+// would kill the caller mid-sentence, so --expect-exit records the stop and
+// touches nothing; the exit that follows a moment later reads as waiting.
+test('worker pause --expect-exit: nothing killed, custom reason on the card, and the exit that follows is not a death', async () => {
+  const { s, fdir, teardown } = await boot({ BC_SUPERVISE_INTERVAL_MS: '150' });
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Gate', id: 'gate', attributes: { repo: 'proj' } }));
+    assert.strictEqual((await s.api('POST', '/api/cards/gate/start', { harness: 'fake' })).status, 200);
+    const session = workerKey(s.dir, 'gate');
+    const marker = path.join(fdir, session + '.json');
+
+    // through the CLI: an unknown flag is silently swallowed as a positional,
+    // so the flag is worth exercising end to end rather than posting the body.
+    const cli = await runCli(['worker', 'pause', 'gate', '--expect-exit',
+      '--reason', 'waiting on the lieutenant — archon workflow approve r-42 "fix"',
+      '--actor', 'archon', '--workspace', s.dir, '--port', String(s.port)]);
+    assert.strictEqual(cli.code, 0, cli.stderr);
+    assert.match(cli.stdout, /exiting itself/);
+    assert.ok(fs.existsSync(marker), 'the caller\'s own session is left alive');
+
+    const ev = (await s.api('GET', '/api/cards/gate')).body.events.find((e) => e.kind === 'worker-paused');
+    assert.ok(ev, 'worker-paused event on the card');
+    assert.match(ev.text, /waiting on the lieutenant/);
+    assert.match(ev.text, /archon workflow approve r-42/);
+    assert.doesNotMatch(ev.text, /card start/, 'the default resume hint is replaced, not appended');
+    assert.ok(boardOnDisk(s).workers.find((x) => x.card === 'gate').paused, 'marked paused');
+
+    // ...and now the run returns and its session really does go.
+    fs.rmSync(marker);
+    await sleep(700);
+    const card = (await s.api('GET', '/api/cards/gate')).body;
+    assert.ok(!card.events.some((e) => e.kind === 'worker-died'), 'a pre-announced exit is not a death');
+    assert.ok(!card.events.some((e) => e.kind === 'worker-stalled'), 'nor a stall');
+  } finally { await teardown(); }
+});
+
 test('worker pause refusals: no worker recorded (404), worker already done (409)', async () => {
   const { s, teardown } = await boot();
   try {
