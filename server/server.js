@@ -1753,6 +1753,34 @@ function ownerSession(card) {
 function workerName(ref) { return ref.window ? ref.session + ':' + ref.window : ref.session; }
 function findWorker(cardId) { return board.workers.find((w) => w.card === cardId); }
 
+// The worker lease (card.status.worker) is a WRITTEN signal — status.set is its
+// only writer — so a worker that never writes one reads `absent` while its
+// session is plainly alive. An automated `--command` worker never writes one at
+// all, so its card reports an absent worker for the whole run — while that same
+// run is emitting milestones. On the SINGLE-card read (card show, status <card>)
+// the truth is one call away, so ask for it: alive() on the card's registry
+// entry, whatever harness it is. The board read stays lease-only and sync — one
+// alive() per card there would be a scan, not a read.
+// A written lease always wins; only `absent` is filled in, and only from a
+// session that answers. Dead-or-gone stays absent, which is the honest word.
+async function statusWithLiveness(card, status) {
+  if (!status || !status.worker || status.worker.state !== 'absent') return status;
+  const w = findWorker(card.id);
+  if (!w) return status;
+  let up = false;
+  try { up = await harnessFor(w.ref).alive(w.ref); } catch (e) { up = false; }
+  if (!up) return status;
+  return Object.assign({}, status, {
+    worker: {
+      id: workerName(w.ref),
+      // done or paused and still alive is a session holding the card without
+      // working it — idle. Anything else alive is working.
+      state: (w.done || w.paused) ? 'idle' : 'working',
+      derived: true, // read off the session, not leased by a worker
+    },
+  });
+}
+
 // ---------- lifecycle hooks (workspace-owned scripts; server/hooks.js) ----------
 // Events v1: worker-done, worker-died, card-archived. Fire-and-forget — a hook
 // never blocks or fails the lifecycle outcome it observes. The ONE ordering
@@ -1894,6 +1922,17 @@ async function doStartCard(card, body) {
         + 'started with. To run a different one: archive the worker and start again with --command' };
     }
     if (!existing) return { error: 'nothing to resume: card ' + card.id + ' has no recorded worker' };
+    // A worker paused with --expect-exit is stopped ON PURPOSE and already told
+    // the board the way back — and --resume is not it. Resuming re-runs the
+    // recorded command, which starts a SECOND run against a path the first one
+    // still holds, and the new session dies on arrival. Refuse, and quote the
+    // recorded reason: the caller reached for this because it is the move the
+    // board teaches everywhere else, so name the door instead of just the wall.
+    if (existing.expectExit) {
+      return { error: 'refusing to resume ' + card.id + ': its worker stopped with --expect-exit — resuming '
+        + 're-runs the recorded command and would start a second run over the one already in flight. '
+        + 'The way back, as recorded at the pause: ' + (existing.pauseReason || '(no reason recorded)'), code: 409 };
+    }
     let ref;
     try {
       ref = await harnessFor(existing.ref).resume(existing.ref, { stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL });
@@ -2036,7 +2075,11 @@ function workerDone(card, body) {
   const outcome = String((body && body.outcome) || '').trim();
   if (!outcome) return { error: 'outcome required' };
   const w = findWorker(card.id);
-  if (w) { w.done = true; w.outcome = outcome.slice(0, 2000); delete w.flagged; delete w.stopNotified; delete w.staleNotified; }
+  if (w) {
+    w.done = true; w.outcome = outcome.slice(0, 2000);
+    delete w.flagged; delete w.stopNotified; delete w.staleNotified;
+    delete w.expectExit; delete w.pauseReason; // the gate it stopped at is behind it
+  }
   const urls = outcome.match(PR_URL_RE) || [];
   if (urls.length) {
     if (!Array.isArray(card.attributes.prs)) card.attributes.prs = [];
@@ -2089,6 +2132,8 @@ async function workerSend(card, body) {
     delete w.stopNotified;
     delete w.staleNotified;
     delete w.paused;
+    delete w.expectExit; // the stop is over; --resume is a legal move again
+    delete w.pauseReason;
     enterWorking(card, 'worker ' + workerName(w.ref) + ' reopened for a new turn');
   } else if (!up) {
     return { error: 'worker session ' + workerName(w.ref) + ' is not alive — resume it first (card start ' + card.id + ' --resume), then send', code: 409 };
@@ -2119,6 +2164,13 @@ async function workerSend(card, body) {
 // WORKER DIED. Killing here would kill the caller mid-sentence, so the marker
 // is recorded and nothing is killed. body.reason replaces the resume hint,
 // because how you revive one of those is not `card start --resume`.
+//
+// That replacement is not a nicety — `--resume` on an expect-exit worker is
+// ACTIVELY WRONG (it re-runs the recorded command over a run the first one is
+// still holding), so the stop is recorded on the registry entry as
+// {expectExit, pauseReason} and `card start --resume` refuses it by name. A
+// reason text alone only informs whoever reads it; the refusal is what stops
+// the lieutenant who reached for the move the board teaches everywhere else.
 async function pauseWorker(card, body) {
   const w = findWorker(card.id);
   if (!w) return { error: 'no worker recorded for card ' + card.id + ' — nothing to pause', code: 404 };
@@ -2142,6 +2194,13 @@ async function pauseWorker(card, body) {
   const actor = String((body && body.actor) || 'agent').slice(0, 60);
   const reason = String((body && body.reason) || '').trim().slice(0, 500)
     || 'resume: card start ' + card.id + ' --resume';
+  if (body && body.expectExit) {
+    w.expectExit = true;
+    w.pauseReason = reason; // the door back, quoted verbatim by the resume refusal
+  } else {
+    delete w.expectExit; // an ordinary pause is resumable, and says so
+    delete w.pauseReason;
+  }
   const ev = mkEvent({
     text: 'worker ' + workerName(w.ref) + ' paused (deliberate) — ' + reason,
     actor,
@@ -2960,7 +3019,11 @@ const server = http.createServer(async (req, res) => {
         fireHooks('worker-done', card, findWorker(card.id)); // fire-and-forget
         return sendJson(res, 200, { ok: true, event: r.event, card: publicCard(card, 'user') });
       }
-      if (!sub && req.method === 'GET') return sendJson(res, 200, publicCard(card, url.searchParams.get('user') || 'user'));
+      if (!sub && req.method === 'GET') {
+        const pc = publicCard(card, url.searchParams.get('user') || 'user');
+        pc.status = await statusWithLiveness(card, pc.status);
+        return sendJson(res, 200, pc);
+      }
       if (!sub && req.method === 'PATCH') {
         const r = patchCard(card, JSON.parse(await readBody(req) || '{}'));
         if (r.error) return sendJson(res, 400, { error: r.error });
