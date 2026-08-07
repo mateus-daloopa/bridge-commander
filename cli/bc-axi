@@ -590,15 +590,23 @@ async function cmdKinds() {
 async function cmdCreate() {
   if (!opts.title || !opts.owner) {
     die('usage: bc-axi card create --title T --owner <lieutenant> [--type plan|implementation|investigation]\n' +
-      '                    [--id id] [--body-file f|-] [--attr k=v]... [--label l]...   (cards are born in Backlog)\n' +
-      '  The owner mints the id (<PREFIX>-<n>, e.g. MON-14) — pass --id only to override it.');
+      '                    [--body-file f|-] [--attr k=v]... [--label l]...   (cards are born in Backlog)\n' +
+      '  The owner mints the id (<PREFIX>-<n>, e.g. MON-14).');
+  }
+  if (opts.id) {
+    // The owner mints the id — refuse locally, before any request, and name the
+    // id it would have minted (the same prefix+cardSeq compute cmdLtList does).
+    const lr = await request('GET', '/api/lieutenants');
+    const lt = lr.lieutenants.find((l) => l.id === opts.owner);
+    const minted = lt ? lt.prefix + '-' + ((Number.isInteger(lt.cardSeq) ? lt.cardSeq : 0) + 1) : null;
+    die('card create refused: the owner mints the id, --id is not accepted.' +
+      (minted ? ' ' + opts.owner + ' would mint ' + minted + ' next.' : ''));
   }
   const body = {
     title: opts.title, owner: opts.owner, actor: opts.actor || 'agent',
     attributes: parseAttrs(opts.attrs), labels: opts.labels,
   };
   if (opts.type) body.type = opts.type;
-  if (opts.id) body.id = opts.id;
   if (opts.column) body.column = opts.column;
   if (opts.bodyFile) body.body = readInput(opts.bodyFile);
   // A duplicate id is refused, never resolved: print the server's sentence as
@@ -1176,10 +1184,10 @@ if (!commands[cmd]) {
     '  kinds [--json]                         print the effective kinds map (built-ins + registered)\n' +
     '\ncard:\n' +
     '  card create --title T --owner <lieutenant> [--type plan|implementation|investigation]\n' +
-    '              [--id id] [--body-file f|-] [--attr k=v]... [--label l]...\n' +
+    '              [--body-file f|-] [--attr k=v]... [--label l]...\n' +
     '                                         new card (default type: implementation; born in Backlog ONLY).\n' +
     '                                         The owner mints the id — <PREFIX>-<n>, e.g. MON-14 — from its\n' +
-    '                                         own counter; --id overrides it and a duplicate is REFUSED\n' +
+    '                                         own counter\n' +
     '  card move <card-id> <column>           lieutenant moves land ONLY in review (the handoff,\n' +
     '                                         level-1 event); → working is refused (card start does it).\n' +
     '                                         Captain drags happen in the UI; a captain drag into\n' +

@@ -377,18 +377,20 @@ test('a duplicate id is REFUSED, visibly — no suffix, no retry, no next free n
   }
 });
 
-test('CLI: card create refuses a duplicate with the server\'s sentence, not an HTTP envelope', async () => {
+test('CLI: card create refuses --id, naming the id the owner would have minted', async () => {
   const s = await startServerWithLieutenant();
   const args = ['--workspace', s.dir, '--port', String(s.port)];
   try {
-    let r = await runCli(['card', 'create', '--title', 'First', '--owner', LT, ...args]);
+    let r = await runCli(['card', 'create', '--title', 'Sneaky', '--owner', LT, '--id', 'my-custom-id', ...args]);
+    assert.strictEqual(r.code, 1, 'a refused create is a failure exit, never a quiet success');
+    assert.doesNotMatch(r.stdout, /created my-custom-id/);
+    assert.match(r.stderr, /card create refused: the owner mints the id, --id is not accepted\./);
+    assert.match(r.stderr, /ADA-1/, 'names what it would have minted');
+
+    // the mint path is untouched: the same create, minus --id, still mints
+    r = await runCli(['card', 'create', '--title', 'First', '--owner', LT, ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
     assert.match(r.stdout, /created ADA-1 in backlog/);
-
-    r = await runCli(['card', 'create', '--title', 'Again', '--owner', LT, '--id', 'ADA-1', ...args]);
-    assert.strictEqual(r.code, 1, 'a refused create is a failure exit, never a quiet success');
-    assert.match(r.stderr, /card create refused: card exists: ADA-1/);
-    assert.doesNotMatch(r.stderr, /HTTP 409/);
   } finally {
     await s.stop();
   }
