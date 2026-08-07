@@ -103,6 +103,7 @@ test('worker pause: deliberate stop — session killed, worker-paused event, NO 
     assert.strictEqual((await s.api('GET', '/api/cards/nap')).body.column, 'working');
     w = boardOnDisk(s).workers.find((x) => x.card === 'nap');
     assert.ok(!w.paused, 'resume clears the paused marker — supervision watches again');
+    assert.ok(!w.expectExit, 'an ordinary pause never records expect-exit');
   } finally { await teardown(); }
 });
 
@@ -132,7 +133,10 @@ test('worker pause --expect-exit: nothing killed, custom reason on the card, and
     assert.match(ev.text, /waiting on the lieutenant/);
     assert.match(ev.text, /archon workflow approve r-42/);
     assert.doesNotMatch(ev.text, /card start/, 'the default resume hint is replaced, not appended');
-    assert.ok(boardOnDisk(s).workers.find((x) => x.card === 'gate').paused, 'marked paused');
+    const rec = boardOnDisk(s).workers.find((x) => x.card === 'gate');
+    assert.ok(rec.paused, 'marked paused');
+    assert.strictEqual(rec.expectExit, true, 'the deliberate-exit stop is recorded as such');
+    assert.match(rec.pauseReason, /archon workflow approve r-42/, 'and the way back is recorded with it');
 
     // ...and now the run returns and its session really does go.
     fs.rmSync(marker);
@@ -140,6 +144,85 @@ test('worker pause --expect-exit: nothing killed, custom reason on the card, and
     const card = (await s.api('GET', '/api/cards/gate')).body;
     assert.ok(!card.events.some((e) => e.kind === 'worker-died'), 'a pre-announced exit is not a death');
     assert.ok(!card.events.some((e) => e.kind === 'worker-stalled'), 'nor a stall');
+  } finally { await teardown(); }
+});
+
+// The move that cost a run: a lieutenant with no context sees a stopped worker
+// and reaches for `card start --resume` — the recovery the board teaches
+// everywhere else. On an expect-exit worker it re-runs the recorded command,
+// starting a second run over the one still holding the path. The recorded
+// reason is not enough; the board refuses, and quotes the door it named.
+test('card start --resume is REFUSED on an expect-exit worker, quoting the recorded reason', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Gate', id: 'gate2', attributes: { repo: 'proj' } }));
+    assert.strictEqual((await s.api('POST', '/api/cards/gate2/start',
+      { harness: 'fake', command: 'archon workflow run r-42' })).status, 200);
+    assert.strictEqual((await s.api('POST', '/api/cards/gate2/worker/pause', {
+      expectExit: true, actor: 'archon',
+      reason: 'waiting on the lieutenant — archon workflow approve r-42 "<decision>"',
+    })).status, 200);
+
+    const r = await s.api('POST', '/api/cards/gate2/start', { resume: true });
+    assert.strictEqual(r.status, 409, JSON.stringify(r.body));
+    assert.match(r.body.error, /--expect-exit/);
+    assert.match(r.body.error, /archon workflow approve r-42/, 'the refusal names the door, not just the wall');
+
+    // refused means nothing happened: the record is untouched, the card unmoved
+    const w = boardOnDisk(s).workers.find((x) => x.card === 'gate2');
+    assert.ok(w.paused && w.expectExit, 'a refused resume changes nothing about the worker');
+    assert.strictEqual((await s.api('GET', '/api/cards/gate2')).body.column, 'working');
+
+    // and through the CLI, where the lieutenant actually reaches for it
+    const cli = await runCli(['card', 'start', 'gate2', '--resume', '--workspace', s.dir, '--port', String(s.port)]);
+    assert.notStrictEqual(cli.code, 0);
+    assert.match(cli.stderr, /archon workflow approve r-42/);
+
+    // the worker reporting done puts the gate behind it: --resume is legal again
+    await s.api('POST', '/api/cards/gate2/worker/done', { outcome: 'run finished' });
+    assert.ok(!boardOnDisk(s).workers.find((x) => x.card === 'gate2').expectExit,
+      'done clears the expect-exit stop');
+  } finally { await teardown(); }
+});
+
+// The cosmetic lie, which is only cosmetic until it is not: the worker lease is
+// a WRITTEN signal and a --command worker writes none, so every pipeline card
+// read `worker=absent` while its run was plainly alive.
+test('card show reports a live --command worker as live, not absent', async () => {
+  const { s, fdir, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Runner', id: 'live', attributes: { repo: 'proj' } }));
+    assert.strictEqual((await s.api('POST', '/api/cards/live/start',
+      { harness: 'fake', command: 'archon workflow run r-7' })).status, 200);
+    const session = workerKey(s.dir, 'live');
+
+    // nobody wrote a lease — the session itself is the answer
+    let st = (await s.api('GET', '/api/cards/live')).body.status;
+    assert.strictEqual(st.worker.state, 'working', 'a live session is not absent');
+    assert.strictEqual(st.worker.id, session);
+    assert.strictEqual(st.worker.derived, true, 'marked derived — read off the session, not leased');
+
+    const cli = await runCli(['card', 'show', 'live', '--workspace', s.dir, '--port', String(s.port)]);
+    assert.strictEqual(cli.code, 0, cli.stderr);
+    assert.match(cli.stdout, /worker=working/);
+
+    // paused-but-alive holds the card without working it
+    await s.api('POST', '/api/cards/live/worker/pause', { expectExit: true, reason: 'holding on a gate' });
+    st = (await s.api('GET', '/api/cards/live')).body.status;
+    assert.strictEqual(st.worker.state, 'idle');
+
+    // and when the session really goes (an ordinary pause kills it), absent is
+    // the honest word again
+    await s.api('POST', '/api/cards/live/worker/pause', {});
+    assert.ok(!fs.existsSync(path.join(fdir, session + '.json')), 'session killed');
+    st = (await s.api('GET', '/api/cards/live')).body.status;
+    assert.strictEqual(st.worker.state, 'absent');
+
+    // a written lease always wins over the derived read
+    await s.api('POST', '/api/cards/live/status', { worker: { id: 'ada', state: 'needs-you' } });
+    st = (await s.api('GET', '/api/cards/live')).body.status;
+    assert.strictEqual(st.worker.state, 'needs-you');
+    assert.strictEqual(st.worker.id, 'ada');
   } finally { await teardown(); }
 });
 

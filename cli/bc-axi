@@ -840,7 +840,9 @@ async function cmdWorkerSend() {
 // --expect-exit is called from INSIDE the session that is about to end — an
 // automated `--command` worker holding on an approval gate. Nothing is killed;
 // the stop is recorded so the exit that follows reads as waiting, not dying.
-// --reason replaces the resume hint with the one that revives that worker.
+// --reason replaces the resume hint with the one that revives that worker, and
+// the server refuses `card start --resume` on it afterwards — that move re-runs
+// the recorded command over a run still in flight.
 async function cmdWorkerPause() {
   const id = positional[0];
   if (!id) {
@@ -849,7 +851,8 @@ async function cmdWorkerPause() {
       '  record and worktree survive for card start <card-id> --resume.\n' +
       '  --park also moves the card Working -> Backlog (card park) in the same step.\n' +
       '  --expect-exit records the stop WITHOUT killing anything — for a session that is\n' +
-      '  about to end by itself (a --command worker holding on a gate, calling from inside it).');
+      '  about to end by itself (a --command worker holding on a gate, calling from inside it);\n' +
+      '  card start --resume is then REFUSED, quoting --reason as the way back.');
   }
   const body = { actor: opts.actor || 'agent' };
   if (opts.park) body.park = true;
@@ -857,7 +860,7 @@ async function cmdWorkerPause() {
   if (opts.reason) body.reason = opts.reason;
   const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/worker/pause', body, 60000);
   console.log('paused worker ' + r.session + ' (card ' + id + ') — deliberate stop'
-    + (opts.expectExit ? ' (session left alone; it is exiting itself)'
+    + (opts.expectExit ? ' (session left alone; it is exiting itself — --resume is refused from here)'
       : '; resume: bc-axi card start ' + id + ' --resume'));
   if (opts.park) {
     if (r.parked) console.log('parked ' + id + ' -> backlog');
