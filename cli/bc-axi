@@ -594,11 +594,16 @@ async function cmdCreate() {
       '  The owner mints the id (<PREFIX>-<n>, e.g. MON-14).');
   }
   if (opts.id) {
-    // The owner mints the id — refuse locally, before any request, and name the
+    // The owner mints the id — refuse locally, before any create, and name the
     // id it would have minted (the same prefix+cardSeq compute cmdLtList does).
-    const lr = await request('GET', '/api/lieutenants');
-    const lt = lr.lieutenants.find((l) => l.id === opts.owner);
-    const minted = lt ? lt.prefix + '-' + ((Number.isInteger(lt.cardSeq) ? lt.cardSeq : 0) + 1) : null;
+    // The lookup is a courtesy: the refusal is local policy and stands whether
+    // or not a server is there to answer.
+    let minted = null;
+    try {
+      const lr = await request('GET', '/api/lieutenants');
+      const lt = (lr.lieutenants || []).find((l) => l.id === opts.owner);
+      if (lt) minted = lt.prefix + '-' + ((Number.isInteger(lt.cardSeq) ? lt.cardSeq : 0) + 1);
+    } catch (e) { minted = null; }
     die('card create refused: the owner mints the id, --id is not accepted.' +
       (minted ? ' ' + opts.owner + ' would mint ' + minted + ' next.' : ''));
   }
@@ -611,9 +616,16 @@ async function cmdCreate() {
   if (opts.bodyFile) body.body = readInput(opts.bodyFile);
   // A duplicate id is refused, never resolved: print the server's sentence as
   // its own line so the human reads what to do instead of an HTTP envelope.
+  // The server offers two remedies because an API caller has both; here the id
+  // is always the mint, so drop the door this command no longer has and leave
+  // the one a CLI caller can walk through.
   let r;
   try { r = await request('POST', '/api/cards', body); }
-  catch (e) { die(e.status === 409 && e.body && e.body.error ? 'card create refused: ' + e.body.error : e.message); }
+  catch (e) {
+    if (!(e.status === 409 && e.body && e.body.error)) die(e.message);
+    die('card create refused: ' +
+      e.body.error.replace(/\s*Create it with an explicit free id, or give /, ' Give '));
+  }
   console.log('created ' + r.card.id + ' in ' + r.card.column);
 }
 

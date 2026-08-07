@@ -381,16 +381,41 @@ test('CLI: card create refuses --id, naming the id the owner would have minted',
   const s = await startServerWithLieutenant();
   const args = ['--workspace', s.dir, '--port', String(s.port)];
   try {
+    const cardSeq = async () =>
+      (await s.api('GET', '/api/lieutenants')).body.lieutenants.find((l) => l.id === LT).cardSeq;
+
     let r = await runCli(['card', 'create', '--title', 'Sneaky', '--owner', LT, '--id', 'my-custom-id', ...args]);
     assert.strictEqual(r.code, 1, 'a refused create is a failure exit, never a quiet success');
     assert.doesNotMatch(r.stdout, /created my-custom-id/);
     assert.match(r.stderr, /card create refused: the owner mints the id, --id is not accepted\./);
     assert.match(r.stderr, /ADA-1/, 'names what it would have minted');
+    assert.strictEqual((await s.api('GET', '/api/cards/my-custom-id')).status, 404, 'nothing was created');
+    assert.strictEqual(await cardSeq(), 0, 'a refused create leaves the counter alone');
 
     // the mint path is untouched: the same create, minus --id, still mints
     r = await runCli(['card', 'create', '--title', 'First', '--owner', LT, ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
     assert.match(r.stdout, /created ADA-1 in backlog/);
+    assert.strictEqual(await cardSeq(), 1, 'the mint advanced the counter by exactly one');
+  } finally {
+    await s.stop();
+  }
+});
+
+test('CLI: a mint collision offers the prefix, not the explicit id the CLI no longer takes', async () => {
+  const s = await startServerWithLieutenant();
+  const args = ['--workspace', s.dir, '--port', String(s.port)];
+  try {
+    // a squatter on the id Ada would mint next — with --id gone, the mint's own
+    // collision is the only one a CLI caller can still reach
+    assert.strictEqual((await s.api('POST', '/api/cards', { title: 'Squatter', owner: LT, id: 'ADA-1' })).status, 200);
+
+    const r = await runCli(['card', 'create', '--title', 'Colliding', '--owner', LT, ...args]);
+    assert.strictEqual(r.code, 1, 'a refused create is a failure exit, never a quiet success');
+    assert.match(r.stderr, /card create refused: card exists: ADA-1/);
+    assert.match(r.stderr, /Give Ada an unused prefix in its settings\./);
+    assert.doesNotMatch(r.stderr, /explicit free id/, 'never a door this command just closed');
+    assert.doesNotMatch(r.stderr, /HTTP 409/);
   } finally {
     await s.stop();
   }
