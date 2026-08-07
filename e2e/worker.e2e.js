@@ -147,18 +147,21 @@ async function stepCase(name, fn) {
     });
 
     await stepCase('card start: REAL claude worker in a REAL isolated worktree; card auto-moved to Working', async () => {
-      const bodyFile = path.join(tmpRoot, 'card-body.md');
-      fs.writeFileSync(bodyFile,
+      const cardBody =
         'Create a file named `hello.txt` at the worktree root containing exactly this single line:\n\n'
         + '    ' + WANT + '\n\n'
         + '(no other changes). Commit it with message "add hello.txt". After committing, send one\n'
         + 'worker signal saying "committed". Then report done. Acceptance: `hello.txt` with exactly\n'
-        + 'that content, committed on your task branch.\n');
-      let r = await runCli(['card', 'create', '--title', 'Hello file', '--id', CARD, '--owner', 'ada',
-        '--attr', 'repo=proj', '--body-file', bodyFile, '--workspace', ws, '--port', String(port)]);
-      assert.strictEqual(r.code, 0, r.stderr);
+        + 'that content, committed on your task branch.\n';
+      // The CLI refuses --id (the owner mints it); the readable e2e id comes in
+      // through the API, which still takes an explicit one.
+      const created = await api('POST', '/api/cards', {
+        id: CARD, title: 'Hello file', owner: 'ada', attributes: { repo: 'proj' }, body: cardBody,
+      });
+      assert.strictEqual(created.status, 200, JSON.stringify(created.body));
+      assert.strictEqual(created.body.card.id, CARD);
 
-      r = await runCli(['card', 'start', CARD, '--workspace', ws, '--port', String(port)]);
+      const r = await runCli(['card', 'start', CARD, '--workspace', ws, '--port', String(port)]);
       assert.strictEqual(r.code, 0, r.stderr + r.stdout);
       assert.match(r.stdout, new RegExp('started worker claude:'
         + (SESSION + ':' + WINDOW).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));

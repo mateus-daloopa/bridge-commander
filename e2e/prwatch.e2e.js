@@ -162,17 +162,21 @@ async function stepCase(name, fn) {
     });
 
     await stepCase('card start: REAL worker spawned for the direct-PR card', async () => {
-      const bodyFile = path.join(tmpRoot, 'card-body.md');
-      fs.writeFileSync(bodyFile,
+      const cardBody =
         'Create a file `' + FILE + '` containing exactly this single line:\n\n'
         + '    ' + WANT + '\n\n'
         + '(no other changes; create parent dirs as needed). Commit it with message "add ' + FILE + '".\n'
         + 'Then follow your delivery contract: push the branch and open a PR titled "e2e: add ' + FILE + '"\n'
-        + 'with a one-line body. Acceptance: the PR exists and contains only that file.\n');
-      let r = await runCli(['card', 'create', '--title', 'PR watch e2e ' + RUN, '--id', CARD, '--owner', 'ada',
-        '--attr', 'repo=scratch', '--body-file', bodyFile, '--workspace', ws, '--port', String(port)]);
-      assert.strictEqual(r.code, 0, r.stderr);
-      r = await runCli(['card', 'start', CARD, '--workspace', ws, '--port', String(port)]);
+        + 'with a one-line body. Acceptance: the PR exists and contains only that file.\n';
+      // The CLI refuses --id (the owner mints it); the readable e2e id comes in
+      // through the API, which still takes an explicit one.
+      const created = await api('POST', '/api/cards', {
+        id: CARD, title: 'PR watch e2e ' + RUN, owner: 'ada', attributes: { repo: 'scratch' }, body: cardBody,
+      });
+      assert.strictEqual(created.status, 200, JSON.stringify(created.body));
+      assert.strictEqual(created.body.card.id, CARD);
+
+      const r = await runCli(['card', 'start', CARD, '--workspace', ws, '--port', String(port)]);
       assert.strictEqual(r.code, 0, r.stderr + r.stdout);
       const card = (await api('GET', '/api/cards/' + CARD)).body;
       assert.strictEqual(card.column, 'working');

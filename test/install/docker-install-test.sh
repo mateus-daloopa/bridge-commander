@@ -99,28 +99,56 @@ $BC project add /root/src/nimbus-web --mode direct-PR
 $BC project add /root/src/nimbus-api --mode local-only
 $BC lieutenant create --name Kira --id kira
 
+# The demo board is READ, so its cards carry readable ids — and the CLI no
+# longer takes one (the owner mints it). The API still does, so the fixture
+# creates through it. A failed create stops the run: a silently empty board is
+# worse than a loud stop.
+#   card_create <id> <title> <owner> <type> <repo> [label]   — body on stdin
+card_create() {
+  BC_ID="$1" BC_TITLE="$2" BC_OWNER="$3" BC_TYPE="$4" BC_REPO="$5" BC_LABEL="${6:-}" BC_BODY="$(cat)" \
+  node -e '
+    const e = process.env;
+    fetch("http://127.0.0.1:4790/api/cards", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: e.BC_ID, title: e.BC_TITLE, owner: e.BC_OWNER, type: e.BC_TYPE,
+        attributes: { repo: e.BC_REPO }, labels: e.BC_LABEL ? [e.BC_LABEL] : [],
+        body: e.BC_BODY,
+      }),
+    }).then(async (r) => {
+      const t = await r.text();
+      if (!r.ok) throw new Error(r.status + " " + t);
+      console.log("created " + e.BC_ID);
+    }).catch((err) => {
+      console.error("card create failed: " + e.BC_ID + ": " + err.message);
+      process.exit(1);
+    });
+  ' || exit 1
+}
+
 # ---------- Backlog ----------
-$BC card create --id q3-image-pipeline --title "Q3 plan: move image processing to background workers" \
-  --owner dax --type plan --attr repo=nimbus-web --body-file - <<'EOF'
+card_create q3-image-pipeline "Q3 plan: move image processing to background workers" \
+  dax plan nimbus-web <<'EOF'
 Draft plan: today thumbnails are generated inline in the upload request (p95 4.2s).
 Proposal: enqueue to a worker pool, serve a placeholder until ready.
 Open questions: queue tech (pg-boss vs redis), backfill of existing images.
 EOF
 
-$BC card create --id signup-dip --title "Investigate last week's signup conversion dip" \
-  --owner kira --type investigation --attr repo=nimbus-api --body-file - <<'EOF'
+card_create signup-dip "Investigate last week's signup conversion dip" \
+  kira investigation nimbus-api <<'EOF'
 Conversion dropped 3.1% week-over-week starting Tuesday. Correlate with the
 Tuesday deploys and the new e-mail verification flow. Deliverable: report, no code.
 EOF
 
-$BC card create --id node-22 --title "Upgrade all services to Node 22" \
-  --owner dax --attr repo=nimbus-web --label chore --body-file - <<'EOF'
+card_create node-22 "Upgrade all services to Node 22" \
+  dax implementation nimbus-web chore <<'EOF'
 Node 20 hits maintenance EOL soon. Bump engines, CI images and Dockerfiles across services.
 EOF
 
 # ---------- Review (full lifecycle: start -> worker done -> verify -> handoff) ----------
-$BC card create --id flaky-session-test --title "Fix flaky session-refresh test" \
-  --owner kira --attr repo=nimbus-api --label bug --body-file - <<'EOF'
+card_create flaky-session-test "Fix flaky session-refresh test" \
+  kira implementation nimbus-api bug <<'EOF'
 session-refresh.test.js fails ~1 in 8 CI runs on the TTL assertion.
 EOF
 $BC card start flaky-session-test --brief-file - <<'EOF'
@@ -139,8 +167,8 @@ so runs crossing a second boundary failed. Fix: fake timers around the refresh w
 EOF
 $BC card move flaky-session-test review
 
-$BC card create --id dark-mode --title "Dashboard dark mode" \
-  --owner dax --attr repo=nimbus-web --label feature --body-file - <<'EOF'
+card_create dark-mode "Dashboard dark mode" \
+  dax implementation nimbus-web feature <<'EOF'
 Add a dark theme to the dashboard, honoring prefers-color-scheme with a manual toggle.
 EOF
 $BC card start dark-mode --brief-file - <<'EOF'
@@ -159,8 +187,8 @@ EOF
 $BC card move dark-mode review
 
 # ---------- Working ----------
-$BC card create --id csv-export --title "Reports: CSV export with date-range filter" \
-  --owner dax --attr repo=nimbus-web --label feature --body-file - <<'EOF'
+card_create csv-export "Reports: CSV export with date-range filter" \
+  dax implementation nimbus-web feature <<'EOF'
 Users want to pull filtered report data into spreadsheets. Add an Export CSV button
 to the reports page that respects the active date-range filter.
 EOF
@@ -171,8 +199,8 @@ sleep 2
 $BC worker signal csv-export "branch created; approach: stream rows server-side with a cursor, no full materialization"
 $BC worker signal csv-export "endpoint + button implemented; streaming 500k-row fixture in 3.8s; writing tests"
 
-$BC card create --id rate-limit-search --title "Rate-limit the public search endpoint" \
-  --owner kira --attr repo=nimbus-api --body-file - <<'EOF'
+card_create rate-limit-search "Rate-limit the public search endpoint" \
+  kira implementation nimbus-api <<'EOF'
 /v1/search is getting hammered by a few anonymous clients (40% of API CPU).
 Add per-key rate limiting with sane anonymous defaults.
 EOF
@@ -182,8 +210,8 @@ EOF
 sleep 2
 $BC worker signal rate-limit-search "token-bucket middleware in place: 60/min keyed, 10/min anonymous; adding Retry-After headers and tests"
 
-$BC card create --id webhook-secret --title "Rotate the payments webhook secret" \
-  --owner kira --attr repo=nimbus-api --label security --body-file - <<'EOF'
+card_create webhook-secret "Rotate the payments webhook secret" \
+  kira implementation nimbus-api security <<'EOF'
 The payments provider flagged our webhook secret as older than 12 months.
 Rotate with zero missed events (dual-secret window during the swap).
 EOF
