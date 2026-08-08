@@ -61,7 +61,7 @@ const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '.
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
 const { runHooks } = require(path.join(__dirname, 'hooks.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
-const { workerBrief, listBriefs, resolveBrief } = require(path.join(__dirname, 'brief.js'));
+const { workerBrief, listBriefs, resolveBrief, parseBrief, attrVar, attrCardKey } = require(path.join(__dirname, 'brief.js'));
 const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
 const gitrev = require(path.join(__dirname, 'gitrev.js'));
@@ -1923,6 +1923,11 @@ function attachBriefArtifact(card, ref) {
 // against the board after the spawn so a mid-start archive never leaves an
 // orphan session behind. The response still reports the REAL spawn outcome —
 // the await keeps startCard's success/failure contract synchronous-looking.
+// The attributes the BOARD writes and a human never does: each holds a list of
+// records the board appends to, and `--attr prs=<value>` overwrites that list
+// with a string the next append then has to throw away. Named in a refusal,
+// never offered as a recipe.
+const BOARD_OWNED_ATTRS = new Set(['prs', 'artifacts']);
 const startingCards = new Set(); // card ids with a start/resume in flight
 async function startCard(card, body) {
   if (startingCards.has(card.id)) {
@@ -2004,28 +2009,86 @@ async function doStartCard(card, body) {
   // The brief template is resolved and read HERE — at start, and only here, so
   // the worker gets the card as it stands and the template as it stands. No
   // fallback: a card with no brief does not start.
+  // A template MAY open with frontmatter (server/brief.js) naming what runs it:
+  // harness, model, the attributes it cannot work without, whether it gets a
+  // branch. Parsed here, honored below.
   let template = '';
+  let meta = {};
+  let briefFile = '';
   if (!command) {
     const briefId = String(card.brief || '').trim();
     if (!briefId) {
       return { error: 'card ' + card.id + ' has no brief — pick a template before starting it: '
         + 'bc-axi card patch ' + card.id + ' --brief <id>. Available: ' + briefsHint() };
     }
-    const file = resolveBrief(STATE_DIR, briefId);
-    if (!file) {
+    briefFile = resolveBrief(STATE_DIR, briefId);
+    if (!briefFile) {
       return { error: 'card ' + card.id + ' points at brief "' + briefId + '", which no template '
         + 'matches. Available: ' + briefsHint() };
     }
-    try { template = fs.readFileSync(file, 'utf8'); }
-    catch (e) { return { error: 'brief template unreadable (' + file + '): ' + String((e && e.message) || e), code: 502 }; }
+    let raw;
+    try { raw = fs.readFileSync(briefFile, 'utf8'); }
+    catch (e) { return { error: 'brief template unreadable (' + briefFile + '): ' + String((e && e.message) || e), code: 502 }; }
+    try { ({ meta, body: template } = parseBrief(raw)); }
+    catch (e) { return { error: 'brief template ' + briefFile + ': ' + String((e && e.message) || e) }; }
+    // `requires` — the attributes this flavour of SDLC cannot work without.
+    // Refused HERE, before a worktree or a session exists: a review brief with
+    // no pr_url otherwise renders its unresolved placeholder literally — the
+    // right call for a typo — and spawns a worker to discover that for itself.
+    // Matched through brief.js's attrVar(), the same normalisation the
+    // placeholder table uses, so a template asking for PR_URL is answered by
+    // the card's pr_url — asking for a name the brief could not have read back
+    // is not a requirement anyone means to write.
+    //
+    // The question here is whether the card CARRIES the thing, not whether it
+    // has a text form to render — that second question is briefVars', and it
+    // is why the two rules differ: a review brief demanding "this card has PRs
+    // recorded" is a real requirement even though the recorded list renders
+    // into nothing. An empty list, though, carries nothing.
+    const have = new Set();
+    for (const [k, v] of Object.entries((card.attributes || {}))) {
+      if (v === null || v === undefined) continue;
+      const carried = typeof v === 'object'
+        ? (Array.isArray(v) ? v.length > 0 : Object.keys(v).length > 0)
+        : String(v).trim() !== '';
+      if (carried) have.add(attrVar(k));
+    }
+    // Named back in the form the CARD carries: the uppercase form would earn
+    // the user a second attribute resolving to the placeholder the first owns.
+    const missing = [...new Set((meta.requires || [])
+      .filter((k) => !have.has(attrVar(k)))
+      .map((k) => attrCardKey(k)))];
+    if (missing.length) {
+      const ours = missing.filter((k) => BOARD_OWNED_ATTRS.has(k));
+      const settable = missing.filter((k) => !BOARD_OWNED_ATTRS.has(k));
+      let err = 'card ' + card.id + ' cannot start on brief "' + briefId + '": that template '
+        + 'requires the attribute' + (missing.length > 1 ? 's ' : ' ') + missing.join(', ') + '.';
+      if (settable.length) {
+        err += ' Set ' + (settable.length > 1 ? 'them' : 'it') + ' first: bc-axi card patch '
+          + card.id + ' ' + settable.map((k) => '--attr ' + k + '=<value>').join(' ') + '.';
+      }
+      if (ours.length) {
+        err += ' ' + ours.join(' and ') + ' ' + (ours.length > 1 ? 'are' : 'is')
+          + ' recorded by the board itself and never set by hand — the card has to earn '
+          + (ours.length > 1 ? 'them' : 'it') + ' before this brief can run.';
+      }
+      return { error: err };
+    }
   }
   // Harness precedence: explicit CLI --harness wins, then --command (which
-  // names the harness by implication), then the card's stored hint
-  // (attributes.harness, set from the new-card modal), then config/default.
+  // names the harness by implication), then the template's frontmatter, then
+  // config/default.
+  const harnessFromTemplate = !(body && body.harness) && !command && !!meta.harness;
   const harnessName = String((body && body.harness) || (command ? 'command' : '')
-    || (card.attributes && card.attributes.harness) || readConfig().harness || 'claude');
+    || meta.harness || readConfig().harness || 'claude');
   let impl;
-  try { impl = getHarness(harnessName); } catch (e) { return { error: String((e && e.message) || e) }; }
+  // A name the template asked for names the template back: otherwise a typo in
+  // one of several templates sends whoever started the card hunting for it.
+  try { impl = getHarness(harnessName); }
+  catch (e) {
+    return { error: String((e && e.message) || e)
+      + (harnessFromTemplate ? ' (from brief template ' + briefFile + ')' : '') };
+  }
 
   // A finished previous worker (rework restart): its session must be gone
   // (a live one is resumed/steered, not spawned over), then its worktree is
@@ -2053,7 +2116,11 @@ async function doStartCard(card, body) {
 
   const session = ownerSession(card);
   const window = names.workerWindow(card.id);
-  const branch = card.type === 'investigation' ? null : 'bc/' + card.id;
+  // Whether the work gets a branch is a DELIVERY contract, so the brief owns
+  // it: `branch: false` = detached HEAD, nothing to push. With no key, the card
+  // type decides as it always has (an investigation delivers a report).
+  const cuts = typeof meta.branch === 'boolean' ? meta.branch : card.type !== 'investigation';
+  const branch = cuts ? 'bc/' + card.id : null;
   // What spawn's second argument means is the harness's business: a brief for
   // an agent, the line to run for `command`.
   const prompt = command || workerBrief({
@@ -2063,9 +2130,9 @@ async function doStartCard(card, body) {
   });
   const spawnOpts = { session, window, stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL };
   const extraArgs = [];
-  // Model precedence mirrors harness: explicit --model wins, else the card's
-  // stored hint (attributes.model, set from the new-card modal).
-  const modelHint = (body && body.model) || (card.attributes && card.attributes.model);
+  // Model precedence mirrors harness: explicit --model wins, else the
+  // template's frontmatter.
+  const modelHint = (body && body.model) || meta.model;
   if (modelHint) extraArgs.push('--model', String(modelHint));
   if (body && body.effort) extraArgs.push('--effort', String(body.effort));
   if (extraArgs.length) spawnOpts.extraArgs = extraArgs;
@@ -2084,7 +2151,11 @@ async function doStartCard(card, body) {
 
   card.attributes.session = workerName(ref);
   card.attributes.worktree = wt.path;
+  // Cleared when this run cuts none: a card restarted on a no-branch template
+  // would otherwise keep the last run's value, and everything downstream —
+  // lifecycle hooks, the rendered brief — would read a branch that is not there.
   if (branch) card.attributes.branch = branch;
+  else delete card.attributes.branch;
   attachBriefArtifact(card, ref);
   const worker = { card: card.id, ref, worktree: wt, project: project.name, spawnedAt: now(), done: false };
   if (branch) worker.branch = branch;

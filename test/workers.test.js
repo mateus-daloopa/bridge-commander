@@ -571,13 +571,21 @@ test('card start --resume refuses a brief and points at worker send (API + CLI)'
   } finally { await teardown(); }
 });
 
-// The new-card modal stores an optional harness/model hint on the card
-// (attributes.harness / attributes.model). card.start honors them as a
-// FALLBACK: an explicit CLI --harness/--model still wins. Observed through a
-// 'recfake' harness preloaded into the server process (test/recording-harness.js
-// via NODE_OPTIONS) that captures the extraArgs card.start builds — the harness
-// port (harness/) itself stays untouched.
-test('card start honors card.attributes.harness/.model as a fallback; explicit body wins', async () => {
+// A brief is a flavour of SDLC, and part of that flavour is WHAT RUNS IT: the
+// template may open with frontmatter naming harness, model, the attributes it
+// cannot work without, and whether a branch is cut. Precedence is explicit CLI
+// flag > frontmatter > config default. Observed through a 'recfake' harness
+// preloaded into the server process (test/recording-harness.js via NODE_OPTIONS)
+// that captures the extraArgs card.start builds — the harness port (harness/)
+// itself stays untouched.
+function writeTemplate(s, id, text) {
+  const dir = path.join(s.dir, '.bridge-commander', 'briefs');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, id + '.md'), text);
+  return id;
+}
+
+test('brief frontmatter names the harness and model; an explicit flag still wins', async () => {
   const recFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'bc-rec-')), 'extraargs.json');
   const preload = path.join(__dirname, 'recording-harness.js');
   const { s, teardown } = await boot({
@@ -587,45 +595,241 @@ test('card start honors card.attributes.harness/.model as a fallback; explicit b
   const readExtra = () => JSON.parse(fs.readFileSync(recFile, 'utf8')).extraArgs;
   const clearExtra = () => { try { fs.unlinkSync(recFile); } catch (e) {} };
   try {
-    // (a) fallback: no body harness/model → the card's stored hint is used.
-    // recfake is reachable ONLY via attributes.harness, so its extraArgs file
-    // being written proves the harness fallback fired; the --model proves the
-    // model fallback fired.
-    await s.api('POST', '/api/cards', withOwner({
-      title: 'Hint A', id: 'hint-a',
-      attributes: { repo: 'proj', harness: 'recfake', model: 'stored-model' },
-    }));
-    clearExtra();
-    let r = await s.api('POST', '/api/cards/hint-a/start', {});
-    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
-    assert.deepStrictEqual(readExtra(), ['--model', 'stored-model']);
+    writeTemplate(s, 'runs-on-recfake', [
+      '---', 'harness: recfake', 'model: template-model', '---', '# {{CARD_TITLE}}', '',
+    ].join('\n'));
 
-    // (b) explicit body.model overrides the stored attributes.model.
+    // (a) no flags: the template decides. recfake is reachable ONLY through the
+    // frontmatter here, so its extraArgs file being written proves the harness
+    // key fired; the --model proves the model key fired.
     await s.api('POST', '/api/cards', withOwner({
-      title: 'Hint B', id: 'hint-b',
-      attributes: { repo: 'proj', harness: 'recfake', model: 'stored-model' },
+      title: 'FM A', id: 'fm-a', brief: 'runs-on-recfake', attributes: { repo: 'proj' },
     }));
     clearExtra();
-    r = await s.api('POST', '/api/cards/hint-b/start', { model: 'cli-model' });
+    let r = await s.api('POST', '/api/cards/fm-a/start', {});
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.deepStrictEqual(readExtra(), ['--model', 'template-model']);
+
+    // (b) explicit --model overrides the template's model
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'FM B', id: 'fm-b', brief: 'runs-on-recfake', attributes: { repo: 'proj' },
+    }));
+    clearExtra();
+    r = await s.api('POST', '/api/cards/fm-b/start', { model: 'cli-model' });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
     assert.deepStrictEqual(readExtra(), ['--model', 'cli-model']);
 
-    // (c) explicit body.harness overrides attributes.harness. attributes names
-    // the plain 'fake' (which never writes the extraArgs file); body picks
-    // recfake — the file IS written, proving body.harness won. No body.model,
-    // so attributes.model still supplies the fallback --model.
+    // (c) explicit --harness overrides the template's harness: the plain 'fake'
+    // never writes the extraArgs file, so its absence is the proof.
     await s.api('POST', '/api/cards', withOwner({
-      title: 'Hint C', id: 'hint-c',
-      attributes: { repo: 'proj', harness: 'fake', model: 'stored-model' },
+      title: 'FM C', id: 'fm-c', brief: 'runs-on-recfake', attributes: { repo: 'proj' },
     }));
     clearExtra();
-    r = await s.api('POST', '/api/cards/hint-c/start', { harness: 'recfake' });
+    r = await s.api('POST', '/api/cards/fm-c/start', { harness: 'fake' });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
-    assert.deepStrictEqual(readExtra(), ['--model', 'stored-model']);
+    assert.strictEqual(fs.existsSync(recFile), false, 'the flag won: recfake never ran');
   } finally {
     await teardown();
     fs.rmSync(path.dirname(recFile), { recursive: true, force: true });
   }
+});
+
+test('a card missing a `requires` attribute is refused before ANYTHING is provisioned', async () => {
+  const { s, teardown } = await boot();
+  try {
+    writeTemplate(s, 'needs-pr', [
+      '---', 'requires: [pr_url, repo_slug]', '---', 'review {{ATTR_PR_URL}}', '',
+    ].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Review it', id: 'needy', brief: 'needs-pr',
+      attributes: { repo: 'proj', pr_url: 'https://github.com/o/r/pull/7' },
+    }));
+    const r = await s.api('POST', '/api/cards/needy/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 400, JSON.stringify(r.body));
+    assert.match(r.body.error, /repo_slug/, 'the error names the missing attribute');
+    assert.doesNotMatch(r.body.error, /pr_url,/, 'and only the missing one');
+    // nothing was provisioned: no worktree, no worker, the card never moved
+    assert.strictEqual(fs.existsSync(path.join(s.dir, '.bridge-commander', 'worktrees', 'needy')), false);
+    assert.deepStrictEqual(boardOnDisk(s).workers, []);
+    assert.strictEqual((await s.api('GET', '/api/cards/needy')).body.column, 'backlog');
+
+    // set it and the same start goes through
+    await s.api('PATCH', '/api/cards/needy', { attributes: { repo_slug: 'o/r' } });
+    const ok = await s.api('POST', '/api/cards/needy/start', { harness: 'fake' });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+  } finally { await teardown(); }
+});
+
+// A required name is matched the way the brief would READ it, not by exact
+// spelling: the template author sees the uppercase placeholder, the card
+// carries the lowercase key, and both have to name one attribute.
+test('`requires` matches the attribute however it is spelled, and names the card key when it is missing', async () => {
+  const { s, teardown } = await boot();
+  try {
+    writeTemplate(s, 'needs-upper', [
+      '---', 'requires: [PR_URL, Repo-Slug]', '---', 'review {{ATTR_PR_URL}}', '',
+    ].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Review it', id: 'shouty', brief: 'needs-upper',
+      attributes: { repo: 'proj', pr_url: 'https://github.com/o/r/pull/9' },
+    }));
+    const r = await s.api('POST', '/api/cards/shouty/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 400, JSON.stringify(r.body));
+    // pr_url answered PR_URL, so only the genuinely missing one is named — and
+    // named as the CARD needs it: an --attr Repo-Slug would earn a second
+    // attribute resolving to the placeholder repo_slug already owns.
+    assert.match(r.body.error, /--attr repo_slug=<value>/);
+    assert.doesNotMatch(r.body.error, /PR_URL|Repo-Slug|REPO_SLUG/);
+
+    await s.api('PATCH', '/api/cards/shouty', { attributes: { repo_slug: 'o/r' } });
+    const ok = await s.api('POST', '/api/cards/shouty/start', { harness: 'fake' });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+  } finally { await teardown(); }
+});
+
+// `requires` asks whether the card CARRIES the thing, which is a different
+// question from whether the thing renders: prs has no text form, and "this
+// card must have PRs recorded" is still a legitimate demand from a review
+// brief. And prs is the board's to write — so the refusal names it without
+// handing out an --attr recipe that would flatten the recorded list.
+test('`requires` counts a recorded list as present, an empty one as missing, and offers no recipe for what the board owns', async () => {
+  const { s, teardown } = await boot();
+  try {
+    writeTemplate(s, 'needs-prs', ['---', 'requires: [prs]', '---', 'review the PRs', ''].join('\n'));
+    const pr = { url: 'https://github.com/o/r/pull/11', state: 'open' };
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Has PRs', id: 'haspr', brief: 'needs-prs', attributes: { repo: 'proj', prs: [pr] },
+    }));
+    const ok = await s.api('POST', '/api/cards/haspr/start', { harness: 'fake' });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.deepStrictEqual(ok.body.card.attributes.prs, [pr], 'the recorded list is untouched');
+
+    // an empty list carries nothing
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'No PRs', id: 'nopr', brief: 'needs-prs', attributes: { repo: 'proj', prs: [] },
+    }));
+    const r = await s.api('POST', '/api/cards/nopr/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 400, JSON.stringify(r.body));
+    // anchored on the attribute: a bare /prs/ would pass on the brief id alone
+    assert.match(r.body.error, /requires the attribute prs\./, 'the refusal names the attribute');
+    assert.doesNotMatch(r.body.error, /--attr prs=/, 'and never a recipe that would flatten the list');
+    assert.match(r.body.error, /recorded by the board itself/);
+    assert.deepStrictEqual(boardOnDisk(s).workers.filter((w) => w.card === 'nopr'), []);
+  } finally { await teardown(); }
+});
+
+test('`branch: false` cuts no branch — the brief owns the delivery contract, not the card type', async () => {
+  const { s, teardown } = await boot();
+  try {
+    writeTemplate(s, 'no-branch', ['---', 'branch: false', '---', 'read only: {{TASK}}', ''].join('\n'));
+    // an IMPLEMENTATION card — under the old rule its type alone would cut bc/<id>
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Just look', id: 'look', brief: 'no-branch', attributes: { repo: 'proj' },
+    }));
+    const r = await s.api('POST', '/api/cards/look/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.worker.branch, undefined);
+    assert.strictEqual(r.body.card.attributes.branch, undefined);
+    assert.strictEqual(git(r.body.worker.worktree.path, 'rev-parse', '--abbrev-ref', 'HEAD'), 'HEAD',
+      'detached HEAD: there is nothing to push');
+
+    // and with no `branch` key the card type still decides, exactly as before
+    writeTemplate(s, 'silent', ['# {{CARD_TITLE}}', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Ship it', id: 'shipit', brief: 'silent', attributes: { repo: 'proj' },
+    }));
+    const r2 = await s.api('POST', '/api/cards/shipit/start', { harness: 'fake' });
+    assert.strictEqual(r2.body.worker.branch, 'bc/shipit');
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Why slow', id: 'why', type: 'investigation', brief: 'silent', attributes: { repo: 'proj' },
+    }));
+    const r3 = await s.api('POST', '/api/cards/why/start', { harness: 'fake' });
+    assert.strictEqual(r3.body.worker.branch, undefined);
+  } finally { await teardown(); }
+});
+
+// The branch is a per-START decision now, so it has to be UNSET as readily as
+// it is set: everything downstream (lifecycle hooks, the rendered brief) reads
+// the attribute, and a leftover from the last run points them at a branch that
+// this run never cut.
+test('a restart on a `branch: false` template clears the branch the previous run cut', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const fdir = path.join(root, 'fake');
+  const env = {
+    BC_FAKE_STATE: fdir, BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    writeTemplate(s, 'cuts-one', ['# {{CARD_TITLE}}', ''].join('\n'));
+    writeTemplate(s, 'cuts-none', ['---', 'branch: false', '---', 'read only', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Two ways', id: 'twoways', brief: 'cuts-one', attributes: { repo: 'proj' },
+    }));
+    let r = await s.api('POST', '/api/cards/twoways/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.card.attributes.branch, 'bc/twoways');
+
+    await s.api('POST', '/api/cards/twoways/worker/done', { outcome: 'first pass' });
+    await s.api('POST', '/api/cards/twoways/move', { column: 'review', actor: 'agent' });
+    // the session dies (restart clears the in-process fake; drop its marker so
+    // the next start is a fresh spawn, not a resume)
+    await s.stop();
+    fs.rmSync(path.join(fdir, workerKey(wsDir, 'twoways') + '.json'), { force: true });
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+
+    await s.api('PATCH', '/api/cards/twoways', { brief: 'cuts-none' });
+    r = await s.api('POST', '/api/cards/twoways/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.worker.branch, undefined);
+    assert.strictEqual(r.body.card.attributes.branch, undefined, 'not the previous run\'s branch');
+    const onDisk = boardOnDisk(s).cards.find((c) => c.id === 'twoways');
+    assert.strictEqual(onDisk.attributes.branch, undefined);
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a malformed frontmatter block refuses the start and names the line', async () => {
+  const { s, teardown } = await boot();
+  try {
+    writeTemplate(s, 'broken', ['---', 'harness: codex', 'hrness: claude', '---', 'body', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Bad template', id: 'bad-fm', brief: 'broken', attributes: { repo: 'proj' },
+    }));
+    const r = await s.api('POST', '/api/cards/bad-fm/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 400, JSON.stringify(r.body));
+    assert.match(r.body.error, /broken\.md: frontmatter line 3: unknown key "hrness"/);
+    assert.deepStrictEqual(boardOnDisk(s).workers, []);
+  } finally { await teardown(); }
+});
+
+// An unknown harness names the file that asked for it: the person starting the
+// card is rarely the person who typed the name, and a workspace holds several
+// templates to hunt through.
+test('an unknown harness from the frontmatter names the template it came from', async () => {
+  const { s, teardown } = await boot();
+  try {
+    writeTemplate(s, 'typo-harness', ['---', 'harness: codx', '---', 'body', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Typo', id: 'typo-h', brief: 'typo-harness', attributes: { repo: 'proj' },
+    }));
+    let r = await s.api('POST', '/api/cards/typo-h/start', {});
+    assert.strictEqual(r.status, 400, JSON.stringify(r.body));
+    assert.match(r.body.error, /codx/);
+    assert.match(r.body.error, /from brief template .*typo-harness\.md/);
+
+    // the flag won, so the template did not ask: no template named back
+    r = await s.api('POST', '/api/cards/typo-h/start', { harness: 'nosuchharness' });
+    assert.strictEqual(r.status, 400, JSON.stringify(r.body));
+    assert.doesNotMatch(r.body.error, /brief template/);
+    assert.deepStrictEqual(boardOnDisk(s).workers, []);
+  } finally { await teardown(); }
 });
 
 // card.start --command: the SAME atomic op, except the session runs a command

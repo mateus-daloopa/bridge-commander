@@ -72,13 +72,16 @@ The prompt a worker is launched with is a markdown file you own, in
 | `default` | implement, commit, ship it the way the project allows |
 | `no-mistakes` | the same, behind a review-and-CI gate |
 | `investigation` | no branch, no PR — a written report |
-| `codereview` | review one PR and write the verdict up |
 
 Every card points at one (the dropdown in the new-card modal, `--brief <id>` on the CLI), and
 `card start` renders it against the card **as it stands at that moment** — title, body, thread
 and attributes, through `{{CARD_TITLE}}`, `{{TASK}}`, `{{THREAD}}`, `{{ATTR_<NAME>}}` and the
 rest, all listed in the folder's own README. Sharpen the body a second before starting and the
 worker reads the sharpened one.
+
+A template may also open with a small frontmatter block naming how the card runs — `harness`,
+`model`, `requires` (attributes it cannot start without), `branch` — all optional, all in
+[briefs/README.md](briefs/README.md).
 
 They are **yours**. Edit one and the next card started on it uses the edit — no restart, no
 release. Add a file and it is in the dropdown. The copies shipped here only seed a fresh
