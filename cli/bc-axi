@@ -654,7 +654,10 @@ async function cmdMove() {
   const body = { column, actor: opts.actor || 'agent' };
   if (opts.level) body.level = opts.level;
   if (opts.kind) body.kind = opts.kind;
-  const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/move', body);
+  // the handoff out of Working awaits the worktree release, which queues behind
+  // whatever else holds the project clone's lock (a concurrent `card start`
+  // fetches and adds a worktree under the same lock) — same budget as start
+  const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/move', body, 180000);
   if (r.ordered) console.log('ordered ' + r.ordered + ' for ' + id + ' (queue seq ' + r.seq + ')');
   else console.log(r.unchanged ? 'already in ' + column : 'moved ' + id + ' -> ' + column);
 }
@@ -1048,7 +1051,7 @@ async function cmdDrain() {
       hint = 'read the thread (bc-axi thread card:' + it.card + ') and act; steer the worker: bc-axi worker send ' + it.card + ' --text-file <f|->';
     } else if (it.kind === 'worker-done') {
       head = 'WORKER DONE — ' + cardBit(it.card);
-      hint = 'verify the work in its worktree (read the diff/branch, not just the outcome text), rewrite the card body to current state (bc-axi card patch ' + it.card + ' --body-file <f|->), then hand off: bc-axi card move ' + it.card + ' review';
+      hint = 'verify the work in its worktree (read the diff/branch, not just the outcome text) — the handoff releases that worktree, so read it first; rewrite the card body to current state (bc-axi card patch ' + it.card + ' --body-file <f|->), then hand off: bc-axi card move ' + it.card + ' review';
     } else if (it.kind === 'worker-stopped') {
       const c = cards.find((x) => x.id === it.card);
       const sess = (c && c.attributes && c.attributes.session) || '<session>';

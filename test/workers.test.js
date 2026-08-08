@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { startServerWithLieutenant, withOwner, runCli, LT } = require('./helper');
+const { startServerWithLieutenant, withOwner, runCli, sleep, LT } = require('./helper');
 const { lieutenantSession, workerWindow } = require('../server/names.js');
 
 // A worker's harness key/address: a WINDOW inside the owning lieutenant's
@@ -414,13 +414,20 @@ test('fresh restart after done: refuses over a live session; releases the dead o
   let s = await startServerWithLieutenant({ dir: wsDir, env });
   try {
     await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
-    await s.api('POST', '/api/cards', withOwner({ title: 'Redo', id: 'redo', attributes: { repo: 'proj' } }));
+    // keep_worktree: the checkout outlives the handoff, so the RESTART is what
+    // releases it — the subject of this test
+    writePlaybook(s, 'kept', ['---', 'keep_worktree: true', '---', '{{TASK}}', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Redo', id: 'redo', playbook: 'kept', attributes: { repo: 'proj' },
+    }));
     const first = (await s.api('POST', '/api/cards/redo/start', { harness: 'fake' })).body.worker;
     await s.api('POST', '/api/cards/redo/worker/done', { outcome: 'first pass done' });
     // lieutenant hands off, captain sends it back — the card leaves Working
     await s.api('POST', '/api/cards/redo/move', { column: 'review', actor: 'agent' });
 
-    // the old session is still alive → never spawned over
+    // the old session is still alive and its worktree is right there → never
+    // spawned over (the one exception is a done worker whose worktree was
+    // already released — it has nothing left to steer)
     let r = await s.api('POST', '/api/cards/redo/start', { harness: 'fake' });
     assert.strictEqual(r.status, 409);
     assert.match(r.body.error, /still alive/);
@@ -487,7 +494,12 @@ test('worker send: delivers into the live worker session + level-2 card event; l
 test('worker send reopens a done-but-alive worker: turn re-enters Working, record reset, text delivered', async () => {
   const { s, fdir, teardown } = await boot();
   try {
-    await s.api('POST', '/api/cards', withOwner({ title: 'Reopen', id: 'reopen', attributes: { repo: 'proj' } }));
+    // reworked in place: the playbook keeps the worktree, so there is still a
+    // checkout for the reopened turn to write in
+    writePlaybook(s, 'kept', ['---', 'keep_worktree: true', '---', '{{TASK}}', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Reopen', id: 'reopen', playbook: 'kept', attributes: { repo: 'proj' },
+    }));
     assert.strictEqual((await s.api('POST', '/api/cards/reopen/start', { harness: 'fake' })).status, 200);
     const sess = workerKey(s.dir, 'reopen');
 
@@ -793,6 +805,184 @@ test('a restart on a `branch: false` playbook clears the branch the previous run
     await s.stop();
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+// A worktree outlived the work: card.start provisions one and nothing gave it
+// back until somebody archived the card, so finished cards sat on their
+// checkouts. It goes when the card LEAVES WORKING — the handoff, once the
+// lieutenant has read the diff in it — with archive as the backstop, and
+// `keep_worktree: true` as the exception for a card reworked in place.
+async function until(what, fn, ms = 6000) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() > deadline) throw new Error('timeout waiting for: ' + what);
+    await sleep(50);
+  }
+}
+const cardEvents = async (s, id) => ((await s.api('GET', '/api/cards/' + id)).body.events || []);
+const rx = (p) => new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
+test('the handoff releases the worktree — `worker done` leaves it for the lieutenant to read', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Ship it', id: 'goes', attributes: { repo: 'proj' },
+    }));
+    const w = (await s.api('POST', '/api/cards/goes/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/goes/worker/done', { outcome: 'shipped' });
+    await sleep(400);
+    assert.ok(fs.existsSync(w.worktree.path),
+      'done starts the lieutenant\'s half: verifying the work means reading the diff in there');
+
+    // the handoff out of Working is the end of the work
+    assert.strictEqual((await s.api('POST', '/api/cards/goes/move', { column: 'review', actor: 'agent' })).status, 200);
+    assert.ok(!fs.existsSync(w.worktree.path), 'released at the handoff, before the move even answers');
+    const ev = (await cardEvents(s, 'goes')).find((e) => /worktree released/.test(e.text));
+    assert.ok(ev, 'the timeline says the worktree went');
+    assert.match(ev.text, rx(w.worktree.path));
+    assert.strictEqual((await s.api('GET', '/api/cards/goes')).body.attributes.worktree, undefined,
+      'the attribute stops pointing at a directory that is gone');
+    // the clone knows too: a stale registration would block the next add
+    assert.strictEqual(git(path.join(s.dir, 'projects', 'proj'), 'worktree', 'list').split('\n').filter(Boolean).length, 1);
+  } finally { await teardown(); }
+});
+
+test('`keep_worktree: true` survives the handoff; archiving releases it anyway', async () => {
+  const { s, teardown } = await boot();
+  try {
+    writePlaybook(s, 'reworked', ['---', 'keep_worktree: true', '---', 'rework me', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Rework in place', id: 'stays', playbook: 'reworked', attributes: { repo: 'proj' },
+    }));
+    const k = (await s.api('POST', '/api/cards/stays/start', { harness: 'fake' })).body.worker;
+    assert.strictEqual(k.keepWorktree, true);
+    await s.api('POST', '/api/cards/stays/worker/done', { outcome: 'first pass' });
+    await s.api('POST', '/api/cards/stays/move', { column: 'review', actor: 'agent' });
+    assert.ok(fs.existsSync(k.worktree.path), 'kept: this card is expected to be reworked in place');
+    assert.strictEqual((await s.api('GET', '/api/cards/stays')).body.attributes.worktree, k.worktree.path);
+
+    // archive is the backstop, and it never keeps: nothing is left to rework
+    assert.strictEqual((await s.api('POST', '/api/cards/stays/archive', { reason: 'killed' })).status, 200);
+    await until('worktree released at archive', async () => !fs.existsSync(k.worktree.path));
+  } finally { await teardown(); }
+});
+
+test('a worker that never reported done keeps its worktree through the move', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Moved out from under it', id: 'live', attributes: { repo: 'proj' },
+    }));
+    const w = (await s.api('POST', '/api/cards/live/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/live/move', { column: 'review', actor: 'agent' });
+    assert.ok(fs.existsSync(w.worktree.path),
+      'a card moved out from under a live or crashed worker: that checkout is still the only copy');
+  } finally { await teardown(); }
+});
+
+test('a dirty worktree survives the handoff, and the timeline says why', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Left work behind', id: 'dirty', attributes: { repo: 'proj' },
+    }));
+    const w = (await s.api('POST', '/api/cards/dirty/start', { harness: 'fake' })).body.worker;
+    fs.writeFileSync(path.join(w.worktree.path, 'unsaved.txt'), 'not committed\n');
+    await s.api('POST', '/api/cards/dirty/worker/done', { outcome: 'done, sort of' });
+
+    await s.api('POST', '/api/cards/dirty/move', { column: 'review', actor: 'agent' });
+    const ev = (await cardEvents(s, 'dirty')).find((e) => /worktree kept/.test(e.text));
+    assert.ok(ev, 'the refusal is on the timeline');
+    assert.match(ev.text, /uncommitted changes/); // the reason
+    assert.match(ev.text, rx(w.worktree.path)); // the path
+    assert.strictEqual(ev.level, 2, 'a refused release is not an alarm');
+    assert.ok(fs.existsSync(path.join(w.worktree.path, 'unsaved.txt')), 'nothing was discarded');
+    assert.strictEqual((await s.api('GET', '/api/cards/dirty')).body.attributes.worktree, w.worktree.path);
+  } finally { await teardown(); }
+});
+
+// A worktree is created DETACHED and the branch is cut inside it, so a run that
+// commits without cutting one is referenced by this HEAD and nothing else —
+// removing it would drop the commits. Same rule as the dirty check, same reason.
+test('commits on a HEAD no ref holds keep the worktree, exactly like uncommitted changes', async () => {
+  const { s, teardown } = await boot();
+  try {
+    writePlaybook(s, 'no-branch', ['---', 'branch: false', '---', 'read only', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Committed on detached HEAD', id: 'dangling', playbook: 'no-branch', attributes: { repo: 'proj' },
+    }));
+    const w = (await s.api('POST', '/api/cards/dangling/start', { harness: 'fake' })).body.worker;
+    assert.strictEqual(git(w.worktree.path, 'rev-parse', '--abbrev-ref', 'HEAD'), 'HEAD', 'detached');
+    fs.writeFileSync(path.join(w.worktree.path, 'notes.md'), 'findings\n');
+    git(w.worktree.path, 'add', '.');
+    git(w.worktree.path, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'work');
+    const sha = git(w.worktree.path, 'rev-parse', 'HEAD');
+    await s.api('POST', '/api/cards/dangling/worker/done', { outcome: 'committed, no branch' });
+
+    await s.api('POST', '/api/cards/dangling/move', { column: 'review', actor: 'agent' });
+    const ev = (await cardEvents(s, 'dangling')).find((e) => /worktree kept/.test(e.text));
+    assert.ok(ev, 'the refusal is on the timeline');
+    assert.match(ev.text, /no branch or tag holds/);
+    assert.match(ev.text, rx(sha.slice(0, 8)));
+    assert.strictEqual(git(w.worktree.path, 'rev-parse', 'HEAD'), sha, 'the commit is still reachable');
+  } finally { await teardown(); }
+});
+
+test('archiving a card whose worktree is already gone is a no-op, not an error', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Twice released', id: 'twice', attributes: { repo: 'proj' },
+    }));
+    const w = (await s.api('POST', '/api/cards/twice/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/twice/worker/done', { outcome: 'shipped' });
+    await s.api('POST', '/api/cards/twice/move', { column: 'review', actor: 'agent' });
+    assert.ok(!fs.existsSync(w.worktree.path));
+
+    const r = await s.api('POST', '/api/cards/twice/archive', { reason: 'killed' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    await sleep(400);
+    const evs = (await s.api('GET', '/api/board')).body.events.filter((e) => e.card === 'twice');
+    assert.deepStrictEqual(evs.filter((e) => /worktree/.test(e.text)), [], 'nothing happened, nothing said');
+  } finally { await teardown(); }
+});
+
+// A released worktree is nothing to reincarnate into: both ways back into a
+// finished worker name the way out — a fresh worker — instead of failing
+// somewhere deep inside the harness on a missing cwd.
+test('resume and worker send both refuse a worker whose worktree was released', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'No way back', id: 'noback', attributes: { repo: 'proj' },
+    }));
+    const w = (await s.api('POST', '/api/cards/noback/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/noback/worker/done', { outcome: 'shipped' });
+    await s.api('POST', '/api/cards/noback/move', { column: 'review', actor: 'agent' });
+    assert.ok(!fs.existsSync(w.worktree.path));
+
+    // its session is still alive, so send would otherwise reopen the turn in place
+    const send = await s.api('POST', '/api/cards/noback/worker/send', { text: 'one more thing' });
+    assert.strictEqual(send.status, 409, JSON.stringify(send.body));
+    assert.match(send.body.error, /worktree was released at the handoff/);
+    assert.match(send.body.error, /card start noback/);
+    assert.match(send.body.error, /keep_worktree/);
+
+    const res = await s.api('POST', '/api/cards/noback/start', { resume: true });
+    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
+    assert.match(res.body.error, /worktree is gone/);
+    assert.match(res.body.error, /card start noback/);
+
+    // and the way out both refusals name really is one: a fresh start spawns
+    // over the finished session (the ONLY live session that is ever spawned
+    // over) instead of dead-ending on "its session is still alive"
+    const fresh = await s.api('POST', '/api/cards/noback/start', { harness: 'fake' });
+    assert.strictEqual(fresh.status, 200, JSON.stringify(fresh.body));
+    assert.ok(fs.existsSync(fresh.body.worker.worktree.path), 'a new worktree, at the same deterministic path');
+    assert.strictEqual((await s.api('GET', '/api/cards/noback')).body.column, 'working');
+  } finally { await teardown(); }
 });
 
 test('a malformed frontmatter block refuses the start and names the line', async () => {

@@ -80,7 +80,8 @@ rest, all listed in the folder's own README. Sharpen the body a second before st
 worker reads the sharpened one.
 
 A playbook may also open with a small frontmatter block naming how the card runs — `harness`,
-`model`, `requires` (attributes it cannot start without), `branch` — all optional, all in
+`model`, `requires` (attributes it cannot start without), `branch`, `keep_worktree` (never
+release the checkout automatically, for a card reworked in place) — all optional, all in
 [playbooks/README.md](playbooks/README.md).
 
 They are **yours**. Edit one and the next card started on it uses the edit — no restart, no
@@ -131,7 +132,8 @@ The workspace can react to card/worker lifecycle events with its own scripts: ev
 executable file in `.bridge-commander/hooks/<event>/` runs on that event (alphabetical,
 sequential, cwd = workspace root) with context in env — `BC_EVENT`, `BC_CARD`, `BC_REPO`,
 `BC_WORKTREE`, `BC_BRANCH`. Events: `worker-done`, `worker-died`, `card-archived` (fires
-before the worktree is released). Hooks are fire-and-forget — a failure or timeout never
+before the worktree is released — and `BC_WORKTREE` is empty when the handoff released it
+already, which is the usual case). Hooks are fire-and-forget — a failure or timeout never
 blocks the lifecycle; results land on the card timeline (`hook-ran` / `hook-failed`).
 Typical use: tearing down infrastructure a worker left running (dev containers, compose
 stacks) when its card finishes.

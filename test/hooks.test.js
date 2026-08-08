@@ -276,7 +276,7 @@ test('worker-died hooks fire from the supervision loop', async () => {
   }
 });
 
-test('card-archived hooks (manual archive): board-level events with a card ref; worktree untouched', async () => {
+test('card-archived hooks (manual archive): board-level events with a card ref; worktree released after them', async () => {
   const { s, root, teardown } = await bootWithProject();
   try {
     const out = path.join(root, 'arch-env.out');
@@ -295,9 +295,31 @@ test('card-archived hooks (manual archive): board-level events with a card ref; 
     });
     assert.strictEqual(ev.cardTitle, 'Kill me');
     assert.match(ev.text, /card-archived hook capture\.sh ok/);
-    // manual archive never releases the worktree; the hook saw it in place
+    // archive is the backstop release: the hook saw the worktree in place, and
+    // only then did it go
     assert.strictEqual(fs.readFileSync(out, 'utf8').trim(), 'worktree-present');
-    assert.ok(fs.existsSync(w.worktree.path));
+    await until('worktree released after the hooks', async () => !fs.existsSync(w.worktree.path));
+  } finally { await teardown(); }
+});
+
+// The handoff usually released the worktree long before the card is archived:
+// a hook must be told N/A (the empty string), not handed a path that is gone.
+test('card-archived hooks on a handed-off card: BC_WORKTREE is empty, not a released path', async () => {
+  const { s, root, teardown } = await bootWithProject();
+  try {
+    const out = path.join(root, 'released-env.out');
+    shHook(s.dir, 'card-archived', 'capture.sh',
+      'echo "[$BC_WORKTREE]" > ' + JSON.stringify(out));
+    await s.api('POST', '/api/cards', withOwner({ title: 'Handed off', id: 'handed', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/handed/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/handed/worker/done', { outcome: 'shipped' });
+    await s.api('POST', '/api/cards/handed/move', { column: 'review', actor: 'agent' });
+    assert.ok(!fs.existsSync(w.worktree.path), 'the handoff released it');
+
+    const r = await s.api('POST', '/api/cards/handed/archive', { reason: 'merged', actor: 'user' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    await until('card-archived hook ran', async () => fs.existsSync(out));
+    assert.strictEqual(fs.readFileSync(out, 'utf8').trim(), '[]');
   } finally { await teardown(); }
 });
 
