@@ -4,6 +4,8 @@
 // One workspace = one board. All state lives in <workspace>/.bridge-commander/:
 //   board.json     the board (canonical state of the world)
 //   archive.jsonl  append-only frozen card snapshots (reason: merged|killed)
+//   hookruns.jsonl append-only trace of every hook run (lifecycle and named), read from the tail
+//   eventkeys.json at-most-once keys for `event --key`, per card, pruned at 7 days
 //   chat/<lieutenant>.jsonl  append-only lieutenant main chat (the truth; board.json holds none)
 //   config.json    { port, host?, voices?, tts? } — port default 4780, written on first boot
 //   queue/<lieutenant>.jsonl  durable per-lieutenant delivery queue (global seq)
@@ -62,7 +64,8 @@ const crypto = require('crypto');
 // drags in no tmux/claude machinery until a ref is actually dispatched.
 const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
-const { runHooks, runTeardown, TEARDOWN_TIMEOUT_MS: TEARDOWN_DEFAULT_MS } = require(path.join(__dirname, 'hooks.js'));
+const { runHooks, runTeardown, listAllHooks, runNamedHook, runningHook, readRuns, lastRuns, hookKey,
+  hooksDir, TEARDOWN_TIMEOUT_MS: TEARDOWN_DEFAULT_MS, HOOK_NAME_RE, LIFECYCLE_EVENTS } = require(path.join(__dirname, 'hooks.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
 const { workerBrief, listPlaybooks, resolvePlaybook, playbooksDir, PACKAGED_PLAYBOOKS_DIR, parsePlaybook, attrVar, attrCardKey, PLACEHOLDERS, FRONTMATTER } = require(path.join(__dirname, 'playbooks.js'));
 const names = require(path.join(__dirname, 'names.js'));
@@ -89,7 +92,29 @@ function parseArgs(argv) {
 const opts = parseArgs(process.argv.slice(2));
 
 // ---------- paths (workspace-scoped; no global state) ----------
-const WORKSPACE = path.resolve(opts.workspace || process.cwd());
+// Resolved AND real: every path the board hands out is built from this one, and
+// hookTarget() compares a hook's containing directory against realpathSync of
+// itself. A workspace reached through a symlinked parent (/tmp on macOS,
+// ~/work → /mnt/data/work anywhere) would fail that comparison for the board's
+// OWN hooks, so the link is followed once here rather than at each call site.
+// A workspace that is not on disk YET is the same question one level up: `--workspace
+// ~/work/newboard` through a ~/work → /mnt/data/work link has a link to follow even
+// though the board's own directory does not exist. So this resolves the deepest
+// ancestor that IS there and re-joins the tail the mkdirs below will create.
+// Worth the walk even though a restart would fix it: until then the whole life of
+// that process answers 404 to every hook on the tab, and nobody would ever connect
+// "the board came up before its directory did" to "the pencil stopped working".
+function realWorkspace(dir) {
+  const missing = [];
+  for (let at = dir; ;) {
+    try { return path.join(fs.realpathSync(at), ...missing); } catch (e) {}
+    const up = path.dirname(at);
+    if (up === at) return dir; // nothing on the way to the root resolved
+    missing.unshift(path.basename(at));
+    at = up;
+  }
+}
+const WORKSPACE = realWorkspace(path.resolve(opts.workspace || process.cwd()));
 // One-shot rename migrations (bridge-command → bridge-commander). Boot-time and
 // idempotent: the server owns this workspace as it starts, so renaming the state
 // dir before any path below is used is safe. Legacy installs survive the flag day.
@@ -1990,6 +2015,71 @@ async function statusWithLiveness(card, status) {
   });
 }
 
+// ---------- event dedupe keys (POST /api/cards/<id>/events `key`) ----------
+//
+// A hook that polls `gh` every five minutes sees the same red check sixty
+// times. Without a key it wakes its lieutenant sixty times; with one, the
+// second and later events carrying that key FOR THAT CARD are a no-op that
+// answers 200 and says it was a duplicate — no timeline entry, no queue item.
+// So every polling hook gets deduping free instead of keeping its own state
+// file beside itself.
+//
+// Keys are scoped per card (the same key on a different card is a different
+// thing that happened) and kept 7 days, pruned on every write. One small JSON
+// file, not board state: it is a cache of what has already been said, and
+// losing it costs one duplicate wake.
+const EVENTKEYS_FILE = path.join(STATE_DIR, 'eventkeys.json');
+const EVENTKEY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+// The store is null-prototype all the way down, and that is load-bearing: a key
+// is whatever string a hook chose, and `toString` or `constructor` on an
+// ordinary object answers as if it had already been claimed — the very first
+// event carrying one would be dropped as a duplicate, silently. `__proto__` is
+// worse on the write side: assigning it sets a prototype instead of storing a
+// key, so it never persists and never prunes.
+function readEventKeys() {
+  const out = Object.create(null);
+  try {
+    const doc = JSON.parse(fs.readFileSync(EVENTKEYS_FILE, 'utf8'));
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return out;
+    for (const [c, keys] of Object.entries(doc)) {
+      if (!keys || typeof keys !== 'object' || Array.isArray(keys)) continue;
+      out[c] = Object.assign(Object.create(null), keys);
+    }
+  } catch (e) {}
+  return out;
+}
+
+// The pair is deliberately two functions, and the ORDER they are called in is
+// the guarantee: ask (read-only), deliver, then claim. Claiming first would
+// make a delivery that throws — an unwritable queue file, a full disk — a wake
+// that is forever answered "duplicate" and never actually arrived. At-least-once
+// beats a silently swallowed escalation, so a failed delivery leaves the key
+// unclaimed and the next poll says the same thing again.
+
+// seenEventKey(cardId, key) -> true when that card already claimed this key
+// inside the window. Reads only; it never touches the file.
+function seenEventKey(cardId, key) {
+  const doc = readEventKeys();
+  const ts = doc[cardId] && doc[cardId][key];
+  return typeof ts === 'number' && ts > Date.now() - EVENTKEY_TTL_MS;
+}
+
+// claimEventKey(cardId, key) — the key is now spoken for. Prunes everything
+// past the window while it holds the file, which is the only thing that ever
+// expires a key.
+function claimEventKey(cardId, key) {
+  const doc = readEventKeys();
+  const cutoff = Date.now() - EVENTKEY_TTL_MS;
+  for (const [c, keys] of Object.entries(doc)) {
+    for (const [k, ts] of Object.entries(keys)) if (!(typeof ts === 'number' && ts > cutoff)) delete keys[k];
+    if (!Object.keys(keys).length) delete doc[c];
+  }
+  (doc[cardId] = doc[cardId] || Object.create(null))[key] = Date.now();
+  try { fs.writeFileSync(EVENTKEYS_FILE, JSON.stringify(doc)); }
+  catch (e) { console.error(now() + ' event key store unwritable: ' + String((e && e.message) || e)); }
+}
+
 // ---------- lifecycle hooks (workspace-owned scripts; server/hooks.js) ----------
 // Events v1: worker-done, worker-died, card-archived. Fire-and-forget — a hook
 // never blocks or fails the lifecycle outcome it observes. The ONE ordering
@@ -3091,6 +3181,72 @@ function charterFile(uri) {
   return file;
 }
 
+// The third — and last — uri the artifact routes accept that is no card's: a
+// HOOK file. The hooks tab's ✎ opens one in the same editor a playbook opens
+// in, which is where "he asks a lieutenant to help build one" happens: a file
+// on a screen he can point at.
+//
+// The widening is exactly one shape, and it is the namespace hooks.js already
+// defines: an executable file under <workspace>/.bridge-commander/hooks/, ONE
+// level deep (a named hook) or TWO (a lifecycle hook, in its event's
+// directory). The containing directory is BUILT here from STATE_DIR and
+// compared for equality — never taken from the client — the way charterFile()
+// does it, and the two names in it have to look like ids, so a traversal never
+// survives the comparison.
+//
+// Returns the path when the uri is one, '' otherwise. A file that is not there
+// YET is still one (that is the create), which is why the leaf check tolerates
+// ENOENT and nothing else: a symlink, a directory and a socket all fail
+// isFile() and are refused rather than followed.
+// Three answers, because two of them are different things:
+//   null      — not a hook path at all. Falls through to the other allowlists,
+//               and the caller gets the ordinary "unknown artifact" refusal.
+//   {file}    — a hook path the board reads and writes.
+//   {error}   — a hook path that is LEGAL and whose tree is not there. Answering
+//               "unknown artifact" to a legal path is a lie: the name is fine,
+//               the id is fine, the only thing missing is a directory. So it
+//               says which one, and what would have fired it.
+function hookTarget(uri) {
+  if (typeof uri !== 'string' || !uri.startsWith('file://')) return null;
+  const file = uri.slice('file://'.length);
+  // path.resolve is idempotent on a clean absolute path — a `..` segment or a
+  // relative path changes it, so `<dir>/../../board.json` never gets this far.
+  if (path.resolve(file) !== file) return null;
+  if (!HOOK_NAME_RE.test(path.basename(file))) return null;
+  const dir = path.dirname(file);
+  const root = hooksDir(WORKSPACE);
+  // '' = a named hook, one level deep. Otherwise the EVENT directory it sits in.
+  let event = '';
+  if (dir !== root) {
+    if (path.dirname(dir) !== root || !HOOK_NAME_RE.test(path.basename(dir))) return null;
+    event = path.basename(dir);
+  }
+  let real;
+  try { real = fs.realpathSync(dir); }
+  catch (e) {
+    if (e.code !== 'ENOENT') return null;
+    // The directory is not there. `hooks/` is a CONSTANT the board owns, so the
+    // write below makes it — the same one level `charterFile` makes for a
+    // lieutenant that never wrote its memory file, and the path the card names
+    // when it says a new hook is a file a lieutenant writes.
+    if (!event) return { file };
+    // An event directory is NOT a constant: creating one invents a lifecycle
+    // event, and a typo'd event is a hook that silently never fires, forever,
+    // with nothing to notice it. So this stays a refusal — one that names the
+    // event and the ones that exist, instead of pretending the path is unknown.
+    return { code: 400, error: 'no hook event directory "' + event + '" — the board fires '
+      + LIFECYCLE_EVENTS.join(', ') + '. Create ' + dir + ' yourself if that is really the event: '
+      + 'one invented here would be a hook that never runs' };
+  }
+  // The directory has to be reached without following a link: a symlinked
+  // hooks/ (or event dir) points somewhere else, and somewhere else is the
+  // whole thing this refuses. Not a hook path, so it refuses as one.
+  if (real !== dir) return null;
+  try { if (!fs.lstatSync(file).isFile()) return null; }
+  catch (e) { if (e.code !== 'ENOENT') return null; }
+  return { file };
+}
+
 // ---------- server ----------
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -3167,16 +3323,22 @@ const server = http.createServer(async (req, res) => {
         'X-Content-Type-Options': 'nosniff',
       });
     }
-    // Artifact serve, for the UI's popup viewer. Only a uri listed verbatim in
-    // some live card's attributes.artifacts is servable — never an arbitrary
-    // file read. Default (no raw): TEXT content of the file. raw=1: the raw
+    // Artifact serve, for the UI's popup viewer. Servable is a uri listed
+    // verbatim in some live card's attributes.artifacts, or one of the
+    // workspace-owned files the same screen edits (playbookSource, charterFile,
+    // hookTarget) — never an arbitrary file read. Same allowlist the write below
+    // uses, plus the packaged playbooks, which are read-only.
+    // Default (no raw): TEXT content of the file. raw=1: the raw
     // bytes with a real Content-Type, backing the inline <img> and downloads.
     if (route === 'GET /api/artifact') {
       const uri = url.searchParams.get('uri') || '';
       const raw = url.searchParams.get('raw') === '1' || url.searchParams.get('raw') === 'true';
       const charter = charterFile(uri);
+      const ht = hookTarget(uri);
+      if (ht && ht.error) return sendJson(res, ht.code, { error: ht.error });
+      const hook = (ht && ht.file) || '';
       const listed = board.cards.some((c) => Array.isArray(c.attributes && c.attributes.artifacts) &&
-        c.attributes.artifacts.some((a) => a && a.uri === uri)) || !!playbookSource(uri) || !!charter;
+        c.attributes.artifacts.some((a) => a && a.uri === uri)) || !!playbookSource(uri) || !!charter || !!hook;
       if (!listed) return sendJson(res, 404, { error: 'unknown artifact' });
       // A promoted chat attachment (attachment://id) resolves to its stored file
       // via the sidecar; file:// / bare paths read directly.
@@ -3208,8 +3370,11 @@ const server = http.createServer(async (req, res) => {
         // A curated .html/.htm artifact (teach-me page, report) is a self-contained
         // document meant to be *rendered*: serve it as text/html inline so a page
         // opened here shows, not its source. Scoped to plain file artifacts, not
-        // attachments (an uploaded .html keeps its neutralized download behavior).
-        const isHtml = !am && (ext === '.html' || ext === '.htm');
+        // attachments (an uploaded .html keeps its neutralized download behavior)
+        // and never a HOOK: a hook is a script whose basename the writer chooses,
+        // so `hooks/report.html` is a legal hook path and rendering it would make
+        // the gate that writes hooks a way to run script on the board's origin.
+        const isHtml = !am && !hook && (ext === '.html' || ext === '.htm');
         const ctype = isHtml ? 'text/html; charset=utf-8'
           : am ? (attMime || 'application/octet-stream')
           : (ARTIFACT_MIME[ext] || 'application/octet-stream');
@@ -3234,11 +3399,14 @@ const server = http.createServer(async (req, res) => {
       let data;
       try { data = fs.readFileSync(file); }
       catch (e) {
-        // A lieutenant that has never written its memory file still has one to
-        // open: the board owns the path, so "not written yet" answers as the
-        // empty document at version '' — which is exactly what the PUT below
-        // reads as "I expect no file", so the first 💾 creates it.
-        if (charter && e.code === 'ENOENT') return sendJson(res, 200, { name, content: '', version: '' });
+        // A BOARD-OWNED file that is not written yet reads as the empty document
+        // at version '' — whatever kind it is. The board owns the path (it built
+        // it, not the client), so the file's absence is a state, not a 404: a
+        // lieutenant that has never written its memory, a hook nobody has typed
+        // yet. And '' is exactly what the PUT below reads as "I expect no file",
+        // so the first 💾 creates it. A card artifact is NOT board-owned — that
+        // path came from the card, and a missing one is genuinely unreadable.
+        if ((charter || hook) && e.code === 'ENOENT') return sendJson(res, 200, { name, content: '', version: '' });
         return sendJson(res, 404, { error: 'unreadable: ' + e.message });
       }
       if (data.length > 2e6) return sendJson(res, 413, { error: 'file too large to preview' });
@@ -3255,9 +3423,9 @@ const server = http.createServer(async (req, res) => {
     // the auth boundary), so every guard below is load-bearing:
     //   - the uri must ALREADY be listed on a live card, or be a WORKSPACE
     //     playbook (playbookSource), or a registered lieutenant's charter
-    //     (charterFile) — the GET's allowlist minus the packaged playbooks,
-    //     which are read-only. Anything else is 403, and there is no flag to
-    //     turn it off;
+    //     (charterFile), or a hook file (hookTarget) — the GET's allowlist minus
+    //     the packaged playbooks, which are read-only. Anything else is 403, and
+    //     there is no flag to turn it off;
     //   - file:// only, absolute, no `..` (path.resolve is idempotent on a
     //     clean absolute path), and no symlink anywhere along it (realpath must
     //     come back unchanged), so a listed artifact can never be a door to
@@ -3282,8 +3450,11 @@ const server = http.createServer(async (req, res) => {
       if (typeof body.content !== 'string') return sendJson(res, 400, { error: 'content required' });
       const pbSource = playbookSource(uri);
       const charter = charterFile(uri);
+      const ht = hookTarget(uri);
+      if (ht && ht.error) return sendJson(res, ht.code, { error: ht.error });
+      const hook = (ht && ht.file) || '';
       const listed = board.cards.some((c) => Array.isArray(c.attributes && c.attributes.artifacts) &&
-        c.attributes.artifacts.some((a) => a && a.uri === uri)) || pbSource === 'workspace' || !!charter;
+        c.attributes.artifacts.some((a) => a && a.uri === uri)) || pbSource === 'workspace' || !!charter || !!hook;
       if (!listed) {
         // A packaged playbook is readable and never writable: it is a git
         // checkout of this repo, so the edit is a copy into the workspace.
@@ -3309,10 +3480,16 @@ const server = http.createServer(async (req, res) => {
         }
         const dir = path.dirname(file);
         // A charter's folder is the board's to make: a lieutenant registered
-        // without one has no other way to get `lieutenants/<id>/`. mkdir is a
-        // no-op when it is already there — including when it is a symlink,
-        // which the check right below still refuses.
-        if (charter) { try { fs.mkdirSync(dir, { recursive: true }); } catch (e2) { /* the check below answers */ } }
+        // without one has no other way to get `lieutenants/<id>/`. So is a
+        // workspace's `hooks/` — a fixed name the board owns, and the card's
+        // "a new hook is a file you or a lieutenant writes" goes through this
+        // very route, so a workspace that has no hooks yet must not be the one
+        // place a lieutenant cannot write the first one. An EVENT directory is
+        // never made here: hookTarget refused before we got this far, because a
+        // directory invented from a typo is a hook that never runs.
+        // mkdir is a no-op when it is already there — including when it is a
+        // symlink, which the check right below still refuses.
+        if (charter || hook) { try { fs.mkdirSync(dir, { recursive: true }); } catch (e2) { /* the check below answers */ } }
         try { if (fs.realpathSync(dir) !== dir) throw new Error('symlink'); }
         catch (e2) { return sendJson(res, 403, { error: 'artifact path resolves elsewhere (symlink) — refusing to write' }); }
       }
@@ -3338,7 +3515,10 @@ const server = http.createServer(async (req, res) => {
       // if the process died mid-write; a rename either happened or it didn't.
       const tmp = path.join(path.dirname(file), '.' + path.basename(file) + '.bc-' + process.pid + '-' + Date.now() + '.tmp');
       try {
-        fs.writeFileSync(tmp, next, st ? { mode: st.mode & 0o777 } : {});
+        // An existing file keeps its mode. A hook created here is born
+        // EXECUTABLE — a hook the runner would skip silently is not a hook, and
+        // there is no chmod on a phone.
+        fs.writeFileSync(tmp, next, st ? { mode: st.mode & 0o777 } : (hook ? { mode: 0o755 } : {}));
         fs.renameSync(tmp, file);
       } catch (e) {
         try { fs.unlinkSync(tmp); } catch (e2) {}
@@ -3663,9 +3843,25 @@ const server = http.createServer(async (req, res) => {
       if (sub === 'events' && req.method === 'POST') {
         const body = JSON.parse(await readBody(req) || '{}');
         if (!String(body.text || '').trim()) return sendJson(res, 400, { error: 'text required' });
+        // `key`: at-most-once for this card within the window. Answered 200 —
+        // a poller that already reported this is not in error, and a hook that
+        // exits non-zero on it would ring the bell sixty times instead.
+        const key = String(body.key || '').trim().slice(0, 200);
+        if (key && seenEventKey(card.id, key)) {
+          return sendJson(res, 200, { ok: true, duplicate: true, key });
+        }
+        // Write-ahead, then the live board — the order queuePush itself keeps.
+        // The append is the step that can throw, and a throw before the push
+        // must leave NOTHING behind in the board object for somebody else's
+        // saveBoard to write out later: the caller was told nothing happened,
+        // so a phantom entry surfacing on the next unrelated save is the one
+        // duplicate --key was never meant to buy. mkEvent has already spent a
+        // board.seq by then, which costs nothing — seq is monotonic, not dense.
         const ev = mkEvent(body, { level: 2 });
-        card.events.push(ev);
-        card.updated = now();
+        // `source`: who put this here. Rides onto the timeline entry AND the
+        // queue item below, so a drain at 2am says who woke you.
+        const source = String(body.source || '').trim().slice(0, 60);
+        if (source) ev.source = source;
         // wakeOwner: the door an outside process (a workflow, a cron, a CI hook)
         // uses to wake a card's lieutenant. Same pair every server-side wake
         // already uses — timeline entry AND a queue item — so the escalation is
@@ -3673,9 +3869,17 @@ const server = http.createServer(async (req, res) => {
         // Orthogonal to level: level 1 rings THE CAPTAIN and always has. Both
         // flags together does both, deliberately — the caller asked for both.
         if (body.wakeOwner) {
-          queuePush(card.owner, { kind: 'card-event', card: card.id, eventKind: ev.kind || null, text: ev.text });
+          queuePush(card.owner, Object.assign(
+            { kind: 'card-event', card: card.id, eventKind: ev.kind || null, text: ev.text },
+            source ? { source } : {}));
         }
-        saveBoard(); broadcast();
+        card.events.push(ev);
+        card.updated = now();
+        saveBoard();
+        // Only now: the entry is on the card and the queue item is written, so
+        // this key really has been said.
+        if (key) claimEventKey(card.id, key);
+        broadcast();
         return sendJson(res, 200, { ok: true, event: ev });
       }
       if (sub === 'archive' && req.method === 'POST') {
@@ -3753,6 +3957,57 @@ const server = http.createServer(async (req, res) => {
       // off playbooks.js — the screen renders it, never restates it.
       return sendJson(res, 200, { playbooks: ids, items, dir,
         reference: { placeholders: PLACEHOLDERS, frontmatter: FRONTMATTER } });
+    }
+
+    // ----- hooks (the workspace's own executable scripts; server/hooks.js) -----
+    // Read off the filesystem on every call, never cached: a hook dropped in a
+    // second ago is in the next answer, the way playbooks work.
+    //
+    // `last` is the newest trace line for that hook, read from the TAIL of
+    // hookruns.jsonl in one backward walk for the whole list.
+    if (route === 'GET /api/hooks') {
+      const hooks = listAllHooks(WORKSPACE);
+      const last = lastRuns(WORKSPACE, hooks);
+      return sendJson(res, 200, {
+        dir: hooksDir(WORKSPACE),
+        hooks: hooks.map((h) => Object.assign({}, h, {
+          last: last.get(hookKey(h)) || null,
+          running: h.event ? null : runningHook(WORKSPACE, h.name),
+        })),
+      });
+    }
+    // The ONE code path a named hook runs through: `bc-axi hook run` posts here,
+    // and so does the board's ▶. Not a door for outside callers — an external
+    // trigger runs on this machine and speaks CLI; this is what the CLI speaks
+    // to, the same way every other verb does.
+    if (route === 'POST /api/hooks/run') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const name = String(body.name || '');
+      const cardId = String(body.card || '');
+      let ctx = {};
+      if (cardId) {
+        const card = findCard(cardId);
+        if (!card) return sendJson(res, 404, { error: 'unknown card: ' + cardId });
+        ctx = hookContext(card, findWorker(card.id));
+      }
+      try {
+        const run = await runNamedHook(WORKSPACE, name, ctx, {
+          trigger: String(body.trigger || 'cli'),
+          timeoutMs: HOOK_TIMEOUT_MS || 0,
+        });
+        return sendJson(res, 200, { ok: true, run });
+      } catch (e) {
+        if (e && e.code === 'ENOHOOK') return sendJson(res, 404, { error: e.message });
+        if (e && e.code === 'EBUSY') return sendJson(res, 409, { error: e.message, running: e.running });
+        throw e;
+      }
+    }
+    // The trace, newest first. Reads the tail — never the whole file.
+    if (route === 'GET /api/hookruns') {
+      const limit = Math.min(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 500);
+      return sendJson(res, 200, {
+        runs: readRuns(WORKSPACE, { hook: url.searchParams.get('hook') || '', limit }),
+      });
     }
 
     // ----- board-level events (free-form notify) -----

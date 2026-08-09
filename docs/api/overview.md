@@ -95,7 +95,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | `card.status` | `card, worker-state` | 🛠️ writes · ⚙️ TTL-decays | the live lease behind CardStatus; single-writer |
 | `card.artifact.add` | `card, uri, label? → ()` | ⚓ · 🤠 (📌 on a chat attachment) | promote a file to card artifact — a DELIBERATE act; a chat upload alone never lands here. Idempotent by uri |
 | `card.artifact.remove` | `card, uri → ()` | ⚓ · 🤠 | unlist an artifact (the file itself is untouched) |
-| `card.artifact.write` | `uri, content, version → version` | 🤠 (the board's file editor) | write a text artifact back to disk. Only a uri ALREADY listed on some card, only `file://`, never through a `..` or a symlink — anything else is refused, and there is no flag that widens it. `version` is the sha256 the read handed out; if disk moved since, nothing is written and the answer carries what is there now (409), so a lost edit is never silent. Atomic (temp file + rename) |
+| `card.artifact.write` | `uri, content, version → version` | 🤠 (the board's file editor) | write a text artifact back to disk. Only a uri ALREADY listed on some card, or one of the workspace-owned files the same screen edits — a workspace playbook, a lieutenant's charter, a hook (see `hook.edit`) — whose path the SERVER builds and compares for equality rather than taking from the client. Only `file://`, never through a `..` or a symlink; anything else is refused, and there is no flag that widens it. `version` is the sha256 the read handed out; if disk moved since, nothing is written and the answer carries what is there now (409), so a lost edit is never silent. Atomic (temp file + rename). **A board-owned file that is not written yet reads as the empty document at version `""`, whatever kind it is** — a charter, a hook — and `""` is exactly what the write reads as "I expect no file", so the first save creates it (and a file that turned up meanwhile is still a 409). A card artifact is not board-owned: its path came from the card, so a missing one is genuinely unreadable |
 | `card.archive` | `card, reason` | ⚙️ on merge · ⚓/🤠 otherwise | work landed, died, or was dismissed |
 | `card.restore` | `card` | ⚓ · ⚙️ (live evidence for an archived card) | a kill was a mistake; full frozen state + loud level-1 event; Working snapshots land in Backlog |
 | `card.list_archived` | `limit?, offset? → [record], total` | 🤠 (the 🧊 archived mode) · ⚓ (CLI `archive`) | browse the frozen snapshots newest-first — a paginated window over the append-only archive log, never mixed into the live board |
@@ -110,7 +110,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | `line.pass` | `lieutenant, note → ()` | ⚓ (on the captain's ask) | the work is someone else's territory: moves the line AND queues a `line-passed` delivery carrying the note, so the receiver is woken and greets him in one line |
 | `feed.drain` | `lieutenant → QueueItem[]` | ⚓ | first act of every lieutenant turn; the caller self-identifies by its tmux session and drains ONLY its own queue |
 | `feed.ack` | `seq` | ⚓ | after handling; only ack removes — unacked re-offers. Identity-scoped: a lieutenant can only commit seqs in its own queue |
-| `event.append` | `card \| board, text, kind, level` | ⚓ · 🛠️ | agent-authored timeline entry (card) or board-level notice |
+| `event.append` | `card \| board, text, kind, level, wakeOwner?, key?, source?` | ⚓ · 🛠️ | agent-authored timeline entry (card) or board-level notice. `wakeOwner` also queues a `card-event` item to the owner — the door an outside process (a workflow, a cron, a hook) wakes a lieutenant through. `key` makes it at-most-once for THAT card: a repeat of that key writes nothing and wakes nobody, answers 200 saying `duplicate` (a poller reporting the same fact is not in error), and keys are kept 7 days — so a five-minute hook watching one red check wakes its lieutenant ONCE instead of sixty times. `source` names the caller on BOTH the timeline entry and the queue item, so a drain at 2am says who woke you |
 | `kinds.register` | `kind → emoji, level` | ⚓ | extend the event vocabulary; built-ins stay |
 | `label.manage` | `create \| rename \| recolor \| delete` | 🤠 | curate the board's label registry; rename/delete propagate across every card carrying the label |
 
@@ -125,6 +125,15 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | worker death | — | ⚙️ supervision loop | a worker ref dead without `done` → `worker-died` QueueItem to the owner + level-2 event; the card stays Working, flagged — the owner resumes (`card.start --resume`) or parks it |
 | worker stall | — | ⚙️ supervision loop | a worker alive but silent too long (no signal/turn-end) → `worker-stalled` level-1 event + QueueItem to the owner; re-armed by real activity |
 | `sysload.watch` | `() → stream of samples` | 🤠 | on-demand monitoring (⚙️ → machine load): machine CPU/RAM/disk + per-worker/per-lieutenant process-tree load + container count, over a dedicated stream. A pure, side-effect-free read — samples exist only while someone watches (first subscriber starts the sampler, last disconnect stops it); nothing lands on the board |
+
+### hook
+
+| Operation | Signature | Who | When |
+|---|---|---|---|
+| `hook.list` | `() → [{name, event, file, last, running}]` | 🤠 (the config screen's hooks tab) · ⚓ | what this workspace can run and how each one last ended. Read off disk every call, never cached — a hook dropped in a second ago is in the next answer |
+| `hook.run` | `name, card?, trigger? → run` | ⚓/🛠️ (CLI) · 🤠 (the tab's ▶) · ⚙️ (a schedule) | run a NAMED hook. ONE code path for all three callers, and the trace line differs only by `trigger`. Deliberately not an HTTP door for outside callers: an external trigger runs on this machine and speaks CLI. `card` fills the card env; a second run of a name already in flight is REFUSED (409) naming the one going; a name that is not an executable file in `hooks/` is a 404 naming the directory. A hook's own outcome — non-zero exit, timeout — is a RESULT, never an error: it lands on the trace and the caller lives |
+| `hook.runs` | `hook?, limit? → [run]` | ⚓ · 🤠 | the trace, newest first, read from the TAIL of `hookruns.jsonl` |
+| `hook.edit` | — | 🤠 · ⚓ | a hook is a FILE, so editing one is `card.artifact.write` and the file screen: the same 💾, the same version check, the same 409. The gate widens by exactly one shape — an executable file under `.bridge-commander/hooks/`, one level deep or two, no symlink, the path built server-side and compared for equality. A hook nobody has written yet reads as the empty document at version `""` (see `card.artifact.write`), so `bc-axi artifact read` then `write --version ""` is how a lieutenant writes one with nothing but the CLI. A hook created there is born executable, and `hooks/` itself is created on the first write (a fixed name the board owns, like a lieutenant's memory folder) so a workspace with no hooks yet is not the one place a lieutenant cannot write the first one. An EVENT directory is never created: a directory invented from a typo is a hook that silently never fires, so a write into a missing one is refused with the event named and the ones the board fires listed — a legal path whose tree is missing gets that answer, not "unknown artifact" |
 
 ### harness port (internal seam — the multi-harness contract)
 
@@ -199,13 +208,44 @@ session status, window adoption):
 | level-1 event / owed reply | captain's bell: unseen = level-1 events ∪ unseen lieutenant thread replies, per user, cleared by reading — bridge semantics |
 | `worker.done` · worker death · card archived | lifecycle hooks: the workspace's own executable scripts in `.bridge-commander/hooks/<event>/` run (see below) |
 
-### Lifecycle hooks
+### Hooks
 
-The workspace owns deterministic teardown: every executable file in
-`.bridge-commander/hooks/<event>/` runs on that lifecycle event — alphabetical, sequential,
-cwd = workspace root, context via env (`BC_EVENT`, `BC_CARD`, `BC_REPO`, `BC_WORKTREE`,
-`BC_BRANCH`; empty when N/A). Events v1: `worker-done`, `worker-died`, `card-archived`.
-Missing dir = no-op; non-executables are skipped.
+A hook is an executable file the workspace owns, spawned directly with `BC_*` in its env,
+cwd = the workspace root. The namespace says which kind it is, and that is the whole rule:
+
+| path | kind | what fires it |
+| --- | --- | --- |
+| `.bridge-commander/hooks/<event>/<name>` | **lifecycle** | that lifecycle event |
+| `.bridge-commander/hooks/<name>` | **named** | nothing — a caller does, through `hook.run` |
+
+**Directory means event, file means name**, so the two share one directory and never collide.
+Missing dir = no-op; non-executables and dotfiles are skipped.
+
+There is no hook API and there must not be one: a hook is bash with `bc-axi` on its `PATH`
+(the runner APPENDS the CLI's directory — the guarantee is *reachable*, not *mine*, so a
+`bc-axi` the operator put earlier on `PATH` still wins), so the board's whole vocabulary is
+already reachable from a shell script — including `bc-axi event <card> --wake-owner`, which is how a hook wakes a lieutenant.
+It is the same door every other caller uses; there is no second one.
+
+**Lifecycle hooks** run on their event — alphabetical, sequential, context via env
+(`BC_EVENT`, `BC_CARD`, `BC_REPO`, `BC_WORKTREE`, `BC_BRANCH`; empty when N/A). Events v1:
+`worker-done`, `worker-died`, `card-archived`.
+
+**Named hooks** run through `hook.run` and only through it. `BC_EVENT` carries the hook's own
+name; `BC_CARD` / `BC_WORKTREE` / `BC_BRANCH` are empty unless the caller supplied a card.
+**One run per hook name at a time**, board-wide: a second `hook.run` while the first is in
+flight is refused, naming what is already running, so a five-minute poll and an impatient ▶ do
+not overlap. A name that is not an executable file in `hooks/` is an error naming the
+directory, never a silent success.
+
+### The trace — `hookruns.jsonl`
+
+Every run of either kind appends one line to `.bridge-commander/hookruns.jsonl`:
+`{hook, trigger, card, started, ms, code, ok, timedOut, output}` — append-only, the same shape
+as `archive.jsonl` and the delivery queues. It is written by the RUNNER, so lifecycle hooks
+land in it too. `trigger` is the lifecycle event for a lifecycle hook and whatever the caller
+named itself for a named one (`cli`, `board`, a schedule). `hook.runs` reads it from the TAIL,
+never whole.
 
 Hooks are fire-and-forget — they never block or fail the lifecycle outcome they observe
 (per-hook timeout ~120s, `BC_HOOK_TIMEOUT_MS` overrides, then kill; output captured and
