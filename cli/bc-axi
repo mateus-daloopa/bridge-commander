@@ -26,6 +26,9 @@ const gitrev = require(path.join(SELF_DIR, '..', 'server', 'gitrev.js'));
 // The playbooks a workspace is seeded with, and the worker-duties skill that
 // goes with them — one call, because they are one thing (see playbooks.js).
 const { seedPlaybooksAndDuties } = require(path.join(SELF_DIR, '..', 'server', 'playbooks.js'));
+// --charter-file writes the lieutenant's memory file, not a board field — the
+// charter is prose the agent reads at launch (see server/charter.js).
+const { charterPath, readCharter, writeCharter } = require(path.join(SELF_DIR, '..', 'server', 'charter.js'));
 const DEFAULT_PORT = 4780;
 
 function die(msg) { console.error(msg); process.exit(1); }
@@ -303,6 +306,21 @@ function slugId(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'lt';
 }
 
+// --charter-file seeds a lieutenant's memory file; it never replaces one. The
+// file's existence is the mark — the same rule the boot migration follows —
+// because `init` is documented as safe to re-run and a re-run must not destroy
+// what the lieutenant has since written about itself. There is deliberately no
+// --force: replacing a charter means editing the file, and a flag whose only
+// job is to erase an agent's memory would get reached for in a hurry.
+// The id is checked against the SERVER's rule first, so a `--id ../../foo`
+// never reaches the filesystem on its way to a 400.
+function seedCharter(id, source) {
+  if (!/^[\w][\w.-]*$/.test(id)) die('bad lieutenant id (use [A-Za-z0-9_.-]): ' + id);
+  const file = charterPath(WORKSPACE, id);
+  if (fs.existsSync(file)) console.log('charter left alone — ' + file + ' already exists (edit it to replace it)');
+  else console.log('charter written to ' + writeCharter(WORKSPACE, id, readInput(source)));
+}
+
 // installStatusLine — MERGE the BC statusLine command into the WORKSPACE's
 // .claude/settings.local.json (create if absent), preserving every other key
 // (hooks, permissions, …). Re-run on every init/open so a rewrite self-heals.
@@ -367,7 +385,8 @@ async function cmdInit() {
   if (process.env.CLAUDE_SESSION_ID) ref.resumeId = process.env.CLAUDE_SESSION_ID;
   const body = { name: opts.name, id, ref, actor: 'user' };
   if (opts.color) body.color = opts.color;
-  if (opts.charterFile) body.charter = readInput(opts.charterFile);
+  // Before the register, so a session launched off this record already finds it.
+  if (opts.charterFile) seedCharter(id, opts.charterFile);
   try {
     await request('POST', '/api/lieutenants', body);
     console.log('founding lieutenant "' + opts.name + '" (' + id + ') registered — tmux session ' + tmuxSession);
@@ -459,7 +478,13 @@ async function cmdLtCreate() {
   if (opts.prefix) body.prefix = opts.prefix;
   if (opts.color) body.color = opts.color;
   if (opts.avatar !== null) body.avatar = parseAvatarOpt(opts.avatar);
-  if (opts.charterFile) body.charter = readInput(opts.charterFile);
+  // A charter pins the id here rather than leaving it to the server: the memory
+  // file is named after it, and it has to be on disk BEFORE --spawn reads it
+  // into the launch prompt.
+  if (opts.charterFile) {
+    body.id = body.id || slugId(opts.name);
+    seedCharter(body.id, opts.charterFile);
+  }
   if (opts.actor) body.actor = opts.actor;
   if (opts.spawn) {
     body.spawn = true;
@@ -495,13 +520,16 @@ async function cmdLtRetire() {
   if (!id) die('usage: bc-axi lieutenant retire <id>\n  Refuses while the lieutenant owns non-archived cards; kills its live session.');
   const r = await request('DELETE', '/api/lieutenants/' + encodeURIComponent(id), { actor: opts.actor || 'user' }, 30000);
   console.log('retired ' + id + (r.event ? ' (event #' + r.event.seq + ')' : ''));
+  // The memory file stays. Say so with the path: a later lieutenant minted on
+  // the same id inherits that charter, and that should be a choice, not a surprise.
+  if (r.memory) console.log('memory file kept: ' + r.memory + ' — a new ' + id + ' would be launched on it');
 }
 
 async function cmdLtList() {
   const r = await request('GET', '/api/lieutenants');
   if (opts.json) return console.log(JSON.stringify(r.lieutenants, null, 2));
   for (const l of r.lieutenants) {
-    const charter = (l.charter || '').split('\n')[0].slice(0, 80);
+    const charter = readCharter(WORKSPACE, l.id).split('\n')[0].slice(0, 80);
     console.log(l.id + '\t' + l.name + '\t' + l.color + '\t' + l.prefix + '-' + ((l.cardSeq || 0) + 1)
       + (charter ? '\t' + charter : ''));
   }
@@ -1207,6 +1235,9 @@ if (!commands[cmd]) {
     '                                         agent session in the workspace root (doctrine + charter as\n' +
     '                                         launch prompt, ref persisted)\n' +
     '  lieutenant list [--json]               id, name, color, next card id, charter first line\n' +
+    '                                         (the charter is lieutenants/<id>/README.md, the memory file\n' +
+    '                                         the agent is launched on — --charter-file creates it when\n' +
+    '                                         absent and never replaces one)\n' +
     '  lieutenant patch <id> [--avatar N|none] [--color #rrggbb] [--prefix ABC]\n' +
     '                                         lieutenant.update: cosmetics + the card-id prefix (refused\n' +
     '                                         when another lieutenant holds it) — name/id stay immutable\n' +
@@ -1328,7 +1359,9 @@ if (!commands[cmd]) {
     '                                         decays to idle; "status <card-id> absent" unlinks\n' +
     '\nconfig:\n' +
     '  config show | config voices "a,b"      TTS voice filter for the UI\n' +
-    '\nText/body/charter always via --text-file/--body-file/--charter-file or stdin ("-"), never shell-interpolated.');
+    '\nText/body/charter always via --text-file/--body-file/--charter-file or stdin ("-"), never shell-interpolated.\n' +
+    'The charter is not board state: --charter-file creates lieutenants/<id>/README.md in the workspace\n' +
+    'when it is absent, and never replaces one — edit the file to change a charter.');
   // The last line of the help screen is the one still on screen when an agent
   // stops reading: if the running server is behind its checkout, it says so
   // here. A down server, an unknown commit, or a match all print nothing extra.
