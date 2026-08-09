@@ -98,3 +98,86 @@ test('a resume that meets the picker answers it and comes up', async () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Two more screens that are never going to become a running agent, captured in
+// a container by the onboarding install test (MNC-71, round 1). Both used to
+// burn the full 45s and then be explained by a guess that the screen itself
+// contradicted.
+
+// `claude --dangerously-skip-permissions` as uid 0. It prints one line and exits,
+// which puts the pane straight back on a shell prompt.
+const ROOT_REFUSAL = `
+$ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --session-id f44e2a6d
+--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons
+$
+`;
+
+// A claude nobody has ever run. This is BEFORE any credential question — a
+// brand-new machine sees it whether or not it is logged in.
+const FIRST_RUN_WIZARD = `
+Welcome to Claude Code v2.1.226
+
+ Let's get started.
+
+ Choose the text style that looks best with your terminal
+ To change this later, run /theme
+
+   1. Auto (match terminal)
+ ❯ 2. Dark mode ✔
+`;
+
+test('the screens that can never come up are fatal, not something to wait out', () => {
+  assert.ok(SETTLE.fatalRe.test(ROOT_REFUSAL), 'as root there is no session coming — say so at once');
+  assert.ok(SETTLE.fatalRe.test(FIRST_RUN_WIZARD), 'a setup wizard needs a human, not 45 seconds');
+  assert.ok(SETTLE.fatalRe.test('bash: claude: command not found'));
+});
+
+test('the setup wizard is NOT answered with Enter, and does not read as ready', () => {
+  // It draws its own ❯ and a preselected option, so it is one relaxed anchor
+  // away from both mistakes. Answering it blind would pick a stranger's theme,
+  // and then their login method, on their behalf.
+  assert.ok(!(SETTLE.trustRe.test(FIRST_RUN_WIZARD) || SETTLE.resumeRe.test(FIRST_RUN_WIZARD)),
+    'a setup wizard is not a menu we may answer');
+  assert.ok(!SETTLE.readyRe.test(FIRST_RUN_WIZARD.trim().split('\n').slice(-8).join('\n')),
+    'parked on the wizard is not "the UI is up"');
+});
+
+test('the screens that DO come up are not swept in with the fatal ones', () => {
+  assert.ok(!SETTLE.fatalRe.test(READY));
+  assert.ok(!SETTLE.fatalRe.test(RESUME_PICKER));
+});
+
+// Round 3, and the worst one: `Bridget's session started` printed over THIS.
+//
+// It is raised by --dangerously-skip-permissions itself, so it appears only for
+// the launch line the spawn uses — and it matched the READY signature, because
+// the modal's own title contains the words "Bypass Permissions mode" and the
+// ready footer contains "bypass permissions on". A settle that returns here
+// types the brief into a menu whose preselected option is "No, exit", and every
+// caller downstream is told there is a session.
+const BYPASS_CONSENT = `
+  WARNING: Claude Code running in Bypass Permissions mode
+
+  In Bypass Permissions mode, Claude Code will not ask for your approval
+  before running commands. Only use this in a container without internet.
+
+  ❯ 1. No, exit
+    2. Yes, I accept
+`;
+
+test('the bypass-permissions consent screen is not a ready UI', () => {
+  assert.ok(SETTLE.fatalRe.test(BYPASS_CONSENT),
+    'a consent screen with "No, exit" preselected is nobody to answer but the person');
+  // The ready signature still matches it — the words are the same — which is
+  // exactly why fatalRe is checked FIRST and why spawn verifies afterwards.
+  // If this ever stops being true, the ordering below matters less, not more.
+  assert.ok(!SETTLE.trustRe.test(BYPASS_CONSENT) && !SETTLE.resumeRe.test(BYPASS_CONSENT),
+    'and it is not a menu Enter may answer — Enter here EXITS claude');
+});
+
+test('the real ready footer is not mistaken for the consent screen', () => {
+  // The distinguisher is "mode" / "Yes, I accept" — the running UI says
+  // "bypass permissions on (shift+tab to cycle)" and neither of those.
+  assert.ok(!SETTLE.fatalRe.test(READY), 'a working session must never read as fatal');
+  assert.ok(SETTLE.readyRe.test(READY));
+});

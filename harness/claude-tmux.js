@@ -78,7 +78,26 @@ const RESUME_RE = /Resume from summary|Resume full session as-is/;
 // relax that anchor: the picker would then read as READY and every unattended
 // revival would leave a lieutenant sitting on an unanswered menu forever.
 const UI_READY_RE = /bypass permissions|esc (to )?interrupt|\n❯/i;
-const SETTLE = { trustRe: TRUST_RE, resumeRe: RESUME_RE, readyRe: UI_READY_RE, label: 'claude' };
+
+// FATAL_RE — what a pane shows when this launch is never going to come up, so
+// waiting the remaining 44 seconds only delays a wrong guess:
+//
+//   root       claude refuses --dangerously-skip-permissions as uid 0 (unless
+//              IS_SANDBOX=1 / bubblewrap) and exits — verified in the binary.
+//   first run  a claude nobody has ever run parks on its own setup wizard
+//              (theme picker) BEFORE it asks about credentials. Enter is NOT
+//              sent at it: answering a stranger's setup wizard blind is how you
+//              pick their theme, their login method and their telemetry answer
+//              for them.
+//   missing    the shell answering "command not found" — no binary at all.
+//   bypass     the one-time "WARNING: Claude Code running in Bypass Permissions
+//              mode" consent modal, raised BY --dangerously-skip-permissions.
+//              Its preselected option is `1. No, exit`, so it is emphatically
+//              not one to answer with a blind Enter, and it is not ours to
+//              accept on anyone's behalf: it is a person saying yes to an agent
+//              that skips permission prompts on their machine.
+const FATAL_RE = /cannot be used with root\/sudo privileges|Choose the text style|To change this later, run \/theme|claude: command not found|command not found: claude|Bypass Permissions mode|Yes, I accept/;
+const SETTLE = { trustRe: TRUST_RE, resumeRe: RESUME_RE, readyRe: UI_READY_RE, fatalRe: FATAL_RE, label: 'claude' };
 
 // installHooks — write/merge the Stop hook into <cwd>/.claude/settings.local.json.
 // Idempotent; preserves any existing settings/hooks. Also hides the file from
@@ -150,11 +169,21 @@ async function spawn(cwd, prompt, opts = {}) {
   await s.createPane(session, window, cwdAbs);
   try {
     const extra = (opts.extraArgs || []).map(s.shellQuote).join(' ');
-    const launchCmd = 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false '
+    // allowRoot — claude refuses --dangerously-skip-permissions as uid 0 and
+    // exits, so as root there is no session to have unless the caller has said,
+    // in as many words, that this box is a throwaway. IS_SANDBOX=1 is the escape
+    // claude itself checks; it is never set on our own initiative.
+    const asRoot = opts.allowRoot && typeof process.getuid === 'function' && process.getuid() === 0;
+    const launchCmd = (asRoot ? 'IS_SANDBOX=1 ' : '')
+      + 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false '
       + `claude --dangerously-skip-permissions --session-id ${resumeId}`
       + (extra ? ' ' + extra : '');
     await s.launchAndSettle(s.paneTarget(session, window), launchCmd, SETTLE);
     await deliverPrompt(s.paneTarget(session, window), prompt);
+    // Returning is a claim that there is a session here. Check it, once, against
+    // the pane — a settle that matched a modal's own wording is exactly how a
+    // spawn came to report success over a consent screen nobody had answered.
+    await s.verifyLive(s.paneTarget(session, window), SETTLE);
   } catch (err) {
     await s.killPane(session, window);
     try { fs.unlinkSync(promptFile); } catch { /* best-effort */ }
@@ -176,12 +205,18 @@ async function deliverPrompt(target, prompt) {
     retries: Number(process.env.BC_SEND_RETRIES || 3),
     enterSleep: Number(process.env.BC_SEND_SLEEP_MS || 400),
   });
-  if (verdict === 'pending') {
-    throw new Error('brief not submitted at spawn (Enter swallowed; text left in composer)');
+  if (verdict === 'pending' || verdict === 'send-failed') {
+    // The pane rides on THIS failure too. A launch that settles and then will
+    // not take the brief is the interesting case — the screen underneath is
+    // usually a login prompt or a trust dialog wearing a composer's clothes —
+    // and without the tail the caller is left with nothing to diagnose from.
+    throw new Error((verdict === 'pending'
+      ? 'brief not submitted at spawn (Enter swallowed; text left in composer)'
+      : 'brief not sent at spawn (tmux send failed)') + '; pane tail:\n' + (await paneTailSafe(target)));
   }
-  if (verdict === 'send-failed') {
-    throw new Error('brief not sent at spawn (tmux send failed)');
-  }
+}
+async function paneTailSafe(target) {
+  try { return (await t.capture(target, 20)) || ''; } catch (e) { return ''; }
 }
 
 // send(ref, text) — type into the session with verified submission.

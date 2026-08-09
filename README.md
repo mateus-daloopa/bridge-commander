@@ -18,24 +18,38 @@ kanban board.
 
 ## Install
 
-Just some dependencies and a new skill:
+One skill:
 
 ```sh
-# dependencies
-curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh
-curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh
-
-# bridge-commander
-npx skills add tonylampada/bridge-commander -g -y   # first /bridge-commander run clones the full tool
+npx skills add tonylampada/bridge-commander -g -y
 ```
 
-## Quickstart
+That is the whole install. The rest happens in the terminal you already have.
 
-- Create an empty folder (e.g. `myfleet`)
-- Start `claude` in that folder, **inside tmux** (not optional — the lieutenant lives in the tmux session)
+## Start
+
+- Make an empty folder (e.g. `myfleet`) and start `claude` in it
 - `/bridge-commander`
-- Open the printed board URL (default `http://localhost:4780/`)
-- Talk to your lieutenant from there — he'll guide you through the rest of the setup
+- Open the board URL it prints (default `http://localhost:4780/`)
+
+**Bridget** is already there with a message waiting. She's your first lieutenant, and she does the
+rest of the setup with you — the two optional tools, your first repo, and a short checklist that
+runs as real cards on the board.
+
+You need `tmux` and `git` on the machine (your agent will offer to install `tmux` if it is
+missing). You never have to use tmux yourself.
+
+Two things worth knowing before you start, because they are the only ways a first run stops early:
+
+- **Run `claude` once by hand, inside the workspace folder**, if this machine has never run it.
+  It has setup screens a spawned session cannot answer for you — a theme picker, a login, and a
+  trust question about that specific folder (which is why running it in your home directory is not
+  enough).
+- **Not as root.** Claude Code refuses `--dangerously-skip-permissions` as root, so a lieutenant
+  cannot start there. Use a normal user (a throwaway container can pass `--allow-root`, and the
+  tool will tell you what that costs — and that anything you then run by hand needs `IS_SANDBOX=1`
+  in front of it). If you need to install Claude Code as that user,
+  `curl -fsSL https://claude.ai/install.sh | bash` puts it in `~/.local/bin` without root.
 
 ## Board views
 
