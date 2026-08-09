@@ -30,6 +30,7 @@ import { Rays, setVoice } from './hover.js';
 import { Windows } from './windows.js';
 import { ChatPanel } from './chat.js';
 import { BoardWall, CardPanel } from './board.js';
+import { routeKey } from './keys.js';
 import { Grabs } from './grab.js';
 import { Sound } from './sound.js';
 import { installSky, installToneMapping } from './sky.js';
@@ -267,12 +268,15 @@ window.addEventListener('pointermove', (e) => {
   pitch = Math.max(-1.3, Math.min(1.0, pitch - e.movementY * 0.003));
   camera.rotation.set(pitch, yaw, 0, 'YXZ');
 });
-// Keystrokes belong to whatever composer has focus — a chat panel takes the
-// keyboard when it opens, and Enter inside it sends. The shortcuts below are
-// only for when nothing is being typed into, which is why they all check.
+// Keystrokes belong to whatever composer holds the keys — a chat panel takes
+// them when it opens, and Enter inside it sends. `routeKey` is the room's own
+// notion of that, and it never asks the document which element is active:
+// nothing here focuses a DOM node, because focusing one inside an immersive
+// session is what crashes the headset browser out of the room. It returns true
+// when a composer took the key, which is what keeps the shortcuts below off
+// while he is typing.
 window.addEventListener('keydown', (e) => {
-  const typing = document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
-  if (typing) return;
+  if (routeKey(e)) return;
   if (e.key === 'b') openBoard();
   if (e.key === 'c') { const lts = doc.lieutenants || []; if (lts[0]) openChat(lts[0]); }
   if (e.key === 'x') windows.closeFront();

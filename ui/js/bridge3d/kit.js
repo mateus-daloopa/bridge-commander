@@ -11,13 +11,18 @@
 // not vendor, and in the finished kits it pulls an icon set of 1,595 modules.
 // Per-component is the intended workflow — see `building.md`.
 
+// **uikit's `Input` is deliberately not here.** It owns a hidden DOM <input>
+// and focuses it from its own pointerdown handler, and focusing a DOM input
+// inside an immersive session summons the Quest system keyboard and takes the
+// browser out of the session — so a field the ray can press is a crash. Text
+// fields in this room are `Field` (field.js): a Container, a Text, and a caret
+// the room paints. Not importing it here is what keeps one out.
 import { Container } from '../../vendor/uikit/components/container.js';
 import { Text } from '../../vendor/uikit/components/text.js';
-import { Input } from '../../vendor/uikit/components/input.js';
 import { Image } from '../../vendor/uikit/components/image.js';
 import { reversePainterSortStable } from '../../vendor/uikit/order.js';
 
-export { Container, Text, Input, Image, reversePainterSortStable };
+export { Container, Text, Image, reversePainterSortStable };
 
 // uikit's own unit is a "pixel", and `pixelSize` says what one is worth in the
 // world. At 0.01 a layout unit is a centimetre, which is the size the room

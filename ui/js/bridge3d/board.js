@@ -36,9 +36,10 @@
 
 import * as THREE from 'three';
 import * as W from './world.js';
-import { root, Container, Text, Input, Image, COL, cm, fontFor, inert, safe } from './kit.js';
+import { root, Container, Text, Image, COL, cm, fontFor, inert, safe } from './kit.js';
 import { avatarTexture } from './avatars3d.js';
 import { ChatPanel } from './chat.js';
+import { Field } from './field.js';
 import { Target } from './hover.js';
 
 const D = W.WALL.distM;
@@ -248,22 +249,23 @@ export class BoardWall {
     }
 
     // The field: still here, still free text, and it ANDs with the faces rather
-    // than replacing them.
-    this.field = new Input({
-      width: '100%', height: cm(barM), flexShrink: 0,
-      backgroundColor: COL.field, backgroundOpacity: 1, borderRadius: cm(0.008),
-      borderWidth: cm(0.0018), borderColor: COL.faint, borderOpacity: 0.6,
-      paddingX: cm(padM), verticalAlign: 'center',
-      fontSize: fontFor(W.TYPE.body, RD), color: COL.text, caretColor: COL.accent,
+    // than replacing them. A Composer rather than uikit's Input — pressing an
+    // Input focuses its hidden DOM element, and that is what took the headset
+    // browser out of the session the moment he pressed this. See keys.js.
+    this.field = new Field({
+      box: {
+        width: '100%', height: cm(barM), flexShrink: 0,
+        borderRadius: cm(0.008), paddingX: cm(padM),
+      },
+      fontSize: fontFor(W.TYPE.body, RD),
       placeholder: 'or type a word',
-      hover: { borderColor: COL.accent, borderOpacity: 1 },
-      onValueChange: (v) => { this.query = v || ''; this.repaint(); },
+      chars: 26,                     // what a rail tile holds at body size
+      onChange: (v) => { this.query = v; this.repaint(); },
     });
-    right.ui.add(this.field);
-    this._nodes += 1;
+    right.ui.add(this.field.box);
+    this._nodes += 2;
     const fieldTarget = new Target({
-      mesh: this.field, name: 'wall-field',
-      onSelect: () => { if (this.field.element) this.field.element.focus(); },
+      mesh: this.field.box, name: 'wall-field', onSelect: () => this.field.take(),
     });
     fieldTarget._paint = () => {};
     this.targets.push(fieldTarget);
@@ -351,7 +353,7 @@ export class BoardWall {
   toggleColumn(id) { this.column = this.column === id ? null : id; this.repaint(); }
   clearFilters() {
     this.owner = null; this.column = null; this.query = '';
-    if (this.field) this.field.setProperties({ value: '' });
+    if (this.field) this.field.setValue('');
     this.repaint();
   }
   filters() {
@@ -475,7 +477,10 @@ export class BoardWall {
     this.open = on;
     this.group.visible = on;
     for (const ui of this.uis) ui.setProperties({ display: on ? 'flex' : 'none' });
-    if (on) this.repaint();
+    // The wall does not take the keys on open — opening the board is looking,
+    // not typing — but a wall that closes while its field holds them would take
+    // `b`/`c`/`x` down with it.
+    if (on) this.repaint(); else if (this.field) this.field.release();
   }
 
   // How many uikit components the wall is made of. Constant from construction

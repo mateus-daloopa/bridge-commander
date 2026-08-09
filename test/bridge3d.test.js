@@ -479,7 +479,7 @@ test('the wall is a wall: fifty-odd cards at once, and every one of them legible
     `${W.wallChars()} characters is not where the cap rule actually bites`);
 
   const src = fs.readFileSync(path.join(UI, 'board.js'), 'utf8');
-  assert.match(src, /new Input\(/, 'the wall still takes free text');
+  assert.match(src, /new Field\(/, 'the wall still takes free text');
   assert.match(src, /overflow: 'scroll'/, 'every card, which means a lane scrolls');
   assert.match(src, /onCard/, 'a row opens the card it names');
   // Filtering is PRESSING. A face, and a column header, and neither of them is
@@ -710,6 +710,81 @@ test('the ray is the vendored pointer library, not a hand-rolled rectangle', asy
     const s = fs.readFileSync(path.join(UI, f), 'utf8');
     assert.ok(!/new THREE\.Raycaster\(/.test(s), `${f} raycasts by hand instead of using the pointer library`);
   }
+});
+
+// ---- the headset stays in the session ---------------------------------------
+
+test('nothing in the room focuses a DOM node, and no field is a hidden input', async () => {
+  // This is the one that took the whole browser. Focusing a text input inside
+  // an immersive session asks the Quest browser for the system keyboard, which
+  // is a shell surface that has to composite over the immersive layer, and the
+  // session dies — with nothing thrown that a handler could catch. It killed a
+  // chat the instant it opened and the wall's search field on the first press.
+  //
+  // The captain is the only one with a headset, so no test can reproduce it.
+  // What a test CAN do is hold the line: the crash needs a focused DOM element,
+  // and there is no longer any code in the room that could produce one.
+  for (const f of fs.readdirSync(UI)) {
+    if (!f.endsWith('.js')) continue;
+    const src = fs.readFileSync(path.join(UI, f), 'utf8');
+    assert.ok(!/\.focus\s*\(/.test(src), `${f} focuses something — that is the crash`);
+    assert.ok(!/activeElement/.test(src),
+      `${f} reads the document's active element instead of the room's own state`);
+    // uikit's Input focuses its own hidden element from its pointerdown
+    // handler, so one standing in the room is enough on its own.
+    assert.ok(!/components\/input\.js/.test(src) && !/\bnew Input\(/.test(src),
+      `${f} builds a uikit Input, which focuses a hidden <input> when it is pressed`);
+  }
+
+  // And what replaced it: the room's own field, holding the keys as a module
+  // reference rather than as a browser state, routed at the window.
+  const main = fs.readFileSync(path.join(UI, 'main.js'), 'utf8');
+  assert.match(main, /if \(routeKey\(e\)\) return;/,
+    'the window listener does not route to the composer before the shortcuts');
+  for (const f of ['chat.js', 'board.js']) {
+    assert.match(fs.readFileSync(path.join(UI, f), 'utf8'), /new Field\(/,
+      `${f} does not build its field out of the room's own composer`);
+  }
+
+  // The behaviour those pieces owe, exercised rather than read. keys.js
+  // imports nothing, which is what lets it be loaded here at all — the rest of
+  // the room pulls in three.js and uikit and cannot be.
+  const { Composer, routeKey, keysHeld } = await load('keys.js');
+  const sent = [];
+  const seen = [];
+  const chat = new Composer({ onSubmit: (v) => sent.push(v) });
+  const wall = new Composer({ onChange: (v) => seen.push(v) });
+
+  // Nothing holds the keys until something takes them, and then b/c/x are the
+  // composer's letters rather than the room's shortcuts.
+  const key = (k, over) => Object.assign({ key: k, preventDefault() {} }, over);
+  assert.equal(keysHeld(), null);
+  assert.equal(routeKey(key('b')), false, 'a key was swallowed with no composer holding it');
+  chat.take();
+  assert.equal(keysHeld(), chat);
+  for (const k of ['h', 'b', 'x', 'c']) assert.equal(routeKey(key(k)), true);
+  assert.equal(chat.value, 'hbxc', 'the letters did not land in the composer');
+  routeKey(key('Backspace'));
+  assert.equal(chat.value, 'hbx');
+  routeKey(key('Enter'));
+  assert.deepEqual(sent, ['hbx'], 'Enter did not send');
+  routeKey(key('Enter', { shiftKey: true }));
+  assert.deepEqual(sent, ['hbx'], 'shift-Enter sent anyway');
+  routeKey(key('ArrowLeft'));
+  assert.equal(chat.value, 'hbx', 'a named key was typed as a character');
+
+  // One keyboard, one composer: pressing the wall's field takes them off the
+  // chat, and the wall filters as the characters arrive.
+  wall.take();
+  assert.equal(keysHeld(), wall);
+  routeKey(key('a'));
+  assert.deepEqual(seen, ['a'], 'the wall did not narrow as a character arrived');
+  assert.equal(chat.value, 'hbx', 'the chat kept taking keys it no longer holds');
+
+  // And releasing gives them back to the room — what closing a panel does.
+  wall.release();
+  assert.equal(keysHeld(), null);
+  assert.equal(routeKey(key('b')), false, 'the shortcuts are still dead after the panel closed');
 });
 
 // ---- the old room is gone --------------------------------------------------

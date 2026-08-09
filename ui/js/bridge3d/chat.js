@@ -9,12 +9,15 @@
 // The panel is `panel.js` with two additions: the thread painted newest at the
 // bottom, and a composer in the foot.
 //
-// **Input, honestly.** uikit's Input owns a real hidden DOM <input>, and a
-// browser still delivers keystrokes to the document inside an immersive
-// session even though it draws no DOM there. So a paired Bluetooth keyboard
-// types into whichever panel was last focused, and Enter sends. There is no
-// on-screen keyboard: typing on a floating keyboard in VR is miserable, and a
-// half-built one would be worse than saying plainly that a keyboard is
+// **Input, honestly.** The composer is a `Field` — a surface the room draws and
+// types into itself, with no DOM focus anywhere near it, because focusing a
+// hidden <input> inside an immersive session summons the Quest system keyboard
+// and takes the browser out of the session with it. See keys.js. A paired
+// Bluetooth keyboard delivers keydown to the document regardless, main.js hears
+// it at the window, and it goes to whichever composer holds the keys — opening
+// a chat is an intention to talk, so this one takes them. Enter sends. There is
+// no on-screen keyboard: typing on a floating keyboard in VR is miserable, and
+// a half-built one would be worse than saying plainly that a keyboard is
 // required. When dictation lands it plugs in here, at `send()`.
 //
 // Sending is `POST /api/feedback` — the captain side of chat.say. Write-ahead:
@@ -22,8 +25,9 @@
 // depends on a session being alive at the moment it is sent.
 
 import * as W from './world.js';
-import { Container, Text, Input, COL, cm, fontFor, inert, safe } from './kit.js';
+import { Container, Text, COL, cm, fontFor, inert, safe } from './kit.js';
 import { Panel } from './panel.js';
+import { Field } from './field.js';
 import { Target } from './hover.js';
 
 const D = W.PANEL.distM;
@@ -47,17 +51,17 @@ export class ChatPanel extends Panel {
     const pad = W.sizeForArc(1.0, D);
     const barM = W.sizeForArc(W.BUILD.hit, D);
 
-    this.field = new Input({
-      flexGrow: 1, height: cm(barM),
-      backgroundColor: COL.field, backgroundOpacity: 1, borderRadius: cm(0.010),
-      borderWidth: cm(0.0018), borderColor: COL.faint, borderOpacity: 0.6,
-      paddingX: cm(pad * 0.7), verticalAlign: 'center',
-      fontSize: fontFor(W.TYPE.body, D), color: COL.text, caretColor: COL.accent,
+    this.field = new Field({
+      box: {
+        flexGrow: 1, height: cm(barM), borderRadius: cm(0.010), paddingX: cm(pad * 0.7),
+      },
+      fontSize: fontFor(W.TYPE.body, D),
       placeholder: 'type, then enter',
-      hover: { borderColor: COL.accent, borderOpacity: 1 },
-      onValueChange: (v) => { this.draft = v || ''; },
+      // The panel is 49 characters across and the send button takes a fifth of
+      // the foot, so this is what fits beside it.
+      chars: 38,
+      onSubmit: () => this.send(),
     });
-    this.draft = '';
 
     const sendBox = new Container({
       width: cm(barM * 1.5), height: cm(barM), flexShrink: 0,
@@ -69,37 +73,26 @@ export class ChatPanel extends Panel {
     inert(sendMark);
     sendBox.add(sendMark);
 
-    this.foot.add(this.field, sendBox);
+    this.foot.add(this.field.box, sendBox);
     this.foot.setProperties({ display: 'flex' });
 
     const sendTarget = new Target({ mesh: sendBox, name: 'chat-send', onSelect: () => this.send() });
     sendTarget._paint = () => {};
-    const fieldTarget = new Target({ mesh: this.field, name: 'chat-field', onSelect: () => this.focus() });
+    const fieldTarget = new Target({
+      mesh: this.field.box, name: 'chat-field', onSelect: () => this.field.take(),
+    });
     fieldTarget._paint = () => {};
     this.targets.push(sendTarget, fieldTarget);
-
-    // Enter sends. It has to hang off the hidden element rather than off the
-    // window, because the window hears every panel at once and the last thing a
-    // room with three chats open needs is a message going to the wrong one.
-    const el = this.field.element;
-    if (el) {
-      el.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter' || e.shiftKey) return;
-        e.preventDefault();
-        this.send();
-      });
-    }
-  }
-
-  focus() {
-    if (this.field.element) this.field.element.focus();
   }
 
   setOpen(on) {
     super.setOpen(on);
     // Opening a chat is an intention to talk, so the composer takes the
-    // keyboard without him having to aim at it first.
-    if (on) this.focus();
+    // keyboard without him having to aim at it first — and a room with three
+    // chats open never has two of them listening, because taking the keys takes
+    // them off whoever had them. Closing gives them back to the room, which is
+    // what makes `b`/`c`/`x` work again.
+    if (on) this.field.take(); else this.field.release();
   }
 
   // Paint the tail of a thread. `messages` is the board's own shape:
@@ -151,14 +144,13 @@ export class ChatPanel extends Panel {
   }
 
   async send() {
-    const text = (this.draft || '').trim();
+    const text = (this.field.value || '').trim();
     if (!text || this.sending) return;
     this.sending = true;
     // Cleared straight away rather than on the response: he has pressed enter,
     // the message is gone as far as he is concerned, and a field that empties
     // half a second later reads as a dropped keystroke.
-    this.draft = '';
-    this.field.setProperties({ value: '' });
+    this.field.setValue('');
     try {
       const r = await fetch('/api/feedback', {
         method: 'POST',
@@ -177,7 +169,9 @@ export class ChatPanel extends Panel {
       this.addText('not sent - ' + ((e && e.message) || e), { size: W.TYPE.meta, color: '#e08a8a' });
     } finally {
       this.sending = false;
-      this.focus();
+      // Pressing `send` with a ray put the keys wherever they were; typing
+      // straight on is the next thing he does either way.
+      this.field.take();
     }
   }
 }
