@@ -81,7 +81,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | `workspace.playbooks` | `→ [playbookId]` | ⚓ · 🤠 (the new-card dropdown, and the ✎ picker on a **Backlog** card's playbook chip — a started card rendered its brief already, so its chip shows the pointer and offers no editor) | list the playbooks a card can point at; read off disk on every call |
 | `lieutenant.create` | `charter → lieutenant` | 🤠 lane button · ⚓ on captain's ask | a new mission/domain deserves its own commander; server spawns its tmux session via the harness port, doctrine + charter as launch prompt |
 | `lieutenant.patch` | `color?, avatar?, voice?, name?, charter?, prefix?, ref? → lieutenant` | 🤠 (⋯ → settings) · ⚙️ (ref re-registration on init idempotency) | cosmetics + voice + charter + the card-id `prefix` (refused when another lieutenant already holds it; already-minted ids never change — a new prefix is about what comes next); `name` changes the display only — `id` and the derived session name stay immutable; `avatar: null` clears back to the colored-dot fallback; `voice: ""`/`null` clears back to the board's voice |
-| `lieutenant.retire` | `lieutenant` | 🤠 | explicit only; refused while the lieutenant owns non-archived cards (archive or finish them first); kills its session, removes it and its queue, loud level-1 event |
+| `lieutenant.retire` | `lieutenant` | 🤠 | explicit only; refused while the lieutenant owns non-archived cards (archive or finish them first); kills its session, removes it, its queue and its chat log, loud level-1 event |
 
 ### card
 
@@ -105,6 +105,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | Operation | Signature | Who | When |
 |---|---|---|---|
 | `chat.say` | `target: lieutenant-main \| card \| line, text, attachments?` | 🤠 ↔ ⚓ | any time; captain-side is write-ahead: queue first, then `harness.send` wake. Author defaults to the CALLER's identity (session-resolved), never inferred from the target. Captain-side `line` resolves to the holder's main chat and stamps the QueueItem `via: "line"` |
+| `chat.page` | `target: lieutenant-main, before?, limit? → [Message]` | 🤠 (scrolling up) · ⚓ (CLI `thread`) | a main chat is an append-only log of its own (`chat/<lieutenant>.jsonl`) and the board payload carries only its newest slice, so older history is paged backwards from the oldest message on screen — oldest-first, EMPTY past the beginning (running out of conversation is not an error). A card thread has nothing to page: it rides the board and dies with its card |
 | `line.who` | `() → lieutenant, source: held \| default \| none` | ⚓ · 🤠 | before answering: which voice the captain expects. Never answered from local state |
 | `line.pass` | `lieutenant, note → ()` | ⚓ (on the captain's ask) | the work is someone else's territory: moves the line AND queues a `line-passed` delivery carrying the note, so the receiver is woken and greets him in one line |
 | `feed.drain` | `lieutenant → QueueItem[]` | ⚓ | first act of every lieutenant turn; the caller self-identifies by its tmux session and drains ONLY its own queue |
@@ -162,7 +163,7 @@ session status, window adoption):
 
 ## Invariants
 
-1. **Board is truth.** No shadow files, no mirror: cards + charters + queues in `.bridge-commander/` ARE the state. Agent conversation memory is a cache; restart of any session is a non-event.
+1. **Board is truth.** No shadow files, no mirror: cards + charters + queues in `.bridge-commander/` ARE the state. Agent conversation memory is a cache; restart of any session is a non-event. Unbounded logs are append-only files beside the board and are the truth for what they hold — the archive, the delivery queues, and a lieutenant's main chat — never copied back into `board.json`, which would be two truths and a rewrite of everything on every write.
 2. **Lieutenants never write to projects.** Every change reaches a project through a worker in an isolated worktree, shipped the way the card's playbook says.
 3. **Working ⇔ unfinished task, which SHOULD have a live worker.** The way into Working is `card.start`, spawning the worker atomically (or `worker.send` reopening a done-but-alive worker). A Working card may lose its worker only by accident (process died, machine rebooted) — the server flags it and queues the owner; a wound to heal — or by `worker.pause`, the ONE deliberate stop, marked so supervision never reads it as a wound.
 4. **One owner while work is bound.** Every card belongs to exactly one lieutenant. Reassignment is legal ONLY for a card with no worker record; mid-work handovers stay forbidden (archive + recreate). The captain converses only with lieutenants (card threads included). `tmux attach` on a predictable session name (`bc-*`; the founding lieutenant keeps its own session name) is the escape hatch, not a channel.
