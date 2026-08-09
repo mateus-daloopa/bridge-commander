@@ -13,6 +13,13 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { runHooks } = require('../server/hooks.js');
 const { startServerWithLieutenant, startServer, withOwner, sleep, LT } = require('./helper');
+const { lieutenantSession, workerWindow } = require('../server/names.js');
+
+// A worker's harness key: a WINDOW in its lieutenant's session — the form the
+// fake harness's marker files carry, so a test can make a session dead.
+function workerKey(dir, cardId) {
+  return lieutenantSession(dir, LT) + ':' + workerWindow(cardId);
+}
 
 function writeHook(ws, event, name, body, mode = 0o755) {
   const dir = path.join(ws, '.bridge-commander', 'hooks', event);
@@ -358,4 +365,275 @@ test('card-archived hooks run BEFORE the worktree release on the merged-PR path'
     await s.stop();
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+// ---------- a playbook's teardown ----------
+// The per-playbook counterpart of a hook: the command that stops what THAT
+// playbook's run started, run in the worktree immediately before the release.
+// Best effort in every direction — the release makes its own decision, as it
+// always has.
+
+const { runTeardown } = require('../server/hooks.js');
+
+function writePlaybook(s, id, text) {
+  const dir = path.join(s.dir, '.bridge-commander', 'playbooks');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, id + '.md'), text);
+  return id;
+}
+
+test('runTeardown: a shell command line, cwd = the worktree, BC_* env, BC_EVENT=teardown', async () => {
+  const ws = scratchWs();
+  try {
+    const wt = path.join(ws, 'wt');
+    fs.mkdirSync(wt);
+    const r = await runTeardown('echo "$BC_EVENT|$BC_CARD|$BC_BRANCH" > env.out && pwd && echo stopped',
+      { workspace: ws, card: 'c1', repo: '/r', worktree: wt, branch: 'bc/c1' });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.code, 0);
+    assert.match(r.output, /stopped/);
+    assert.ok(r.ms >= 0, 'the run is timed');
+    // written relative to cwd — the worktree, not the workspace
+    assert.strictEqual(fs.readFileSync(path.join(wt, 'env.out'), 'utf8').trim(), 'teardown|c1|bc/c1');
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
+test('runTeardown: non-zero exit and a timeout are RESULTS, never throws', async () => {
+  const ws = scratchWs();
+  try {
+    const bad = await runTeardown('echo down the drain >&2; exit 4', { workspace: ws, card: 'c1' });
+    assert.deepStrictEqual([bad.ok, bad.code], [false, 4]);
+    assert.strictEqual(bad.output, 'down the drain');
+
+    const t0 = Date.now();
+    const hung = await runTeardown('sleep 30', { workspace: ws, card: 'c1' }, { timeoutMs: 300 });
+    assert.ok(Date.now() - t0 < 5000, 'did not wait for the sleep');
+    assert.deepStrictEqual([hung.ok, hung.timedOut], [false, true]);
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
+test('runTeardown: output keeps the TAIL — where a teardown gives up is the end', async () => {
+  const ws = scratchWs();
+  try {
+    const r = await runTeardown(
+      'i=0; while [ $i -lt 2000 ]; do echo aaaaaaaaaaaaaaaa; i=$((i+1)); done; echo LAST-LINE',
+      { workspace: ws, card: 'c1' });
+    assert.strictEqual(r.truncated, true);
+    assert.ok(r.output.length <= 4096, 'capped');
+    assert.match(r.output, /LAST-LINE$/, 'the tail survived, not the head');
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
+test('teardown runs at the handoff, in the worktree, and lands an event even when it worked', async () => {
+  const { s, root, teardown } = await bootWithProject();
+  try {
+    const out = path.join(root, 'td-env.out');
+    // writes OUTSIDE the worktree: a teardown that dirties the checkout would
+    // make the release refuse, which is a different test
+    writePlaybook(s, 'containered', ['---',
+      'teardown: printf "%s|%s|%s" "$BC_EVENT" "$BC_CARD" "$(pwd)" > ' + out + '; echo container down',
+      '---', 'work in a container', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Containered', id: 'td-ok', playbook: 'containered', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/td-ok/start', { harness: 'fake' })).body.worker;
+    assert.strictEqual(w.teardown, 'printf "%s|%s|%s" "$BC_EVENT" "$BC_CARD" "$(pwd)" > ' + out + '; echo container down');
+    await s.api('POST', '/api/cards/td-ok/worker/done', { outcome: 'shipped' });
+    await sleep(300);
+    assert.ok(!fs.existsSync(out), 'nothing torn down yet — done hands the diff to the lieutenant');
+
+    await s.api('POST', '/api/cards/td-ok/move', { column: 'review', actor: 'agent' });
+    const ev = await until('the teardown lands an event on the card', async () => {
+      const c = (await s.api('GET', '/api/cards/td-ok')).body;
+      return (c.events || []).find((e) => /^teardown /.test(e.text));
+    });
+    assert.strictEqual(ev.kind, 'hook-ran');
+    assert.strictEqual(ev.level, 2);
+    assert.match(ev.text, /exit 0/);
+    assert.match(ev.text, /\d+\.\ds\)/, 'how long it took');
+    assert.match(ev.text, /container down/, 'the tail of its output');
+    assert.strictEqual(fs.readFileSync(out, 'utf8').trim(), 'teardown|td-ok|' + w.worktree.path);
+    // ...and the release still happened, after it
+    await until('worktree released after the teardown', async () => !fs.existsSync(w.worktree.path));
+  } finally { await teardown(); }
+});
+
+test('a teardown that exits non-zero rings the bell and the release runs anyway', async () => {
+  const { s, teardown } = await bootWithProject();
+  try {
+    writePlaybook(s, 'brokendown', ['---', 'teardown: echo could not stop it >&2; exit 9', '---', 'x', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Broken teardown', id: 'td-bad', playbook: 'brokendown', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/td-bad/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/td-bad/worker/done', { outcome: 'shipped' });
+    await s.api('POST', '/api/cards/td-bad/move', { column: 'review', actor: 'agent' });
+
+    const ev = await until('the failure is on the timeline', async () => {
+      const c = (await s.api('GET', '/api/cards/td-bad')).body;
+      return (c.events || []).find((e) => /^teardown /.test(e.text));
+    });
+    assert.strictEqual(ev.kind, 'hook-failed');
+    assert.strictEqual(ev.level, 1, 'the bell');
+    assert.match(ev.text, /exit 9/);
+    assert.match(ev.text, /could not stop it/);
+    const items = (await s.api('GET', '/api/feed?lieutenant=' + LT)).body.items;
+    assert.ok(items.some((i) => i.kind === 'hook-failed' && i.card === 'td-bad'));
+    // a user's broken script must never wedge a card
+    await until('the release ran regardless', async () => !fs.existsSync(w.worktree.path));
+  } finally { await teardown(); }
+});
+
+test('a teardown that hangs is killed at the timeout, and the release still runs', async () => {
+  const { s, teardown } = await bootWithProject({ BC_TEARDOWN_TIMEOUT_MS: '500' });
+  try {
+    writePlaybook(s, 'hangs', ['---', 'teardown: sleep 60', '---', 'x', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Hanging teardown', id: 'td-hang', playbook: 'hangs', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/td-hang/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/td-hang/worker/done', { outcome: 'shipped' });
+    await s.api('POST', '/api/cards/td-hang/move', { column: 'review', actor: 'agent' });
+
+    const ev = await until('the timeout is on the timeline', async () => {
+      const c = (await s.api('GET', '/api/cards/td-hang')).body;
+      return (c.events || []).find((e) => /^teardown /.test(e.text));
+    });
+    assert.strictEqual(ev.kind, 'hook-failed');
+    assert.match(ev.text, /timed out/);
+    await until('the release ran regardless', async () => !fs.existsSync(w.worktree.path));
+  } finally { await teardown(); }
+});
+
+test('`keep_worktree: true` runs neither the teardown nor the release; archive runs both', async () => {
+  const { s, root, teardown } = await bootWithProject();
+  try {
+    const out = path.join(root, 'kept-td.out');
+    writePlaybook(s, 'keptdown', ['---', 'keep_worktree: true',
+      'teardown: echo stopped >> ' + out, '---', 'rework me', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Kept', id: 'td-kept', playbook: 'keptdown', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/td-kept/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/td-kept/worker/done', { outcome: 'first pass' });
+    await s.api('POST', '/api/cards/td-kept/move', { column: 'review', actor: 'agent' });
+    await sleep(500);
+    assert.ok(fs.existsSync(w.worktree.path), 'the checkout is kept for the rework');
+    assert.ok(!fs.existsSync(out), 'and so is its container — the teardown never ran');
+
+    // archive is the backstop for both: nothing is left to rework
+    await s.api('POST', '/api/cards/td-kept/archive', { reason: 'killed' });
+    await until('released at archive', async () => !fs.existsSync(w.worktree.path));
+    assert.strictEqual(fs.readFileSync(out, 'utf8').trim(), 'stopped');
+  } finally { await teardown(); }
+});
+
+test('`keep_worktree: true` + teardown: the handoff runs neither, the RESTART runs both', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-hooks-redo-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const fdir = path.join(root, 'fake');
+  const env = {
+    BC_FAKE_STATE: fdir, BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    const out = path.join(root, 'redo-td.out');
+    writePlaybook(s, 'keptdown', ['---', 'keep_worktree: true',
+      'teardown: echo "stopped in $(pwd)" >> ' + out, '---', 'rework me', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Redo', id: 'td-redo', playbook: 'keptdown', attributes: { repo: 'proj' } }));
+    const first = (await s.api('POST', '/api/cards/td-redo/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/td-redo/worker/done', { outcome: 'first pass' });
+    await s.api('POST', '/api/cards/td-redo/move', { column: 'review', actor: 'agent' });
+    await sleep(500);
+    assert.ok(fs.existsSync(first.worktree.path), 'the checkout is kept for the rework');
+    assert.ok(!fs.existsSync(out), 'and its container with it — the handoff ran neither');
+
+    // the session dies (a live one is never spawned over), then the rework
+    // restart — the moment that checkout is actually destroyed
+    await s.stop();
+    fs.rmSync(path.join(fdir, workerKey(wsDir, 'td-redo') + '.json'), { force: true });
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+    const r = await s.api('POST', '/api/cards/td-redo/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+
+    // the teardown ran, in the OLD checkout, before it went
+    assert.strictEqual(fs.readFileSync(out, 'utf8').trim(), 'stopped in ' + first.worktree.path);
+    const ev = (await s.api('GET', '/api/cards/td-redo')).body.events
+      .find((e) => /^teardown /.test(e.text));
+    assert.ok(ev, 'and said so on the timeline');
+    assert.strictEqual(ev.kind, 'hook-ran');
+
+    // ...and the release followed it: one linked worktree, the new worker's
+    const clone = path.join(wsDir, 'projects', 'proj');
+    const wtList = execFileSync('git', ['-C', clone, 'worktree', 'list'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim().split('\n').filter(Boolean);
+    assert.strictEqual(wtList.length, 2, 'clone + exactly one linked worktree:\n' + wtList.join('\n'));
+    assert.ok(fs.existsSync(r.body.worker.worktree.path), 'new worktree provisioned');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a teardown that FAILED is retried at the next release point; one that succeeded is not', async () => {
+  const { s, root, teardown } = await bootWithProject();
+  try {
+    const out = path.join(root, 'retry.out');
+    // leaves the checkout dirty on its way out, so the release refuses and the
+    // worktree — and its container — are still there for the next attempt
+    writePlaybook(s, 'wedged', ['---',
+      'teardown: echo ran >> ' + out + '; echo still up > leftover.txt; exit 3',
+      '---', 'x', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Wedged', id: 'td-retry', playbook: 'wedged', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/td-retry/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/td-retry/worker/done', { outcome: 'shipped' });
+    await s.api('POST', '/api/cards/td-retry/move', { column: 'review', actor: 'agent' });
+
+    await until('the release is refused, and says why', async () => {
+      const c = (await s.api('GET', '/api/cards/td-retry')).body;
+      return (c.events || []).find((e) => /^worktree kept \(/.test(e.text));
+    });
+    assert.strictEqual(fs.readFileSync(out, 'utf8'), 'ran\n', 'once so far');
+    assert.ok(fs.existsSync(w.worktree.path), 'the checkout stayed');
+
+    // a failure never spends the card's only attempt — archive is the next
+    // release point, and it tries again
+    const ar = await s.api('POST', '/api/cards/td-retry/archive', { reason: 'killed', note: 'giving up' });
+    assert.strictEqual(ar.status, 200, JSON.stringify(ar.body));
+    await until('the teardown ran again', async () => fs.readFileSync(out, 'utf8') === 'ran\nran\n');
+  } finally { await teardown(); }
+});
+
+test('the handoff teardown does not run a second time when the card is archived', async () => {
+  const { s, root, teardown } = await bootWithProject();
+  try {
+    const out = path.join(root, 'once.out');
+    writePlaybook(s, 'oncedown', ['---', 'teardown: echo ran >> ' + out, '---', 'x', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Once', id: 'td-once', playbook: 'oncedown', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/td-once/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/td-once/worker/done', { outcome: 'shipped' });
+    await s.api('POST', '/api/cards/td-once/move', { column: 'review', actor: 'agent' });
+    await until('released at the handoff', async () => !fs.existsSync(w.worktree.path));
+
+    await s.api('POST', '/api/cards/td-once/archive', { reason: 'merged' });
+    await sleep(500);
+    assert.strictEqual(fs.readFileSync(out, 'utf8'), 'ran\n', 'nothing left to tear down');
+  } finally { await teardown(); }
+});
+
+test('no teardown key: the handoff behaves exactly as it does today', async () => {
+  const { s, teardown } = await bootWithProject();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Plain', id: 'td-none', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/td-none/start', { harness: 'fake' })).body.worker;
+    assert.strictEqual(w.teardown, undefined);
+    await s.api('POST', '/api/cards/td-none/worker/done', { outcome: 'shipped' });
+    await s.api('POST', '/api/cards/td-none/move', { column: 'review', actor: 'agent' });
+    await until('worktree released', async () => !fs.existsSync(w.worktree.path));
+    const c = (await s.api('GET', '/api/cards/td-none')).body;
+    assert.ok(!(c.events || []).some((e) => /^teardown /.test(e.text)));
+  } finally { await teardown(); }
 });
