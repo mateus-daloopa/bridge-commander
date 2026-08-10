@@ -15,6 +15,10 @@
   #keys { color: #5b6b82; margin-top: 6px; font-size: 12.5px; max-width: 760px;
           margin-left: auto; margin-right: auto; }
   #gate.ready #keys { display: block; }
+  /* The system keyboard's crash trail, from the attempt BEFORE this load — the
+     only place a man in a headset can read it. See syskb.js. */
+  #crumbs { color: #d8a05b; margin: 10px auto 0; font-size: 12px; text-align: left;
+            max-width: 760px; max-height: 30vh; overflow: auto; white-space: pre-wrap; }
 </style>
 
 <div id="gate">
@@ -27,6 +31,7 @@
     where you want · type on a paired keyboard, <b>enter</b> sends<br>
     at a desk — drag to look · click to press · <b>b</b>: the board · <b>c</b>: a chat · <b>x</b>: close the front window
   </div>
+  <div id="crumbs" hidden></div>
 </div>
 
 <!-- Everything the room runs is served from this repo: no CDN, no bundler, no

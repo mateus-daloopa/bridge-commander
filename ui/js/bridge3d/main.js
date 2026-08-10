@@ -31,7 +31,7 @@ import { Windows } from './windows.js';
 import { ChatPanel } from './chat.js';
 import { BoardWall, CardPanel } from './board.js';
 import { routeKey, setKeyboard } from './keys.js';
-import { SystemKeyboard } from './syskb.js';
+import { SystemKeyboard, crumb, crumbs, clearCrumbs, beat, lastBeat } from './syskb.js';
 import { Grabs } from './grab.js';
 import { Sound } from './sound.js';
 import { installVoice, askForSound, hush } from './voice3d.js';
@@ -139,8 +139,31 @@ setVoice(sound);
 // whether this browser advertises one — before then, and on any browser that
 // does not, every call into it is a no-op and text arrives the way it always
 // has, from a paired bluetooth keyboard through the window's keydown.
-const syskb = new SystemKeyboard();
+//
+// It is switched OFF in the room (MNC-87 — raising it takes a real headset
+// down). `?syskb=1` turns it back on for one deliberate attempt, with the trail
+// below to say where it died.
+const PROBE = DEV.get('syskb') === '1';
+const syskb = new SystemKeyboard(document, { enabled: PROBE });
 setKeyboard(syskb);
+
+// The crash log, printed on the gate of the NEXT load — the only place a man in
+// a headset can read it, because whatever took the room down took its surfaces
+// with it. Shown before anything else so it is the first thing on the page, and
+// cleared when he enters again so a fresh attempt starts on a clean sheet.
+// It has a box of its own rather than #status, which `say` overwrites with
+// whatever the room is doing next.
+const trail = crumbs();
+if (trail.length) {
+  const el = document.getElementById('crumbs');
+  const pulse = lastBeat();
+  if (el) {
+    el.hidden = false;
+    el.textContent = 'last attempt —\n' + trail.join('\n') + (pulse ? '\n' + pulse : '');
+  }
+}
+window.addEventListener('error', (e) => crumb('ERROR ' + ((e && e.message) || e)));
+window.addEventListener('unhandledrejection', (e) => crumb('REJECTED ' + ((e && e.reason && e.reason.message) || (e && e.reason) || '?')));
 
 // And the crew is audible. The room speaks a lieutenant's message the same way
 // the flat board does — same file, same voices, same queue — with one thing the
@@ -253,7 +276,13 @@ const emulated = DEV.get('xr') === 'emulate'
     .catch((e) => { say('the emulated headset did not install: ' + ((e && e.message) || e)); })
   : null;
 
+// The live session, for the heartbeat in the loop. Null at a desk.
+let xrsession = null;
+
 async function enter() {
+  // A fresh sheet: what is on the gate is the LAST attempt, and he has read it
+  // by now. Everything from here belongs to this one.
+  clearCrumbs();
   // Inside the gesture, before any await: a browser only allows audio to start
   // from a real user action, and an await here would put us outside it.
   sound.start(DEV.get('track'));
@@ -275,8 +304,16 @@ async function enter() {
   // The keyboard's DOM field exists only for the length of the session. Meta's
   // doc asks for exactly that, and it is right to: an input left behind on the
   // flat board is a focus trap on a page he is about to be looking at again.
+  xrsession = session;
   syskb.attach(session);
+  // The two session-level facts the crash question turns on: whether the session
+  // ENDED (he lands back on the gate) or the tab died (no crumb at all, and the
+  // trail simply stops), and whether visibility went to `visible-blurred` the way
+  // the doc says it does.
+  session.addEventListener('visibilitychange', () => crumb('session visibility=' + session.visibilityState));
   session.addEventListener('end', () => {
+    crumb('session END');
+    xrsession = null;
     gate.hidden = false;
     rays.setPresenting(false);
     syskb.detach();
@@ -346,9 +383,15 @@ const _up = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 
 let last = 0;
+let pulsed = 0;
 renderer.setAnimationLoop((t) => {
   const dt = last ? Math.min(0.1, (t - last) / 1000) : 0.016;
   last = t;
+  // One line a second while the probe is on, overwritten rather than appended.
+  if (PROBE && t - pulsed > 1000) {
+    pulsed = t;
+    beat('loop alive at ' + Math.round(t) + 'ms, visibility=' + (xrsession ? xrsession.visibilityState : 'no session'));
+  }
   rays.update();
   const now = performance.now();
   agents.tick(now);

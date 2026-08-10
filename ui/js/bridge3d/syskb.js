@@ -44,9 +44,52 @@ const STYLE = 'position:fixed;left:0;top:0;width:1px;height:1px;padding:0;border
   + 'margin:0;opacity:0;background:transparent;color:transparent;pointer-events:none;';
 
 // The one switch that turns all of this off. See `supported()`. The room takes
-// the default; the test passes `{ enabled: true }` so the mechanism below stays
-// exercised while it is switched off in the headset.
+// the default; `?syskb=1` turns it back on for one deliberate attempt, and the
+// test passes `{ enabled: true }` so the mechanism below stays exercised while
+// it is switched off in the headset.
 const ENABLED = false;
+
+// ---- crumbs -----------------------------------------------------------------
+//
+// A man in a headset has no console, no devtools and no cable, and whatever took
+// the room down took the room's own surfaces with it. So the trail is written to
+// `localStorage` a step at a time and read back on the NEXT load, where main.js
+// prints it on the gate. That is the whole design: the log has to outlive the
+// thing it is logging, and only storage does.
+const CRUMBS = 'syskb-crumbs';
+const store = () => { try { return typeof localStorage === 'undefined' ? null : localStorage; } catch { return null; } };
+
+export function crumbs() {
+  const s = store();
+  try { return s ? JSON.parse(s.getItem(CRUMBS) || '[]') : []; } catch { return []; }
+}
+
+export function crumb(line) {
+  const s = store();
+  if (!s) return;
+  // Stamped off the same clock the loop's pulse uses, so the two can be read
+  // against each other: a pulse that stops at the last crumb is a frozen room, a
+  // pulse that runs past it is a room that kept turning.
+  const at = typeof performance === 'undefined' ? 0 : Math.round(performance.now());
+  // Written synchronously and one line at a time, because the interesting run is
+  // the one that never gets to write a second line — where it stops IS the
+  // finding.
+  try { s.setItem(CRUMBS, JSON.stringify([...crumbs(), at + 'ms ' + line].slice(-60))); } catch { /* full or blocked */ }
+}
+
+// The render loop's pulse, in a slot of its own so a heartbeat a second does not
+// push the interesting lines out of the trail. It answers the one question the
+// crumbs cannot: whether the room went on turning after the keyboard came up. A
+// pulse that stops where the trail stops is a frozen room; a pulse that outlives
+// it is a room that is fine and a session that ended.
+const BEAT = 'syskb-beat';
+export function beat(line) { const s = store(); try { if (s) s.setItem(BEAT, line); } catch { /* blocked */ } }
+export function lastBeat() { const s = store(); try { return s && s.getItem(BEAT); } catch { return null; } }
+
+export function clearCrumbs() {
+  const s = store();
+  try { if (s) { s.removeItem(CRUMBS); s.removeItem(BEAT); } } catch { /* blocked */ }
+}
 
 export class SystemKeyboard {
   constructor(doc = typeof document === 'undefined' ? null : document, { enabled = ENABLED } = {}) {
@@ -67,6 +110,17 @@ export class SystemKeyboard {
   attach(session) {
     this.detach();
     this.session = session || null;
+    // Recorded whether or not the keyboard is switched on, because it costs
+    // nothing and it settles the first question on its own: entering the room
+    // once, with the keyboard off and nothing at risk, says whether his browser
+    // advertises support at all.
+    if (this.session) {
+      crumb('attach: isSystemKeyboardSupported=' + JSON.stringify(this.session.isSystemKeyboardSupported)
+        + ' (' + typeof this.session.isSystemKeyboardSupported + ')'
+        + ' enabled=' + this.enabled
+        + ' visibility=' + this.session.visibilityState
+        + ' ua=' + ((typeof navigator === 'undefined' ? '' : navigator.userAgent) || '?'));
+    }
     if (!this.supported()) return this;
     const el = this.doc.createElement('input');
     el.type = 'text';
@@ -85,7 +139,7 @@ export class SystemKeyboard {
     // still types into it, and pressing the field is how he asks for the system
     // keyboard back. Releasing here would make `b`/`c`/`x` live again while he
     // is plainly still in the middle of a sentence.
-    el.addEventListener('blur', () => { this.composer = null; });
+    el.addEventListener('blur', () => { crumb('blur'); this.composer = null; });
     this.doc.body.appendChild(el);
     this.el = el;
     return this;
@@ -133,7 +187,13 @@ export class SystemKeyboard {
     // browser's business and `seamOf` finds out rather than assuming.
     this.el.value = this.base;
     this.scroll = [this.win().scrollX || 0, this.win().scrollY || 0];
+    // Three crumbs around one line, on purpose. If the trail ends at "focusing"
+    // the call itself is what kills it; if it ends at "focused" the damage
+    // arrives afterwards, when the keyboard comes up.
+    crumb('raise: seed=' + JSON.stringify(this.base) + ' focusing');
     this.el.focus();
+    crumb('raise: focused, driving=' + this.driving()
+      + ' visibility=' + (this.session && this.session.visibilityState));
     this._unscroll();
     return true;
   }
@@ -170,6 +230,7 @@ export class SystemKeyboard {
 
   _input() {
     const c = this.composer;
+    crumb('input: ' + JSON.stringify(this.el.value) + (c ? '' : ' (nobody holds the keys)'));
     if (!c) return;
     const v = this.el.value;
     if (this.seam === null) {
