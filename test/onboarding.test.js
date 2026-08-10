@@ -100,6 +100,7 @@ test('init --onboard leaves a board with Bridget on it, and a re-run resumes', a
     const bridget = lieutenants[0];
     assert.strictEqual(bridget.id, 'bridget');
     assert.strictEqual(bridget.prefix, 'BRI');
+    assert.strictEqual(bridget.avatar, 5, 'she has a face on the first run, not the dot fallback');
     assert.ok(bridget.ref && bridget.ref.session, 'her session was started');
     const charter = fs.readFileSync(path.join(dir, 'lieutenants', 'bridget', 'README.md'), 'utf8');
     assert.match(charter, /onboarding lieutenant/i);

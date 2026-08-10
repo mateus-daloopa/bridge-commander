@@ -85,7 +85,7 @@ The line is the server's memory, not yours — `bc-axi line` prints who holds it
 
 A message that came over the line is going to be HEARD, probably never read. Prioritize the answer itself, in a couple of spoken sentences. Avoid links, diffs, or anything that needs eyeballs unless requested.
 
-**He hands it over by asking for a name** — "put Macapá on the line". That is an order to a tool, not a change of subject:
+**He hands it over by asking for a name** — "put `<lieutenant-name>` on the line". That is an order to a tool, not a change of subject:
 
 ```sh
 bc-axi line pass <lieutenant-id> --note "<what he wants from them>"

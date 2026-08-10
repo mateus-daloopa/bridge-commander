@@ -570,7 +570,9 @@ function scaffoldWorkspace() {
 // Everything it does is idempotent: a second run resumes a half-finished first
 // one (revives a dead Bridget, never re-welcomes, never re-charters) instead of
 // starting over.
-const BRIDGET = { name: 'Bridget', id: 'bridget', prefix: 'BRI' };
+// avatar: index into ui/img/avatars.png (8x8, row-major) — the first lieutenant
+// anyone meets gets a face, not the colored-dot fallback.
+const BRIDGET = { name: 'Bridget', id: 'bridget', prefix: 'BRI', avatar: 5 };
 const ONBOARDING_DIR = path.join(SELF_DIR, '..', 'onboarding');
 
 function writeConfigKeys(patch) {
@@ -670,6 +672,7 @@ async function cmdInitOnboard() {
   //    lieutenant with no idea why she exists.
   const id = opts.id || BRIDGET.id;
   const name = opts.name || BRIDGET.name;
+  const avatar = opts.avatar !== null ? parseAvatarOpt(opts.avatar) : BRIDGET.avatar;
   const charterFile = path.join(ONBOARDING_DIR, 'bridget.md');
   if (fs.existsSync(charterPath(WORKSPACE, id))) {
     console.log('charter left alone — ' + charterPath(WORKSPACE, id) + ' already exists');
@@ -677,7 +680,7 @@ async function cmdInitOnboard() {
     console.log('charter written to ' + writeCharter(WORKSPACE, id, fs.readFileSync(charterFile, 'utf8')));
   }
   try {
-    await request('POST', '/api/lieutenants', { name, id, prefix: BRIDGET.prefix, actor: 'user' });
+    await request('POST', '/api/lieutenants', { name, id, prefix: BRIDGET.prefix, avatar, actor: 'user' });
     console.log('lieutenant "' + name + '" (' + id + ') registered');
   } catch (e) {
     if (!/HTTP 409/.test(e.message)) throw e;
