@@ -123,7 +123,7 @@ Per-workspace config lives in `.bridge-commander/config.json`:
 | `host` | `127.0.0.1` | bind address — see network exposure below |
 | `harness` | `claude` | default agent harness (`claude` \| `codex`) |
 | `voices` | — | UI text-to-speech voice filter |
-| `tts` | — | speak through an external TTS engine instead of the browser: `{"url": "http://127.0.0.1:8883", "lang": "pt", "voice": null, "params": {}}` (voxbench API). Absent = the browser's own voice; any engine failure falls back to it. The **browser** calls the engine, so the url must be reachable from wherever the board is open and the engine must allow that origin (CORS) |
+| `tts` | — | speak agent messages through an external TTS engine: `{"url": "http://127.0.0.1:8883", "lang": "pt", "voice": null, "params": {}}` (voxbench API). Absent = the board stays silent. The **server** reaches the engine: the browser talks to `/api/tts/*` on the board's own origin and the url only has to be reachable from the machine running the server (no CORS, no tailnet on the phone) |
 
 Env knobs (set on the server process):
 
@@ -141,6 +141,7 @@ Env knobs (set on the server process):
 | `BC_SEND_RETRIES` / `BC_SEND_SLEEP_MS` | `3` / `400` | verified-submit tuning for `harness.send` |
 | `BC_HOOK_TIMEOUT_MS` | `120000` | per-script timeout for workspace hooks, lifecycle and named alike |
 | `BC_TEARDOWN_TIMEOUT_MS` | `300000` / `60000` | timeout for a playbook's `teardown` command — 5 min at the handoff and archive (un-awaited), 60s at a rework restart (awaited inside `card start`); set, it overrides both |
+| `BC_TTS_IDLE_MS` | `20000` | how long the TTS passthrough waits for the next byte from the engine before hanging up — a gap between bytes, not a cap on the request |
 | `BC_SYSLOAD_MS` | `2000` | monitoring panel (⚙️ → machine load) sample interval; the sampler runs only while the panel is open |
 
 ### Hooks
