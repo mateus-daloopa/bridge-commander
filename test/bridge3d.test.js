@@ -1296,6 +1296,27 @@ test('GLYPHS is what the vendored sheet really carries — every weight of it', 
   }
 });
 
+test('the sheet puts type where the room was built for it, not where the generator likes', async () => {
+  // The trap that nearly shipped. uikit places a glyph at
+  // `(yoffset - (lineHeight - size)) / size` and NEVER reads `common.base`
+  // (ui/vendor/uikit/text/font.js) — so a regenerated atlas with a different
+  // baseline moves every line of type in the room and no test would see it.
+  // msdf-bmfont-xml's own baseline for Inter 4.1 came out 4 px above the sheet
+  // this replaced (measured: all 104 shared glyphs, identical xadvance), so
+  // the recipe in ui/vendor/README.md shifts yoffset and base by +4. These are
+  // the anchors that shift lands on.
+  const { inter } = await sheet();
+  for (const [w, f] of Object.entries(inter)) {
+    assert.strictEqual(f.info.size, 44, `${w}: em box moved`);
+    assert.strictEqual(f.common.lineHeight, 53, `${w}: line height moved`);
+    assert.strictEqual(f.common.base, 47, `${w}: baseline moved — every line in the room moves with it`);
+    const A = f.chars.find((c) => c.char === 'A');
+    assert.strictEqual(A.yoffset, 13, `${w}: 'A' sits at a different height than the room was laid out for`);
+  }
+  assert.strictEqual(inter.medium.chars.find((c) => c.char === 'A').xadvance, 31,
+    'the advance changed, so the 49-characters-a-line figure the panel is designed around is wrong');
+});
+
 test('the room spells Portuguese', async () => {
   // The whole point, in one assertion. `França` used to come back `Frana`.
   const { safe } = await type();
@@ -1341,6 +1362,17 @@ test('a card body is built out of markdown, not printed as markdown', async () =
   for (const kind of ['heading', 'paragraph', 'code', 'blockquote', 'list', 'hr', 'table', 'codespan', 'strong', 'em', 'link']) {
     assert.ok(new RegExp(`'${kind}'`).test(code), `md3d has no case for a ${kind}`);
   }
+  // Splitting a paragraph to words puts a gap between every fragment, and a
+  // gap between `seq` and its full stop reads as "seq .". The weld list is
+  // closing punctuation only — the double quote is deliberately NOT in it,
+  // because after an inline mark it almost always OPENS a phrase and the fold
+  // table collapses the curly quotes into the straight one, so nothing could
+  // tell the two apart. `**Bob**'s` welds; `**Note** "quoted"` must not.
+  const closers = /const CLOSERS = '([^']*)'/.exec(code);
+  assert.ok(closers, 'nothing welds punctuation back onto the word in front of it');
+  for (const ch of '.,;:!?)]}') assert.ok(closers[1].includes(ch), `${ch} is not welded`);
+  assert.ok(!closers[1].includes('"'), 'a double quote welds, so an opening quote eats its own space');
+
   // A fence keeps its line breaks, which takes BOTH halves: safeBlock keeps
   // them through the glyph filter, and whiteSpace 'pre' stops uikit collapsing
   // them again on the way to the atlas. uikit's default is 'normal', and
@@ -1356,10 +1388,17 @@ test('a card body is built out of markdown, not printed as markdown', async () =
   // A scroll container hands its children their natural height, and a child
   // that shrinks lands on top of the one above it — the failure that looks
   // like a font bug and is a flex bug. Every block md3d builds says so.
-  const shrink = code.match(/new Container\(\{/g) || [];
-  assert.ok(shrink.length >= 3, 'md3d builds no containers at all');
-  assert.ok(!/new Container\(\{(?![^}]*flexShrink: 0)[^}]*\}\)/.test(code.replace(/\n\s*/g, ' ')),
-    'a block in md3d can be shrunk by its scroll container');
+  const flat = code.replace(/\n\s*/g, ' ');
+  const boxes = flat.match(/new Container\(\{[^;]*?\}\)/g) || [];
+  assert.ok(boxes.length >= 3, 'md3d builds no containers at all');
+  for (const box of boxes) {
+    assert.match(box, /flexShrink:/, `a container in md3d never says whether it may shrink: ${box.slice(0, 60)}`);
+  }
+  // Two things give way in WIDTH inside a wrapping row — the inline codespan
+  // slab and the punctuation weld — and both are capped, or a backticked path
+  // longer than the panel pushes the row past its edge instead of wrapping.
+  assert.ok((flat.match(/flexShrink: 1, maxWidth: '100%'/g) || []).length >= 2,
+    'the inline slab and the weld row have to be capped where they give way');
 
   // And the card screen actually uses it.
   const board = fs.readFileSync(path.join(UI, 'board.js'), 'utf8');

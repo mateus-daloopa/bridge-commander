@@ -39,7 +39,7 @@ The evidence this is the right stack rather than a taste: Meta's own WebXR SDK f
 
   Every sheet `@pmndrs/msdfonts` ships — all eighteen fonts, checked as far as v1.0.75 — carries the same **104 glyphs**: ASCII plus `ÄÖÜäöüß`. Not one of `çãáàâéêíóôõú`. Because `safe()` deletes what the sheet cannot draw, `França` came out `Frana` and nothing warned. This sheet holds **172**: the same ASCII, plus the whole Latin-1 letter range `À`–`ÿ` and a handful of Latin-1 symbols. Still no emoji and no `…`, so `safe()` stays exactly where it is.
 
-  To regenerate — the atlas order decides `GLYPHS` in `kit.js`, so a rebuild means updating that string too, and `test/bridge3d.test.js` fails if the two drift:
+  To regenerate — the atlas order decides `GLYPHS` in `ui/js/bridge3d/type.js` (`kit.js` only re-exports it), so a rebuild means updating that string too, and `test/bridge3d.test.js` fails if the two drift:
 
   ```
   npm i msdf-bmfont-xml                                    # build-time only, nothing ships
@@ -50,6 +50,11 @@ The evidence this is the right stack rather than a taste: Meta's own WebXR SDK f
     msdf-bmfont -f json -o out/$w -s 44 -p 2 -r 4 -t msdf \
                 -m 512,512 --pot --square -i charset.txt extras/ttf/Inter-$w.ttf
   done
+  # then: shift every glyph's `yoffset` and `common.base` by +4. msdf-bmfont-xml's
+  # baseline for Inter 4.1 sits 4 px above the one the room's layout was built
+  # against, and uikit places type as (yoffset - (lineHeight - size)) / size and
+  # never reads `common.base` — so skipping this moves every line in the room up
+  # by 9% of the em box. test/bridge3d.test.js pins the anchor metrics.
   # then: PNG → lossless WebP (RGB, the alpha channel is unused), each as a data: URI in
   # pages[0], and all four weights emitted as { light, medium, "semi-bold", bold }. All
   # four, always: uikit's default family declares those exact keys and resolves the

@@ -11,10 +11,12 @@
 // never its HTML: tokens in, uikit nodes out, and no sanitizer anywhere near
 // the room because no string is ever parsed as markup.
 //
-// Every size is a fraction of the panel's own body type, in DEGREES at the
-// distance the panel stands, which is the only way a size is authored here.
-// Every block is `flexShrink: 0` for the reason in `panel.js` — a scrolling
-// column that shrinks its children stacks them on top of each other — and
+// Every size is authored in DEGREES at the distance the panel stands, which is
+// the only way a size is authored anywhere in this room. Every BLOCK is
+// `flexShrink: 0` for the reason in `panel.js` — a scrolling column that
+// shrinks its children stacks them on top of each other. The two things that
+// do give way are inline and give way in WIDTH, which is a different axis: the
+// codespan slab and the weld row, both capped at `maxWidth: '100%'`. And
 // everything is inert, because nothing in a card body is a target.
 //
 // The one place this deliberately refuses to be faithful is the TABLE. The
@@ -37,9 +39,27 @@ const HEAD = [W.TYPE.head, 1.75, 1.55, W.TYPE.body, W.TYPE.body, W.TYPE.body];
 const EM = 'semi-bold';
 const STRONG = 'bold';
 
+// A fragment that OPENS with one of these belongs to the word in front of it —
+// `seq`. is one thing and `seq` . is two. The double quote is deliberately not
+// here: after an inline mark it almost always opens a phrase, and the fold
+// table collapses the curly quotes into the straight one, so nothing here
+// could tell an opening quote from a closing one anyway.
+const CLOSERS = '.,;:!?)]}\'';
+
 export function addMarkdown(panel, source) {
   const md = new Md(panel.spec.distM);
-  for (const node of md.blocks(md.parse(source), 0, COL.text)) panel.addBlock(node);
+  // The guard covers the WALK, not only the lexer. `paint()` stamps itself
+  // before it builds, so a throw halfway through leaves the card empty AND
+  // every later refresh early-returning on the matching stamp — a card that
+  // never comes back until it is edited. Degrading to the raw source is worse
+  // prose and an infinitely better failure.
+  let nodes;
+  try {
+    nodes = md.blocks(tokens(source), 0, COL.text);
+  } catch {
+    nodes = [md.text(source, { block: true })];
+  }
+  for (const node of nodes) panel.addBlock(node);
   return panel;
 }
 
@@ -63,19 +83,18 @@ class Md {
     this.pad = W.sizeForArc(1.0, distM);
   }
 
-  parse(source) { return tokens(source); }
-
   size(deg) { return fontFor(deg, this.distM); }
 
   // `block` is for text whose shape is the content. Both halves of it are
   // needed and neither is obvious: `safeBlock` keeps the line breaks the
   // filter would otherwise eat, and `whiteSpace: 'pre'` stops uikit collapsing
   // them again — its default really is `normal`, and normal means collapse.
-  text(str, { deg = W.TYPE.body, color = COL.text, weight = undefined, block = false } = {}) {
+  text(str, { deg = W.TYPE.body, color = COL.text, weight = undefined, block = false, breakAll = false } = {}) {
     const t = new Text({
       text: block ? safeBlock(str) : safe(str),
       fontSize: this.size(deg), color, flexShrink: 0,
       ...(block ? { whiteSpace: 'pre' } : null),
+      ...(breakAll ? { wordBreak: 'break-all' } : null),
       ...(weight ? { fontWeight: weight } : null),
     });
     return inert(t);
@@ -176,15 +195,26 @@ class Md {
 
   // A fenced block, and the same box does duty for an inline `codespan` — the
   // tint is what says "this is literal" in both places.
+  //
+  // The inline one is the exception to `flexShrink: 0`, and it has to be: a
+  // backticked path is routinely longer than the panel is wide, and a rigid
+  // box holding an unbreakable word walks straight off the edge and gets
+  // clipped. It gives way in WIDTH inside a wrapping row — which is a
+  // different axis from the height a scroll column would steal — and breaks
+  // mid-word rather than overflowing. The fence keeps its rigid box.
   slab(code, { block = false, lang = '' } = {}) {
     const box = new Container({
-      flexDirection: 'column', flexShrink: 0,
+      flexDirection: 'column',
+      ...(block ? { flexShrink: 0 } : { flexShrink: 1, maxWidth: '100%' }),
       paddingX: cm(this.pad * 0.55), paddingY: cm(this.pad * (block ? 0.5 : 0.15)),
       borderRadius: cm(0.005),
       backgroundColor: COL.slab, backgroundOpacity: 1,
     });
     if (block && lang) box.add(this.text(lang, { deg: W.TYPE.meta, color: COL.faint }));
-    box.add(this.text(code, { deg: block ? W.TYPE.meta : W.TYPE.body, color: COL.text, block }));
+    box.add(this.text(code, {
+      deg: block ? W.TYPE.meta : W.TYPE.body, color: COL.text, block,
+      ...(block ? null : { breakAll: true }),
+    }));
     return inert(box);
   }
 
@@ -214,14 +244,38 @@ class Md {
       flexDirection: 'row', flexWrap: 'wrap', flexShrink: 0, alignItems: 'flex-end',
       gapColumn: this.size(deg) * 0.27, gapRow: this.size(deg) * 0.18,
     });
+    // Build the cells first, because the word that closes a phrase has to be
+    // welded to the one before it — the row's gap sits between every child,
+    // and a gap between `seq` and its full stop reads as `seq .`.
+    const cells = [];
     for (const r of flat) {
-      if (r.kind === 'break') { row.add(this.column({ width: '100%', height: 0 }, [])); continue; }
-      if (r.kind === 'code') { row.add(this.slab(r.str)); continue; }
-      for (const word of String(r.str).split(/\s+/)) {
-        if (word) row.add(this.text(word, r.style));
-      }
+      if (r.kind === 'break') { cells.push({ node: this.column({ width: '100%', height: 0 }, []) }); continue; }
+      if (r.kind === 'code') { cells.push({ node: this.slab(r.str) }); continue; }
+      const led = /^\s/.test(String(r.str));
+      const words = String(r.str).split(/\s+/).filter(Boolean);
+      words.forEach((w, i) => cells.push({
+        node: this.text(w, r.style),
+        glue: i === 0 && !led && CLOSERS.includes(w[0]),
+      }));
     }
+    const out = [];
+    for (const c of cells) {
+      if (c.glue && out.length) out.push(this.glued(out.pop(), c.node));
+      else out.push(c.node);
+    }
+    for (const n of out) row.add(n);
     return inert(row);
+  }
+
+  // Two cells that must read as one word. No gap between them, and it gives
+  // way in width for the same reason the inline slab does.
+  glued(a, b) {
+    const g = new Container({
+      flexDirection: 'row', alignItems: 'flex-end',
+      gap: 0, flexShrink: 1, maxWidth: '100%',
+    });
+    g.add(a); g.add(b);
+    return inert(g);
   }
 
   flatten(list, style, out) {

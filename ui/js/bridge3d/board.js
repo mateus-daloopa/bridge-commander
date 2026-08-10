@@ -625,7 +625,7 @@ export class CardPanel extends ChatPanel {
 }
 
 // "Your review" is the useful half of "👀 Your review", and the emoji is not in
-// the font's 104-glyph atlas anyway.
+// the font's atlas anyway — it carries 172 glyphs and not one emoji.
 function shortColumn(title) {
   return String(title || '').replace(/^[^\w]+/, '').trim();
 }
