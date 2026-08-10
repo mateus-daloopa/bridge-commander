@@ -400,3 +400,27 @@ test('turning the voice off is about the whole board, and the backlog goes too',
   assert.deepEqual(asked, ['monica fala'],
     'silence means silence — rex is not spoken a moment after the room was told to be quiet');
 });
+
+test('a voice cut off after its stream ended does not hold the next one for the audio', async () => {
+  // The normal case, and the one the earlier test could not reach: the engine
+  // is faster than realtime, so the request is over in a microtask and ten
+  // seconds of Monica are already scheduled and playing. Pressing her at that
+  // moment must let Rex speak now, not when she would have finished.
+  const tenSeconds = () => Promise.resolve(new Response(new ReadableStream({
+    start(c) { c.enqueue(new Uint8Array(480000)); c.close(); },
+  }), { status: 200, headers: { 'x-sample-rate': '24000' } }));
+  answer = (input) => (input === 'monica fala' ? tenSeconds() : said());
+
+  speak('monica fala', 'monica');
+  speak('rex responde', 'rex');
+  await until(() => wiredTo.length >= 1, 'her audio to be scheduled');
+  await tick(20);
+  assert.deepEqual(asked, ['monica fala'],
+    'rex is not asked for while she is still being heard — that is the queue working');
+
+  skipSpeaking();
+  assert.notEqual(speakingAuthor(), 'monica',
+    'she is still named as the one talking, so a press on anybody else does nothing');
+  await until(() => asked.includes('rex responde'),
+    'rex to be spoken the moment she was cut off, rather than after ten seconds of dead air');
+});

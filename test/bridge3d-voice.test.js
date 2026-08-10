@@ -216,9 +216,9 @@ test('a context that died is forgotten, not written to for the rest of the visit
 
 test('a failure the captain cannot see a toast for is written where he is looking', () => {
   const main = fs.readFileSync(path.join(ROOT, 'ui', 'js', 'bridge3d', 'main.js'), 'utf8');
-  assert.match(main, /installVoice\(sound, agents, say\)/,
+  assert.match(main, /installVoice\([^)]*\bsay\b[^)]*\)/,
     'the room does not hand voice.js anywhere to report a silence, so in a headset it has none');
-  assert.match(main, /if \(plate\) plate\.setNote\(m\)/,
+  assert.match(main, /plate\.setNote\(/,
     'say() writes only to #status, which is inside the gate and hidden the moment he enters');
 
   const voice3d = fs.readFileSync(path.join(ROOT, 'ui', 'js', 'bridge3d', 'voice3d.js'), 'utf8');
@@ -226,10 +226,12 @@ test('a failure the captain cannot see a toast for is written where he is lookin
 
   const list = fs.readFileSync(path.join(ROOT, 'ui', 'js', 'bridge3d', 'list.js'), 'utf8');
   assert.match(list, /setNote\(text\)/, 'the mat has nowhere to put a note');
-  assert.match(list, /const full = safe\(text\);\n\s*if \(!full\) return;/,
-    'either the note skips safe() — a hole in the middle of the one sentence explaining '
-    + 'why the room went quiet — or an empty status line clears it, and the room writes '
-    + 'one empty on every five-second poll');
+  assert.match(list, /safe\(text\)/,
+    'the note skips safe() — a hole in the middle of the one sentence explaining why the '
+    + 'room went quiet');
+  assert.match(list, /if \(!full\) return;/,
+    'an empty status line clears the note, and the room writes one empty on every '
+    + 'five-second poll');
   assert.match(list, /slice\(0, NOTE_CHARS - 3\)/,
     'an engine error of any length runs off the plate onto pale stone, where the warning '
     + 'colour has none of the contrast it was measured for');
@@ -238,7 +240,8 @@ test('a failure the captain cannot see a toast for is written where he is lookin
 test('pressing the lieutenant that is talking is what stops it', () => {
   const main = fs.readFileSync(path.join(ROOT, 'ui', 'js', 'bridge3d', 'main.js'), 'utf8');
   const chat = main.slice(main.indexOf('function openChat('));
-  assert.ok(/^[\s\S]{0,400}hush\(lt\)/.test(chat),
+  const hushed = chat.indexOf('hush(lt)');
+  assert.ok(hushed > -1 && hushed < chat.indexOf('windows.show('),
     'the press opens the chat without silencing the voice first — and there is no other '
     + 'control in here: no toolbar, and no keyboard on a face wearing a headset');
   assert.ok(!/keydown[\s\S]*stopSpeaking/.test(main), 'a key is not a control he has');

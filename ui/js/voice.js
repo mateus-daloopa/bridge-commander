@@ -160,9 +160,13 @@ export function stripForSpeech(text) {
 //
 // Skipping is the other verb, and the difference is who the gesture is aimed at.
 // Turning the voice off is a statement about the whole board, so it takes the
-// backlog with it. A press on one lieutenant's berth in the room is aimed at one
-// person — it must not swallow a reply from somebody else he has not heard yet —
-// so it cuts the utterance in flight and the queue carries straight on.
+// backlog with it: silence means silence. A press on one lieutenant's berth in
+// the room is aimed at one person, so it abandons the utterance in flight and
+// nothing else — including its TAIL, the stretch after the stream has ended when
+// the buffers are still being heard, which on an engine faster than realtime is
+// most of the message. The next one follows immediately; a reply from somebody
+// else he has not heard yet was never his to throw away.
+//
 // WHERE the voice comes from, if anywhere. A message on a flat board comes from
 // the board, so this is null there and the sound leaves through the speakers as
 // it always has. In the room it is not: the lieutenant who said it is standing
@@ -175,7 +179,7 @@ export function setSpeechRoute(fn) { routeFor = fn || null; }
 const QUEUE_MAX = 3;      // waiting messages, NOT counting the one being spoken
 const queue = [];         // [{plain, who, voice}], oldest first
 let draining = false;     // a message is being spoken, or is about to be
-let session = 0;          // bumped by stopSpeaking: a drain past its session is stale
+let session = 0;          // bumped by both stops: a drain past its session is stale
 
 // Who is talking right now, or null. In the room this is the difference between
 // "something is speaking" and "THAT one is speaking": pressing the lieutenant
@@ -237,6 +241,18 @@ function tailMs(said, heardAt) {
   return Math.max(0, (said.bytes / 2 / (said.rate || 24000)) * 1000 - (performance.now() - heardAt));
 }
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// And the way out of that wait before it is over. It is armed from the byte
+// length the moment the stream ends, so by the time somebody wants the voice to
+// stop the loop is already inside it and no flag read afterwards can shorten it
+// — the guards around the wait are all read before it starts. Either stop
+// resolves this instead, and the loop carries on now rather than when the audio
+// he already silenced would have finished.
+let tailCut = null;
+function tail(ms) {
+  return Promise.race([wait(ms), new Promise((r) => { tailCut = r; })])
+    .then(() => { tailCut = null; });
+}
+function cutTail() { if (tailCut) { const r = tailCut; tailCut = null; r(); } }
 
 async function drain() {
   draining = true;
@@ -257,7 +273,7 @@ async function drain() {
           route: (routeFor && routeFor(who)) || undefined,
           onFirstSound: () => { heardAt = performance.now(); },
         });
-        if (my === session) await wait(tailMs(said, heardAt));
+        if (my === session) await tail(tailMs(said, heardAt));
       } catch (err) {
         // One message lost, said out loud — and the queue moves on. A refusal in
         // the middle of a burst cannot take the rest of the burst with it.
@@ -277,15 +293,22 @@ export function stopSpeaking() {
   session++;              // whatever the engine still owes us is stale
   queue.length = 0;       // stop stops what is waiting too, not just what is heard
   speaking = null;        // and nobody is talking, as of now
+  cutTail();
   engineStop();
 }
 // Cut the one in flight; the queue is untouched and the next message follows it
-// out. Nothing else is needed: speech.js's stop() aborts the request and its
-// speak() resolves with stopped, tailMs is 0 for a stopped utterance, and the
-// drain loop is still in its own session — so it takes the next one straight
-// away rather than treating the cut as the end of everything.
+// out. The TAIL is the part that takes the work: engineStop() kills the buffers
+// already scheduled, but the wait that was letting them finish is armed from the
+// message's byte length the moment the stream ends and cannot be shortened by
+// anything read after it starts — so cutTail() ends it, and the room is not
+// sitting in dead air until audio he already silenced would have run out. The
+// session bump is what keeps a message he cut from toasting a failure it was
+// never going to have; the loop turns on `queue.length`, so the backlog stays.
 export function skipSpeaking() {
+  session++;
+  speaking = null;        // he pressed her: pressing anybody else has to work now
   manualSpeakingKey = null;
+  cutTail();
   engineStop();
 }
 
