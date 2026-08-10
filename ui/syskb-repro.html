@@ -1,0 +1,152 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>syskb repro — does focus() kill Quest Browser?</title>
+
+<!--
+  ui/syskb-repro.html — the smallest page that asks the one question (MNC-87).
+
+  The room's system keyboard killed the browser PROCESS on a real headset, on
+  the press, before the keyboard appeared. This page has no room in it: no
+  three.js, no uikit, no modules, no imports, no build. A canvas, an immersive
+  session that clears it to a colour, and one call to `focus()` on one input.
+
+  If this page kills the browser, the room is exonerated and there is a 40-line
+  repro to send Meta. If it does not, the bug is in what the room does around
+  the focus and there is somewhere to look. Either answer is worth the thirty
+  seconds of headset time it costs, which is all we get.
+
+  Two ways in, because "focused from inside an event handler" and "focused from
+  nowhere in particular" are different questions and both were on the list:
+
+    ?via=select   (default) pull the trigger inside the session -> focus().
+                  This is what the room does: our press arrives on `select`.
+    ?via=timer    focus() fires 6 seconds after the session starts, from a
+                  plain setTimeout with no user gesture behind it.
+
+  The trail is written to localStorage a line at a time and printed on THIS page
+  the next time it loads — the same trick as the room's gate, for the same
+  reason: whatever kills the process takes every console with it, so the log has
+  to be on disk before the thing it is logging happens. A trail that ends at
+  "focusing" means the focus() call itself is fatal.
+-->
+
+<style>
+  html, body { margin: 0; height: 100%; background: #05070b; color: #c8d2e0;
+               font: 15px/1.6 ui-monospace, "DejaVu Sans Mono", monospace; }
+  body { padding: 20px; box-sizing: border-box; }
+  canvas { position: fixed; inset: 0; z-index: -1; }
+  button { font: 600 16px ui-monospace, monospace; color: #05070b; background: #4cc2ff;
+           border: 0; border-radius: 8px; padding: 12px 26px; cursor: pointer; }
+  #say { margin-top: 12px; color: #8ea2c0; }
+  #trail { margin-top: 16px; color: #d8a05b; white-space: pre-wrap; font-size: 12px; }
+  a { color: #4cc2ff; }
+</style>
+
+<h3>does <code>focus()</code> kill Quest Browser inside a session?</h3>
+<p id="how"></p>
+<button id="go">enter</button>
+<div id="say">…</div>
+<div id="trail"></div>
+<p><a href="?via=select">?via=select</a> · <a href="?via=timer">?via=timer</a> ·
+   <a href="?clear=1">clear the trail</a></p>
+
+<script>
+// ---- the trail, which has to outlive the crash -----------------------------
+const KEY = 'syskb-repro';
+const read = () => { try { return JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { return []; } };
+function crumb(line) {
+  const at = Math.round(performance.now());
+  try { localStorage.setItem(KEY, JSON.stringify([...read(), at + 'ms ' + line].slice(-40))); } catch (e) { /* full */ }
+}
+
+const q = new URLSearchParams(location.search);
+const VIA = q.get('via') === 'timer' ? 'timer' : 'select';
+const say = (m) => { document.getElementById('say').textContent = m; };
+
+if (q.get('clear') === '1') { try { localStorage.removeItem(KEY); } catch (e) { /* blocked */ } }
+
+document.getElementById('how').textContent = VIA === 'timer'
+  ? 'enter, then wait — focus() fires 6 seconds in, from a timer, with no gesture behind it.'
+  : 'enter, then pull the trigger — focus() fires from inside the session\'s select event.';
+
+// What the LAST run got to before it stopped. Where it stops is the finding.
+const trail = read();
+if (trail.length) document.getElementById('trail').textContent = 'last run —\n' + trail.join('\n');
+
+window.addEventListener('error', (e) => crumb('ERROR ' + ((e && e.message) || e)));
+window.addEventListener('unhandledrejection', (e) => crumb('REJECTED ' + ((e && e.reason && e.reason.message) || '?')));
+
+// ---- the input, which is the whole experiment ------------------------------
+//
+// In the viewport rather than off-screen, because an off-screen field is the
+// pitfall Meta's own doc names — and this page is asking about focus(), so it
+// must not also be asking about that.
+const input = document.createElement('input');
+input.type = 'text';
+input.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;padding:0;border:0;'
+  + 'margin:0;opacity:0;background:transparent;color:transparent;pointer-events:none;';
+input.addEventListener('input', () => crumb('input ' + JSON.stringify(input.value)));
+input.addEventListener('blur', () => crumb('blur'));
+document.body.appendChild(input);
+
+function raise(why) {
+  crumb('focusing (' + why + ')');
+  input.focus();
+  crumb('focused, activeElement is the input: ' + (document.activeElement === input));
+  lit = true;
+}
+
+// ---- an immersive session and nothing else ---------------------------------
+const canvas = document.createElement('canvas');
+document.body.appendChild(canvas);
+const gl = canvas.getContext('webgl2', { xrCompatible: true }) || canvas.getContext('webgl', { xrCompatible: true });
+
+let lit = false;   // green once focus() has been called, so the headset shows state
+
+document.getElementById('go').addEventListener('click', async () => {
+  try { localStorage.removeItem(KEY); } catch (e) { /* blocked */ }
+  crumb('enter, via=' + VIA + ', ua=' + navigator.userAgent);
+  if (!navigator.xr) return say('no WebXR in this browser');
+  let session;
+  try {
+    session = await navigator.xr.requestSession('immersive-vr');
+  } catch (e) { return say('the headset refused the session: ' + ((e && e.message) || e)); }
+
+  crumb('session started, isSystemKeyboardSupported='
+    + JSON.stringify(session.isSystemKeyboardSupported)
+    + ' (' + typeof session.isSystemKeyboardSupported + ')');
+  say('in the session — ' + (VIA === 'timer' ? 'focus() in 6s' : 'pull the trigger'));
+
+  await gl.makeXRCompatible();
+  session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+  const space = await session.requestReferenceSpace('local');
+
+  session.addEventListener('visibilitychange', () => crumb('visibility=' + session.visibilityState));
+  session.addEventListener('end', () => { crumb('session END'); say('the session ended — reload to read the trail'); });
+  if (VIA === 'select') session.addEventListener('select', () => raise('select'));
+  else setTimeout(() => raise('timer'), 6000);
+
+  // One line a second saying the loop is still turning, in a slot of its own so
+  // it cannot push the interesting lines out of the trail.
+  let pulsed = 0;
+  session.requestAnimationFrame(function frame(t, xrframe) {
+    session.requestAnimationFrame(frame);
+    const layer = session.renderState.baseLayer;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+    // Blue before the focus, green after it: state he can read without leaving.
+    if (lit) gl.clearColor(0.10, 0.45, 0.22, 1); else gl.clearColor(0.06, 0.16, 0.30, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    if (t - pulsed > 1000) {
+      pulsed = t;
+      try { localStorage.setItem(KEY + '-beat', 'loop alive at ' + Math.round(t) + 'ms, visibility=' + session.visibilityState); } catch (e) { /* full */ }
+    }
+    // `xrframe` is taken and unused on purpose: the pose is not what is being
+    // asked about, and asking for one would add a way for this to fail that has
+    // nothing to do with the question.
+  });
+});
+
+const beat = (() => { try { return localStorage.getItem(KEY + '-beat'); } catch (e) { return null; } })();
+if (beat && trail.length) document.getElementById('trail').textContent += '\n' + beat;
+</script>

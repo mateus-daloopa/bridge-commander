@@ -1,27 +1,101 @@
 // syskb.js — the Quest system keyboard, raised from inside the session.
 //
-// **The room's old note said focusing a DOM input kills the session. It is
-// wrong, and the correction matters more than the bug did**: the system
-// keyboard is supported inside an immersive session from Quest Browser 26.1,
-// advertised per-session as `XRSession.isSystemKeyboardSupported`, and the
-// session survives it — visibility goes to `visible-blurred` while it is up and
-// back to `visible` when it is dismissed. Meta documents the whole thing:
+// ============================================================================
+// THIS IS OFF, AND IT IS OFF BECAUSE IT KILLED THE BROWSER (MNC-87)
+// ============================================================================
+//
+// On the captain's real headset, pressing a composer **took the browser process
+// down** and dumped him to the Quest home menu. Not a session end, not a frozen
+// room — the process. Which is why there is nothing in the crash trail for the
+// fatal attempt and never will be: no JavaScript handler of ours runs after the
+// process it lives in has gone.
+//
+// What the device told us, and it is all we have:
+//
+//   · it dies **on the press**. The keyboard never appears, the caret never
+//     blinks, so nothing downstream of `focus()` is implicated — not the
+//     `input` events, not the seam, not the visibility change;
+//   · the same raise path — press, focus, input, blur — runs **clean in real
+//     Chrome inside a genuine emulated immersive session**. It is not a
+//     JavaScript bug in this file;
+//   · he has no headset again for a while, so nothing here can be confirmed.
+//
+// **Read that as a browser bug, not a capability gap.** Quest Browser is on 42.x
+// as of January 2026 and 26.1 — Meta's stated minimum — is from around 2022, so
+// unless his headset has gone three years without an update he was far past the
+// floor. The version guard below is cheap and correct and it is NOT what saved
+// him: what saved him is that the whole thing is off by default.
+//
+// ---- what the next person needs --------------------------------------------
+//
+// **Run `ui/syskb-repro.html` first, and probably instead of anything here.** It
+// is a standalone page — no room, no three.js, no uikit, no modules — that opens
+// an immersive session and focuses one input. Thirty seconds of headset time
+// splits the question in two:
+//
+//   · it kills the browser  -> this file is exonerated, and that page is a
+//     40-line repro to send Meta;
+//   · it does not           -> the bug is in what the ROOM does around the
+//     focus, and there is somewhere to look at last.
+//
+// `?via=select` focuses from inside the session's select event, which is what
+// the room does; `?via=timer` focuses six seconds in with no gesture behind it.
+//
+// Then two things that can only come off the device:
+//
+//   1. **his Quest Browser version** — Settings → System → About. It settles
+//      whether this is every 42.x or something about his headset;
+//   2. **the gate's orange block after a `?syskb=1` attempt.** `?syskb=1` is the
+//      only way in; the room is a no-op without it. The trail is written to
+//      localStorage a line at a time and printed on the NEXT load, so a crash
+//      that leaves the trail ending at `raise: ... focusing` says the `focus()`
+//      call itself is fatal, and one that reaches `raise: focused` says the
+//      damage lands afterwards. An EMPTY block after a real crash is itself the
+//      finding: the process died inside `focus()`.
+//
+// Nobody has published this crash. Quest Browser dying in WebXR is thoroughly
+// documented by other people — on `xrSession.end()` and on navigating away (32.1),
+// on entering WebXR with the experiments flag (33.0), on hand-tracking handover,
+// and a render-init regression in the July 2026 OS — but not one report of a
+// crash on FOCUS inside a session, in Meta's forums, the immersive-web issues,
+// the Babylon or three.js forums. The nearest miss is Babylon.js forum 5434,
+// where laser-pointing an input in VR froze Oculus Browser because Babylon's GUI
+// raised a flat-page prompt under the live immersive layer: same family,
+// different mechanism, fixed years ago in Babylon rather than in the browser.
+// The full search is written up on card MNC-87.
+//
+// **Do not try to make this work blind.** Everything below is kept because it is
+// correct as far as anyone could test it, and because the day a headset is
+// available again the experiment should take a minute rather than a night.
+//
+// ---- and what the doc says, which the device did not honour ------------------
+//
+// The system keyboard is documented as supported inside an immersive session
+// from Quest Browser 26.1, advertised per-session as
+// `XRSession.isSystemKeyboardSupported`, with the session surviving it —
+// visibility goes to `visible-blurred` while it is up and back to `visible` when
+// it is dismissed. Meta documents the whole thing:
 // https://developers.meta.com/horizon/documentation/web/webxr-keyboard/
 //
-// That is worth having for one reason above all the others: **the system
-// keyboard dictates.** Nothing we could draw ourselves does.
+// It was worth having for one reason above all the others: **the system keyboard
+// dictates.** Nothing we could draw ourselves does. That is still true, and it
+// is why this file is switched off rather than deleted.
 //
-// ---- what the old crash actually was ---------------------------------------
+// ---- the off-screen element, which is a SECOND bug -------------------------
 //
-// Not `focus()`. The element. uikit's hidden input is parked at
-// `left: -1000vw` (`ui/vendor/uikit/text/input/hidden-input.js`), and that is
-// the one pitfall the doc calls out by name: "when appended to an off-screen
-// location, like outside the underlying viewport, the web page scrolls to the
-// text field when the user types." A flat page yanked a thousand viewport
-// widths sideways under a live immersive layer is a different bug with the same
-// symptom, and it is still a bug. So this element sits IN the viewport — one
-// transparent pixel in the corner — and uikit's `Input` stays banned, now for a
-// reason we can point at rather than a theory.
+// This file was written believing the room's old crash was the element rather
+// than `focus()`. The device has since said `focus()` is fatal too, so read this
+// as one hazard of two and not as the explanation of anything.
+//
+// uikit's hidden input is parked at `left: -1000vw`
+// (`ui/vendor/uikit/text/input/hidden-input.js`), and that is the one pitfall
+// the doc calls out by name: "when appended to an off-screen location, like
+// outside the underlying viewport, the web page scrolls to the text field when
+// the user types." A flat page yanked a thousand viewport widths sideways under
+// a live immersive layer is a real bug on its own. So this element sits IN the
+// viewport — one transparent pixel in the corner — and uikit's `Input` stays
+// banned. That much is still worth keeping whatever the browser turns out to be
+// doing.
 //
 // ---- and how it behaves ------------------------------------------------------
 //
@@ -48,6 +122,26 @@ const STYLE = 'position:fixed;left:0;top:0;width:1px;height:1px;padding:0;border
 // test passes `{ enabled: true }` so the mechanism below stays exercised while
 // it is switched off in the headset.
 const ENABLED = false;
+
+// ---- the version floor -------------------------------------------------------
+//
+// Meta's stated minimum is Quest Browser 26.1, and this refuses to raise below
+// it — or on any user agent with no readable version at all, which is every
+// browser that is not Quest Browser.
+//
+// It is a belt on top of `isSystemKeyboardSupported` and it is almost certainly
+// not what the captain needed: Quest Browser is on 42.x as of January 2026 and
+// 26.1 is from around 2022, so his headset was far past the floor unless it has
+// gone three years without an update. Kept because it is cheap and correct, not
+// because it is the fix. **The fix is that this is off by default.**
+const MIN = [26, 1];
+
+export function questBrowserAtLeast(ua, min = MIN) {
+  const m = /OculusBrowser\/(\d+)\.(\d+)/.exec(String(ua || ''));
+  if (!m) return false;
+  const [major, minor] = [Number(m[1]), Number(m[2])];
+  return major > min[0] || (major === min[0] && minor >= min[1]);
+}
 
 // ---- crumbs -----------------------------------------------------------------
 //
@@ -92,9 +186,11 @@ export function clearCrumbs() {
 }
 
 export class SystemKeyboard {
-  constructor(doc = typeof document === 'undefined' ? null : document, { enabled = ENABLED } = {}) {
+  constructor(doc = typeof document === 'undefined' ? null : document, { enabled = ENABLED, ua = null } = {}) {
     this.doc = doc;
     this.enabled = enabled;
+    // Read once and kept, so a test can hand in a browser instead of being one.
+    this.ua = ua == null ? (typeof navigator === 'undefined' ? '' : navigator.userAgent) : ua;
     this.session = null;
     this.el = null;
     this.composer = null;
@@ -119,7 +215,8 @@ export class SystemKeyboard {
         + ' (' + typeof this.session.isSystemKeyboardSupported + ')'
         + ' enabled=' + this.enabled
         + ' visibility=' + this.session.visibilityState
-        + ' ua=' + ((typeof navigator === 'undefined' ? '' : navigator.userAgent) || '?'));
+        + ' version-ok=' + questBrowserAtLeast(this.ua)
+        + ' ua=' + (this.ua || '?'));
     }
     if (!this.supported()) return this;
     const el = this.doc.createElement('input');
@@ -152,19 +249,20 @@ export class SystemKeyboard {
     return this;
   }
 
-  // False on a desk, on an older browser, and on any session that does not
-  // advertise it — and then every path here is a no-op and the room behaves
-  // exactly as it did: the bluetooth keyboard, and nothing else.
+  // Three conditions, and the FIRST one is the one that matters: this is off
+  // (MNC-87 — raising it killed the browser process on a real headset), and only
+  // `?syskb=1` turns it on. With it off `attach` never builds the field, so
+  // `raise`, `driving`, `dismiss` and `sync` are all no-ops and every composer
+  // behaves exactly as it did before syskb.js landed.
   //
-  // DISABLED (MNC-87). It is false on a real headset too, right now, because
-  // raising the keyboard there takes the room down and a room he cannot use is
-  // worse than a room without dictation. With this off `attach` never builds the
-  // field, so `raise`, `driving`, `dismiss` and `sync` are all no-ops and every
-  // composer behaves as it did before syskb.js landed. Flip ENABLED back on
-  // once the crash is understood — everything below is still here and still
-  // tested.
+  // The other two are the guard in front of it for the day it comes back on: the
+  // session has to advertise the keyboard, AND the user agent has to read as
+  // Quest Browser 26.1 or later. An unreadable version never raises. That floor
+  // is cheap and correct and it would not have saved him — see MIN above.
   supported() {
-    return this.enabled && !!(this.doc && this.session && this.session.isSystemKeyboardSupported);
+    return this.enabled
+      && !!(this.doc && this.session && this.session.isSystemKeyboardSupported)
+      && questBrowserAtLeast(this.ua);
   }
 
   // Is the DOM field the thing carrying his typing right now? While it is, the

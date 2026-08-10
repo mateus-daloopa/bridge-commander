@@ -828,6 +828,12 @@ test('only the system keyboard focuses anything, and its field is in the viewpor
 // system keyboard and a paired bluetooth keyboard both do to a focused field:
 // set the value and fire `input`. There are no key events to fake, because the
 // system keyboard does not send any — that is the whole shape of the thing.
+// A Quest Browser well past Meta's 26.1 floor — what his headset almost
+// certainly was when it died. The tests below are about the mechanism, so they
+// hand this in rather than being a browser.
+const QUEST = 'Mozilla/5.0 (X11; Linux x86_64; Quest 3) AppleWebKit/537.36 '
+  + '(KHTML, like Gecko) OculusBrowser/42.0.0.1.1.1 Chrome/126.0.6478.122 VR Safari/537.36';
+
 function fakeDom() {
   const win = { scrollX: 0, scrollY: 0, scrollTo(x, y) { win.scrollX = x; win.scrollY = y; } };
   const doc = {
@@ -866,7 +872,7 @@ test('the system keyboard drives the composer, and never types a letter twice', 
   // what it was — bluetooth through the window, no element, no half-raised
   // anything.
   const off = fakeDom();
-  const quiet = new SystemKeyboard(off.doc, { enabled: true });
+  const quiet = new SystemKeyboard(off.doc, { enabled: true, ua: QUEST });
   setKeyboard(quiet);
   const flat = new Composer();
   flat.take();
@@ -881,7 +887,7 @@ test('the system keyboard drives the composer, and never types a letter twice', 
 
   // ---- and one that does ----------------------------------------------------
   const { doc, win } = fakeDom();
-  const kb = new SystemKeyboard(doc, { enabled: true });
+  const kb = new SystemKeyboard(doc, { enabled: true, ua: QUEST });
   setKeyboard(kb);
   kb.attach({ isSystemKeyboardSupported: true });
   assert.equal(doc.body.children.length, 1, 'the session started and no field was built');
@@ -985,7 +991,7 @@ test('the keyboard survives a first backspace, an empty field, and the keys movi
   // that first shorter value as an overwrite pastes the whole sentence back in
   // front of the edit, and it stays wrong for the rest of the showing.
   const { doc } = fakeDom();
-  const kb = new SystemKeyboard(doc, { enabled: true });
+  const kb = new SystemKeyboard(doc, { enabled: true, ua: QUEST });
   setKeyboard(kb);
   kb.attach({ isSystemKeyboardSupported: true });
   const el = doc.body.children[0];
@@ -1048,7 +1054,7 @@ test('the room gets the system keyboard switched off (MNC-87)', async () => {
   // It crashes a real headset. Until that is understood, the room's own
   // SystemKeyboard — built with no options, the way main.js builds it — must
   // stay a no-op even on a session that advertises support. The tests above
-  // pass `{ enabled: true }` to keep the mechanism itself exercised.
+  // pass `{ enabled: true, ua: QUEST }` to keep the mechanism itself exercised.
   const { SystemKeyboard } = await load('syskb.js');
   const { doc } = fakeDom();
   const kb = new SystemKeyboard(doc);
@@ -1056,6 +1062,32 @@ test('the room gets the system keyboard switched off (MNC-87)', async () => {
   assert.equal(doc.body.children.length, 0, 'the room built the field the headset crashes on');
   assert.equal(kb.raise({ value: 'olá' }), false, 'pressing a composer still raises the keyboard');
   assert.equal(kb.driving(), false);
+});
+
+test('the raise path refuses a browser below Meta\'s 26.1 floor, and any it cannot read', async () => {
+  // A belt on top of `isSystemKeyboardSupported`, not the fix — his browser was
+  // almost certainly on 42.x, far past this. It is here because a browser that
+  // advertises a capability it does not have is exactly what a crash on the
+  // press looks like, and refusing to guess is free.
+  const { SystemKeyboard, questBrowserAtLeast } = await load('syskb.js');
+  assert.equal(questBrowserAtLeast(QUEST), true, '42.x was refused');
+  assert.equal(questBrowserAtLeast('OculusBrowser/26.1.0.1'), true, 'the floor itself was refused');
+  assert.equal(questBrowserAtLeast('OculusBrowser/27.0.0.1'), true);
+  assert.equal(questBrowserAtLeast('OculusBrowser/26.0.9.9'), false, 'a build below the floor got through');
+  assert.equal(questBrowserAtLeast('OculusBrowser/25.9.9.9'), false);
+  // No version to read is not permission to guess — and that is every browser
+  // that is not Quest Browser, including whatever ships the day the token
+  // changes name.
+  assert.equal(questBrowserAtLeast('Chrome/126.0.6478.122'), false);
+  assert.equal(questBrowserAtLeast(''), false);
+  assert.equal(questBrowserAtLeast(undefined), false);
+
+  // And it is wired into the guard, not just exported beside it.
+  const { doc } = fakeDom();
+  const old = new SystemKeyboard(doc, { enabled: true, ua: 'OculusBrowser/25.0.0.1' });
+  old.attach({ isSystemKeyboardSupported: true });
+  assert.equal(doc.body.children.length, 0, 'an old browser that claims support still got a field');
+  assert.equal(old.raise({ value: '' }), false);
 });
 
 // ---- the old room is gone --------------------------------------------------
