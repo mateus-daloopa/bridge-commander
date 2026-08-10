@@ -1,7 +1,7 @@
 # Bridge Commander
 
 <p align="center">
-  <a href="https://youtu.be/CfJs03Jyum0">
+  <a href="https://youtu.be/lewm5_2LiNs">
     <img src="https://github.com/user-attachments/assets/048b00c1-bae8-4a49-aa7c-4ae8f0d8656c" width="420" alt="Watch the video">
   </a>
 </p>
@@ -24,94 +24,20 @@ One skill:
 npx skills add tonylampada/bridge-commander -g -y
 ```
 
-That is the whole install. The rest happens in the terminal you already have.
+That's it. The rest happens in the terminal you already have.
 
 ## Start
 
 - Make an empty folder (e.g. `myfleet`) and start `claude` in it
+- (Recommended) Set permissions mode to auto
 - `/bridge-commander`
 - Open the board URL it prints (default `http://localhost:4780/`)
 
 **Bridget** is already there with a message waiting. She's your first lieutenant, and she does the
-rest of the setup with you — the two optional tools, your first repo, and a short checklist that
-runs as real cards on the board.
+rest of the setup with you.
 
-You need `tmux` and `git` on the machine (your agent will offer to install `tmux` if it is
-missing). You never have to use tmux yourself.
-
-Two things worth knowing before you start, because they are the only ways a first run stops early:
-
-- **Run `claude` once by hand, inside the workspace folder**, if this machine has never run it.
-  It has setup screens a spawned session cannot answer for you — a theme picker, a login, and a
-  trust question about that specific folder (which is why running it in your home directory is not
-  enough).
-- **Not as root.** Claude Code refuses `--dangerously-skip-permissions` as root, so a lieutenant
-  cannot start there. Use a normal user (a throwaway container can pass `--allow-root`, and the
-  tool will tell you what that costs — and that anything you then run by hand needs `IS_SANDBOX=1`
-  in front of it). If you need to install Claude Code as that user,
-  `curl -fsSL https://claude.ai/install.sh | bash` puts it in `~/.local/bin` without root.
-
-## Board views
-
-The board region has three modes, toggled next to the filter (▦ / ☰ / 🧊):
-
-- **▦ board** — the kanban, as always.
-- **☰ table** — every live card as a sortable row (status, owner, labels, PRs,
-  activity…); same cards, same filters, denser reading.
-- **🧊 archived** — a read-only browser over the archive (the append-only log of
-  frozen card snapshots), newest first, paged in on demand. Clicking a row opens
-  the regular card detail — body, timeline, frozen thread — where **unarchive**
-  restores the card to the live board.
-
-Filtering is one shared control across all three: the topbar text input plus the
-funnel popup (status / type / owner / label / updated — every dimension
-multi-select, OR within a dimension, AND across). Clicking a label or owner
-anywhere toggles it as a filter chip; the funnel badge counts what's active.
-
-### UI dev playground
-
-`node dev/ui-server.js` (default `127.0.0.1:4790`, `--port`/`--host` flags)
-serves the real `ui/` against an in-memory fixture board from `dev/fixtures/` —
-every endpoint faked, writes mutate and re-broadcast, nothing persists. Iterate
-on the UI with realistic gnarly states (dead lieutenants, giant cards, a
-paginated archive) without touching a live workspace.
-
-## Playbooks — how you ask for work
-
-The brief a worker is launched with is rendered from a markdown file you own, in
-`.bridge-commander/playbooks/`. One file per playbook, and the file name is its id:
-
-| playbook | is |
-|---|---|
-| `default` | implement, commit, ship it the way the project allows |
-| `no-mistakes` | the same, behind a review-and-CI gate |
-| `investigation` | no branch, no PR — a written report |
-
-Every card points at one (the dropdown in the new-card modal, `--playbook <id>` on the CLI), and
-`card start` renders it against the card **as it stands at that moment** — title, body, thread
-and attributes, through `{{CARD_TITLE}}`, `{{TASK}}`, `{{THREAD}}`, `{{ATTR_<NAME>}}` and the
-rest, all listed in the folder's own README. Sharpen the body a second before starting and the
-worker reads the sharpened one.
-
-A playbook may also open with a small frontmatter block naming how the card runs — `harness`,
-`model`, `requires` (attributes it cannot start without), `branch`, `keep_worktree` (never
-release the checkout automatically, for a card reworked in place), `teardown` (a command that
-stops what the run started, just before the checkout goes) — all optional, all in
-[playbooks/README.md](playbooks/README.md).
-
-They are **yours**. Edit one and the next card started on it uses the edit — no restart, no
-release. Add a file and it is in the dropdown. The copies shipped here only seed a fresh
-workspace; a file in `.bridge-commander/playbooks/` always wins, so upgrading never overwrites
-what you wrote. A card with no playbook does not start, and nothing picks one for it.
-
-## Dependencies
-
-- Node ≥ 18, `tmux`, `git`
-- [Claude Code](https://claude.com/claude-code), authenticated — the default agent harness
-- [GitHub CLI](https://cli.github.com/), authenticated — PR flows
-- [treehouse](https://github.com/kunchenguid/treehouse) — worker worktrees (optional; falls back to `git worktree`)
-- [no-mistakes](https://github.com/kunchenguid/no-mistakes) — only for cards on the `no-mistakes` playbook; the `/no-mistakes` skill appears after running `no-mistakes init` in the project
-- [OpenAI Codex CLI](https://github.com/openai/codex) — only for `--harness codex` (optional)
+You need `tmux` and `git` on the machine (Bridget will offer to install if missing). 
+You never have to use tmux yourself, but you can if you want.
 
 ## Configuration
 
@@ -143,93 +69,6 @@ Env knobs (set on the server process):
 | `BC_TEARDOWN_TIMEOUT_MS` | `300000` / `60000` | timeout for a playbook's `teardown` command — 5 min at the handoff and archive (un-awaited), 60s at a rework restart (awaited inside `card start`); set, it overrides both |
 | `BC_TTS_IDLE_MS` | `20000` | how long the TTS passthrough waits for the next byte from the engine before hanging up — a gap between bytes, not a cap on the request |
 | `BC_SYSLOAD_MS` | `2000` | monitoring panel (⚙️ → machine load) sample interval; the sampler runs only while the panel is open |
-
-### Hooks
-
-A hook is an executable file the workspace owns, and where it sits says what fires it:
-
-```
-.bridge-commander/hooks/worker-done/sweep.sh   a LIFECYCLE hook — that event fires it
-.bridge-commander/hooks/gh-watch               a NAMED hook — a caller fires it, not an event
-```
-
-**Directory means event, file means name.** Both are spawned directly (cwd = workspace root)
-with context in env — `BC_EVENT`, `BC_CARD`, `BC_REPO`, `BC_WORKTREE`, `BC_BRANCH`. Lifecycle
-events: `worker-done`, `worker-died`, `card-archived` (fires before the worktree is released —
-and `BC_WORKTREE` is empty when the handoff released it already, which is the usual case).
-Lifecycle hooks are fire-and-forget — a failure or timeout never blocks the lifecycle; results
-land on the card timeline (`hook-ran` / `hook-failed`).
-
-There is no hook API: a hook is bash with `bc-axi` on its `PATH` (appended, so a `bc-axi` you
-put there yourself still wins — the board makes its CLI reachable, it does not take the name),
-so it wakes a lieutenant the
-way anything else does — `bc-axi event <card> --wake-owner`. Add `--key <s>` and a five-minute
-poll seeing the same red check wakes that lieutenant once instead of sixty times (keys are
-per-card, kept 7 days); `--source <n>` says who woke them, on the timeline and in the drain.
-
-```sh
-bc-axi hook list                       # every hook, and how its last run ended
-bc-axi hook run gh-watch               # run a named one — the same door the board's ▶ posts to
-bc-axi hook runs gh-watch              # its trace
-
-# writing one: a hook nobody wrote yet reads as empty at version "", and "" is
-# what the write reads as "there is no file yet", so this creates it (executable)
-f=file://$PWD/.bridge-commander/hooks/gh-watch
-bc-axi artifact read $f                # empty, `version:` blank on stderr
-bc-axi artifact write $f --file draft.sh --version ''
-```
-
-`hook run` is the ONE door: an outside trigger already running on this machine, the board's ▶
-and the board's own clock all come through it. One run per hook name at a time — a second call
-while the first is in flight is refused, naming the one going.
-
-Every run of either kind appends a line to `.bridge-commander/hookruns.jsonl` — hook, trigger,
-card, when, how long, exit code, timed-out flag, output tail. `hook runs` reads it off the
-tail. The config screen's **hooks** tab shows the same thing as one row per hook, with ✎ to edit
-one in the board's file editor and ▶ to run a named one — on a lifecycle row ▶ is disabled, since
-its event is what fires it and a hand-run would hand a card-shaped script no card.
-
-### Schedules — the board's own clock
-
-A schedule is a board object like a card — a name, an owner, a life in `board.json` (so a clone
-of the workspace carries it; host cron did not) — and it **fires a hook, and nothing else**. The
-hook is bash with `bc-axi` on its PATH and decides the rest, so the clock never has to know
-about cards, commands or wakes.
-
-```sh
-bc-axi schedule add nightly --hook sweep --when '0 3 * * *' --owner ada
-bc-axi schedule add poller  --hook gh-watch --when 5m --owner ada --overlap skip --catch-up latest
-bc-axi schedule list                   # what fires, when it fires next, how it last went
-bc-axi schedule show nightly           # the same, plus its recent firings
-bc-axi schedule pause nightly          # …and resume / remove
-```
-
-`--when` is a 5-field cron expression in **local** time or an interval (`30s`, `5m`, `2h`, `1d`).
-A bad expression, a hook that is not there and an owner who is not a lieutenant are all refused
-at `add`.
-
-The cursor a schedule keeps is the DUE TIME of the last window it handled, so a restart neither
-loses a due window nor fires one twice. `--catch-up` says what happens to the windows a sleeping
-laptop missed — `latest` (default) fires once, `all` fires each, `none` fires none. `--overlap`
-says what a window does when the previous firing is still running — `skip` (default) records the
-skip rather than swallowing it, `queue` re-offers the window when the firing finishes, `restart`
-kills what is running and takes its place.
-
-A failed firing wakes the schedule's OWNER with the hook's output (level-1 event +
-`schedule-failed` queue item) — never only a log line, and once per DISTINCT failure: a hook
-failing the same way every five minutes is one wake, not 288, and the first green firing after
-it says so and re-arms the bell. A hook or owner that goes missing under a live schedule puts a
-loud `problem` on it and wakes the owner ONCE, so a dead window is never silent.
-
-A fresh workspace is initialized with one schedule already working: **`gh-watch`**, every five
-minutes, waking the owner when a check goes red on the `bc/` branch of a live card — once per
-failure, silent on green. It is seeded ONCE (remembered in `.bridge-commander/gh-watch.seeded`):
-pause it, repoint it or remove it and a later `bc-axi init` leaves your decision alone.
-
-To tear down infrastructure one **playbook** starts (a dev container, a compose stack), reach
-for that playbook's `teardown` key instead: the command runs in the worktree immediately
-before it is released, and lives beside the thing that started it rather than in a hook that
-has to recognise which cards it applies to.
 
 ### Network exposure
 
