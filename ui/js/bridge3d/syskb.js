@@ -43,9 +43,15 @@
 const STYLE = 'position:fixed;left:0;top:0;width:1px;height:1px;padding:0;border:0;'
   + 'margin:0;opacity:0;background:transparent;color:transparent;pointer-events:none;';
 
+// The one switch that turns all of this off. See `supported()`. The room takes
+// the default; the test passes `{ enabled: true }` so the mechanism below stays
+// exercised while it is switched off in the headset.
+const ENABLED = false;
+
 export class SystemKeyboard {
-  constructor(doc = typeof document === 'undefined' ? null : document) {
+  constructor(doc = typeof document === 'undefined' ? null : document, { enabled = ENABLED } = {}) {
     this.doc = doc;
+    this.enabled = enabled;
     this.session = null;
     this.el = null;
     this.composer = null;
@@ -95,8 +101,16 @@ export class SystemKeyboard {
   // False on a desk, on an older browser, and on any session that does not
   // advertise it — and then every path here is a no-op and the room behaves
   // exactly as it did: the bluetooth keyboard, and nothing else.
+  //
+  // DISABLED (MNC-87). It is false on a real headset too, right now, because
+  // raising the keyboard there takes the room down and a room he cannot use is
+  // worse than a room without dictation. With this off `attach` never builds the
+  // field, so `raise`, `driving`, `dismiss` and `sync` are all no-ops and every
+  // composer behaves as it did before syskb.js landed. Flip ENABLED back on
+  // once the crash is understood — everything below is still here and still
+  // tested.
   supported() {
-    return !!(this.doc && this.session && this.session.isSystemKeyboardSupported);
+    return this.enabled && !!(this.doc && this.session && this.session.isSystemKeyboardSupported);
   }
 
   // Is the DOM field the thing carrying his typing right now? While it is, the

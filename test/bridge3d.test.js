@@ -866,7 +866,7 @@ test('the system keyboard drives the composer, and never types a letter twice', 
   // what it was — bluetooth through the window, no element, no half-raised
   // anything.
   const off = fakeDom();
-  const quiet = new SystemKeyboard(off.doc);
+  const quiet = new SystemKeyboard(off.doc, { enabled: true });
   setKeyboard(quiet);
   const flat = new Composer();
   flat.take();
@@ -881,7 +881,7 @@ test('the system keyboard drives the composer, and never types a letter twice', 
 
   // ---- and one that does ----------------------------------------------------
   const { doc, win } = fakeDom();
-  const kb = new SystemKeyboard(doc);
+  const kb = new SystemKeyboard(doc, { enabled: true });
   setKeyboard(kb);
   kb.attach({ isSystemKeyboardSupported: true });
   assert.equal(doc.body.children.length, 1, 'the session started and no field was built');
@@ -985,7 +985,7 @@ test('the keyboard survives a first backspace, an empty field, and the keys movi
   // that first shorter value as an overwrite pastes the whole sentence back in
   // front of the edit, and it stays wrong for the rest of the showing.
   const { doc } = fakeDom();
-  const kb = new SystemKeyboard(doc);
+  const kb = new SystemKeyboard(doc, { enabled: true });
   setKeyboard(kb);
   kb.attach({ isSystemKeyboardSupported: true });
   const el = doc.body.children[0];
@@ -1042,6 +1042,20 @@ test('opening a chat takes the keys but does not raise the keyboard', () => {
   const main = fs.readFileSync(path.join(UI, 'main.js'), 'utf8');
   assert.match(main, /syskb\.attach\(session\)/, 'the keyboard is never told a session started');
   assert.match(main, /syskb\.detach\(\)/, 'the keyboard field outlives the session');
+});
+
+test('the room gets the system keyboard switched off (MNC-87)', async () => {
+  // It crashes a real headset. Until that is understood, the room's own
+  // SystemKeyboard — built with no options, the way main.js builds it — must
+  // stay a no-op even on a session that advertises support. The tests above
+  // pass `{ enabled: true }` to keep the mechanism itself exercised.
+  const { SystemKeyboard } = await load('syskb.js');
+  const { doc } = fakeDom();
+  const kb = new SystemKeyboard(doc);
+  kb.attach({ isSystemKeyboardSupported: true });
+  assert.equal(doc.body.children.length, 0, 'the room built the field the headset crashes on');
+  assert.equal(kb.raise({ value: 'olá' }), false, 'pressing a composer still raises the keyboard');
+  assert.equal(kb.driving(), false);
 });
 
 // ---- the old room is gone --------------------------------------------------
