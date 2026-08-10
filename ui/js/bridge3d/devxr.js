@@ -36,6 +36,21 @@ export async function install() {
   // headset it would replace the real one too, which is what it says on the tin.
   device.installRuntime({ forceInstall: true });
 
+  // IWER's session does not advertise `isSystemKeyboardSupported`, and that gap
+  // is exactly how syskb.js reached a real headset without its raise path ever
+  // running once (MNC-87). With `?syskb=1` the emulated session claims support,
+  // so the whole path — focus, the field's input events, blur — runs here in a
+  // real browser. It cannot reproduce what Quest's own keyboard does, but it can
+  // catch the plain JS bug, which is more than the emulator could say before.
+  if (new URLSearchParams(location.search).get('syskb') === '1') {
+    const request = navigator.xr.requestSession.bind(navigator.xr);
+    navigator.xr.requestSession = async (...args) => {
+      const session = await request(...args);
+      try { Object.defineProperty(session, 'isSystemKeyboardSupported', { value: true }); } catch { /* real runtime */ }
+      return session;
+    };
+  }
+
   const pose = { yaw: 0, pitch: 0, x: 0, y: EYE, z: 0 };
   function apply() {
     device.position.set(pose.x, pose.y, pose.z);
