@@ -32,8 +32,9 @@
 
 <!-- Everything the room runs is served from this repo: no CDN, no bundler, no
      build step. The map below is the whole integration — each bare specifier
-     resolves to an unmodified upstream build under ui/vendor/, catalogued in
-     ui/vendor/README.md. -->
+     resolves to a build under ui/vendor/, catalogued in ui/vendor/README.md.
+     All of them are upstream and unmodified except the font atlas, which is
+     generated here because no upstream sheet can spell Portuguese. -->
 <script type="importmap">
 {
   "imports": {
@@ -41,7 +42,8 @@
     "three/src/math/MathUtils.js": "./vendor/three/MathUtils.js",
     "@preact/signals-core": "./vendor/signals-core/signals-core.js",
     "@pmndrs/uikit-pub-sub": "./vendor/uikit-pub-sub/index.js",
-    "@pmndrs/msdfonts/inter": "./vendor/msdfonts/inter.js",
+    "@pmndrs/msdfonts/inter": "./vendor/msdfonts/inter-latin1.js",
+    "marked": "./vendor/marked.esm.js",
     "yoga-layout/load": "./vendor/yoga-layout/src/load.js",
     "zod": "./vendor/zod/index.js"
   }

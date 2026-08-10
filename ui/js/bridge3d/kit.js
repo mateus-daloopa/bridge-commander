@@ -32,6 +32,10 @@ import { reversePainterSortStable } from '../../vendor/uikit/order.js';
 
 export { Container, Text, Image, reversePainterSortStable };
 
+// The glyph filter lives in `type.js` — no imports at all, so a test can load
+// it — and comes back out of here, which is where every module already looks.
+export { GLYPHS, safe, safeBlock } from './type.js';
+
 // uikit's own unit is a "pixel", and `pixelSize` says what one is worth in the
 // world. At 0.01 a layout unit is a centimetre, which is the size the room
 // thinks in — so `width: 12` is 12 cm and `fontSize: 4.3` is a 4.3 cm em box.
@@ -103,30 +107,4 @@ export function inert(object) {
   if (object.setProperties) object.setProperties({ pointerEvents: 'none' });
   else object.pointerEvents = 'none';
   return object;
-}
-
-// ---- what the font can actually draw ---------------------------------------
-//
-// An MSDF font is an atlas, not an outline library: the vendored Inter sheet
-// carries exactly the 104 glyphs below and nothing else. A character outside it
-// is not a fallback, it is a hole in the sentence plus a console warning per
-// frame — and the board's own column titles start with an emoji, so this is not
-// hypothetical. Every string the room paints goes through `safe` first.
-//
-// The list is checked against the vendored sheet by a test, so a font swap that
-// changes the coverage fails loudly rather than quietly dropping letters.
-export const GLYPHS = '|ÖÜWj$Ä()@[]{}§\\/Q%äöüfgw&03689?CGMOSUimpqy!#12457ABDEFHIJKLNPRTVXYZbdhklß;taceos<>nruvxz:~+=_*^°-"\',`.';
-
-const FOLD = {
-  '…': '...', '×': 'x', '·': '-', '–': '-', '—': '-', '‘': "'", '’': "'",
-  '“': '"', '”': '"', '→': '->', '←': '<-', '•': '-', ' ': ' ',
-};
-
-export function safe(text) {
-  let out = '';
-  for (const ch of String(text == null ? '' : text)) {
-    const c = FOLD[ch] !== undefined ? FOLD[ch] : ch;
-    for (const k of c) out += (k === ' ' || GLYPHS.includes(k)) ? k : '';
-  }
-  return out.replace(/\s+/g, ' ').trim();
 }

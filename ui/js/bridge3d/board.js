@@ -39,6 +39,7 @@ import * as W from './world.js';
 import { root, Container, Text, Image, COL, cm, fontFor, inert, safe } from './kit.js';
 import { avatarTexture } from './avatars3d.js';
 import { ChatPanel } from './chat.js';
+import { addMarkdown } from './md3d.js';
 import { Field } from './field.js';
 import { Target } from './hover.js';
 
@@ -598,7 +599,10 @@ export class CardPanel extends ChatPanel {
     if (c.id) this.addText(c.id, { size: W.TYPE.meta, color: COL.faint });
     const prs = ((c.attributes && c.attributes.prs) || []).map((p) => p.state).join(', ');
     if (prs) this.addText('pr: ' + prs, { size: W.TYPE.meta, color: COL.dim });
-    this.addText(c.body || 'no body yet', {});
+    // The body is markdown, and it is the deliverable — so it is BUILT rather
+    // than printed. `addText` here meant `##` arrived as two hash marks.
+    if (c.body) addMarkdown(this, c.body);
+    else this.addText('no body yet', { color: COL.dim });
     if (list.length) {
       this.addText('- the thread -', { size: W.TYPE.meta, color: COL.faint });
       for (const m of list) {

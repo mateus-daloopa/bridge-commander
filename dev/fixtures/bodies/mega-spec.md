@@ -3,6 +3,21 @@
 > This is the deliberately-giant fixture card: a wall of markdown to stress the
 > detail panel, scrolling, and md renderer. Everything below is fake.
 
+**Estado:** em revisão. A ação três vezes por segundo no coração do pipeline,
+com réplicas em França e no Japão — the accents are here on purpose, so a
+photograph of this card says whether the font can spell. See the
+[full spec](https://example.com/spec).
+
+```js
+if (seq > last) {            // a fence keeps its indentation and its breaks
+  append(record);
+}
+```
+
+- a bullet, and the line it wraps onto lines up under the TEXT rather than
+  under the bullet
+  - one level deeper, which is the other thing a list has to get right
+
 ## Why
 
 The board's event stream grew organically: board-level events, card events,

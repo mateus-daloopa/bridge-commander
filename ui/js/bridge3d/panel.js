@@ -220,6 +220,16 @@ export class Panel {
     return t;
   }
 
+  // A node somebody else built — `md3d.js` builds a whole markdown block and
+  // hands it over. It goes on the same list `clearBody` walks, which is the
+  // only thing the body actually requires of its children.
+  addBlock(node) {
+    inert(node);
+    this.body.add(node);
+    this._kids.push(node);
+    return node;
+  }
+
   addRow(properties, children) {
     const row = new Container(properties);
     inert(row);

@@ -2,9 +2,11 @@
 
 The UI is zero-CDN: everything it runs is served from this repo. Each file below is an
 unmodified upstream build, fetched with `npm pack <name>@<version>` and copied out of the
-tarball. To update: repack, copy, and bump the line here.
+tarball. To update: repack, copy, and bump the line here. The one exception is the room's
+font atlas, which is generated here and carries its own recipe.
 
 - marked.umd.js — marked v18.0.6 (MIT) — https://github.com/markedjs/marked — `npm pack marked@18.0.6` → `package/lib/marked.umd.js` (v16+ no longer ships a minified build; the UMD is 43 KB)
+- marked.esm.js — the same marked v18.0.6 tarball, `package/lib/marked.esm.js`. The board loads the UMD as a classic script for its `window.marked`; the ROOM is an import-map page with no globals in it, and `ui/js/bridge3d/md3d.js` wants only `lexer` — tokens, never HTML, so no sanitizer is in the picture there at all.
 - purify.min.js — DOMPurify v3.4.12 (Apache-2.0 OR MPL-2.0) — https://github.com/cure53/DOMPurify — `npm pack dompurify@3.4.12` → `package/dist/purify.min.js`
 - highlight.min.js — highlight.js v11.11.1, common-languages build (BSD-3-Clause) — https://github.com/highlightjs/highlight.js — `npm pack @highlightjs/cdn-assets@11.11.1` → `package/highlight.min.js`
 - mermaid.min.js — mermaid v11.16.0 (MIT) — https://github.com/mermaid-js/mermaid — `npm pack mermaid@11.16.0` → `package/dist/mermaid.min.js`
@@ -24,7 +26,7 @@ tarball. To update: repack, copy, and bump the line here.
 Loaded only by `ui/bridge3d.html`, through the `<script type="importmap">` in that page.
 Pure ESM with an explicit `.js` on every relative import, which is the whole reason it vendors
 at all: no React, no bundler, no CDN, no build step. **Reachable from the room: 181 files,
-1.43 MB raw, 544 KB gzipped** — and the single biggest piece of that is one font.
+1.71 MB raw, 741 KB gzipped** — and the single biggest piece of that is one font.
 
 The evidence this is the right stack rather than a taste: Meta's own WebXR SDK for Quest
 (`facebook/immersive-web-sdk`) is built on `three` + `@pmndrs/uikit` + `@pmndrs/pointer-events`
@@ -33,7 +35,27 @@ The evidence this is the right stack rather than a taste: Meta's own WebXR SDK f
 - uikit/ — `@pmndrs/uikit` v1.0.74 (MIT) — https://github.com/pmndrs/uikit — `npm pack @pmndrs/uikit@1.0.74` → `package/dist/**/*.js` (the `.d.ts` and `.map` files are not copied; nothing serves them). Yoga flexbox layout with CSS-like properties, MSDF text that stays sharp at any distance, instanced panels, scroll, and `hover`/`active`/`focus` conditional properties. **Import components ONE AT A TIME** — `uikit/components/container.js`, never `uikit/index.js` or `uikit/components/index.js`: the barrel reaches for `components/svg.js`, which imports the three.js addon `SVGLoader` that this repo does not vendor, and in the finished kits it also drags in an icon set of 1,595 modules. A test in `test/bridge3d.test.js` fails if anything imports a barrel. The LICENSE is not in the tarball; it is fetched from the repo root.
 - uikit-pub-sub/ — `@pmndrs/uikit-pub-sub` v1.0.74 (MIT) — uikit's own tiny event bus. One file, pulled in by uikit.
 - pointer-events/ — `@pmndrs/pointer-events` v6.6.30 (MIT) — https://github.com/pmndrs/xr — `npm pack` → `package/dist/**/*.js`. Zero dependencies. Ray, grab and touch pointers with W3C-shaped events on real three.js objects; this is what replaced the room declaring rectangles while it painted. One trap worth knowing: it reads `object.pointerEvents`, and uikit **rewrites that field out of its own properties on every effect pass** — so a uikit component is made inert with `setProperties({ pointerEvents: 'none' })` and never by assignment.
-- msdfonts/inter.js — `@pmndrs/msdfonts` v1.0.74 (MIT) — `npm pack` → `package/dist/inter.js` only. Four weights of Inter as base64 WebP atlases plus metrics, 444 KB raw and 277 KB gzipped — **over half the weight of the whole stack**, and it does not compress because it is already WebP. The other seventeen fonts in the tarball are deliberately not vendored. uikit reaches for `@pmndrs/msdfonts/inter` through a dynamic import when a `Text` first needs a font, which is why the import map carries that exact specifier. The atlas holds **104 glyphs** — ASCII plus a little German, no emoji, no `·`, no `…`, no `×` — so every string the room paints goes through `safe()` in `ui/js/bridge3d/kit.js` first.
+- msdfonts/inter-latin1.js — Inter 4.1 (SIL OFL 1.1), **generated here, not an upstream build** — the one file in this directory that is not. Four weights as base64 WebP atlases plus metrics, 720 KB raw and 474 KB gzipped — **over half the weight of the whole stack**, and it does not compress because it is already WebP. uikit reaches for `@pmndrs/msdfonts/inter` through a dynamic import when a `Text` first needs a font, which is why the import map points that exact specifier here.
+
+  Every sheet `@pmndrs/msdfonts` ships — all eighteen fonts, checked as far as v1.0.75 — carries the same **104 glyphs**: ASCII plus `ÄÖÜäöüß`. Not one of `çãáàâéêíóôõú`. Because `safe()` deletes what the sheet cannot draw, `França` came out `Frana` and nothing warned. This sheet holds **172**: the same ASCII, plus the whole Latin-1 letter range `À`–`ÿ` and a handful of Latin-1 symbols. Still no emoji and no `…`, so `safe()` stays exactly where it is.
+
+  To regenerate — the atlas order decides `GLYPHS` in `kit.js`, so a rebuild means updating that string too, and `test/bridge3d.test.js` fails if the two drift:
+
+  ```
+  npm i msdf-bmfont-xml                                    # build-time only, nothing ships
+  curl -L -O https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip
+  unzip Inter-4.1.zip                                      # statics live in extras/ttf/
+  # charset.txt: one line, ASCII + U+00C0..U+00FF (minus × ÷) + ¡¢£¥©ª«®µº»¿€
+  for w in Light Medium SemiBold Bold; do
+    msdf-bmfont -f json -o out/$w -s 44 -p 2 -r 4 -t msdf \
+                -m 512,512 --pot --square -i charset.txt extras/ttf/Inter-$w.ttf
+  done
+  # then: PNG → lossless WebP (RGB, the alpha channel is unused), each as a data: URI in
+  # pages[0], and all four weights emitted as { light, medium, "semi-bold", bold }. All
+  # four, always: uikit's default family declares those exact keys and resolves the
+  # unstyled weight 400 by nearest match, breaking the 300/500 tie on its own key order —
+  # so the room's body type is Light, and dropping a weight restyles every line in it.
+  ```
 - yoga-layout/ — `yoga-layout` v3.2.1 (MIT, Meta) — `npm pack` → `package/dist/{src,binaries}/**/*.js`. The flexbox engine, as an Emscripten build with the WASM base64-inlined into `binaries/yoga-wasm-base64-esm.js`, so it needs no separate asset fetch and no MIME configuration. The import map maps `yoga-layout/load`, which is the only entry point uikit uses. LICENSE fetched from the repo root; the tarball ships only `dist/` and `src/`.
 - signals-core/signals-core.js — `@preact/signals-core` v1.14.4 (MIT) — `npm pack` → `package/dist/signals-core.mjs`, **renamed to `.js`**. Content byte-for-byte unmodified; only the extension changed, because a static file server that has never heard of `.mjs` serves it as `application/octet-stream` and a browser refuses a module script with that MIME type. Renaming it is one line here; teaching every server that serves this repo about `.mjs` is not.
 - zod/ — `zod` v4.4.3 (MIT) — `npm pack` → `package/index.js` plus `package/v4/{core,classic,locales}/**/*.js`. Not a choice: uikit imports `zod` at runtime from its property and flex schemas. 79 files and 128 KB gzipped, of which the 53 `locales/` files are about 40 KB — they come along because zod's root entry re-exports them, and cutting them would mean modifying an upstream build. It is the least satisfying line in this file and it is the price of the layout engine.

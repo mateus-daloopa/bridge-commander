@@ -1266,3 +1266,110 @@ test('world.js says where things go and knows nothing about how they are drawn',
   const vp = fs.readFileSync(path.join(UI, 'viewpoints.js'), 'utf8');
   assert.ok(!/from ['"]three['"]/.test(vp), 'viewpoints.js imports three');
 });
+
+// ---- the room can spell ----------------------------------------------------
+//
+// Two defects in one surface, and they compounded: markdown that rendered as
+// its own source, in a font that could not spell Portuguese.
+
+const sheet = () => import(path.join(ROOT, 'ui', 'vendor', 'msdfonts', 'inter-latin1.js'));
+const type = () => import(path.join(UI, 'type.js'));
+
+test('GLYPHS is what the vendored sheet really carries — every weight of it', async () => {
+  // The list in type.js is a promise about a binary blob, and a promise about a
+  // binary blob is exactly the kind that rots. `safe()` DELETES what the sheet
+  // cannot draw, so a sheet swap that drops a letter does not throw, does not
+  // warn, and does not look like a bug: it looks like a typo in his card.
+  const { inter } = await sheet();
+  const { GLYPHS } = await type();
+  const weights = Object.keys(inter);
+  assert.deepStrictEqual(weights, ['light', 'medium', 'semi-bold', 'bold'],
+    'uikit resolves the unstyled weight 400 by nearest match over these four keys');
+
+  for (const w of weights) {
+    const drawn = new Set(inter[w].chars.map((c) => c.char));
+    for (const ch of GLYPHS) {
+      assert.ok(drawn.has(ch), `GLYPHS claims ${JSON.stringify(ch)} and the ${w} sheet has no such glyph`);
+    }
+    const extra = [...drawn].filter((c) => c !== ' ' && !GLYPHS.includes(c));
+    assert.deepStrictEqual(extra, [], `the ${w} sheet draws glyphs GLYPHS does not list, so safe() throws them away`);
+  }
+});
+
+test('the room spells Portuguese', async () => {
+  // The whole point, in one assertion. `França` used to come back `Frana`.
+  const { safe } = await type();
+  for (const word of ['França', 'ação', 'três', 'coração', 'após', 'você', 'ínterim', 'órgão']) {
+    assert.strictEqual(safe(word), word, `${word} lost letters on the way to the wall`);
+  }
+  // Not only Portuguese: the whole Latin-1 letter range survives, which is
+  // French, Spanish, the Nordic languages and the German that already worked.
+  for (let c = 0xC0; c <= 0xFF; c++) {
+    const ch = String.fromCharCode(c);
+    if (ch === '×') { assert.strictEqual(safe(ch), 'x'); continue; }
+    if (ch === '÷') continue;
+    assert.strictEqual(safe(ch), ch, `U+${c.toString(16).toUpperCase()} is still being dropped`);
+  }
+});
+
+test('safe still throws away what the sheet cannot draw, rather than warning every frame', async () => {
+  const { safe, safeBlock } = await type();
+  // An emoji has no glyph and no stand-in. It goes, silently — a per-frame
+  // console warning is the alternative, and the board's column titles start
+  // with one.
+  assert.strictEqual(safe('👀 Your review'), 'Your review');
+  assert.strictEqual(safe('a … b'), 'a ... b', 'the fold table still folds');
+  assert.strictEqual(safe('one\ntwo'), 'one two', 'a line break is a space, not a missing letter');
+  // safeBlock is the same filter for text whose SHAPE is the content.
+  assert.strictEqual(safeBlock('def f():\n\treturn 1\n'), 'def f():\n  return 1');
+  assert.strictEqual(safeBlock('  keep   my indent  '), '  keep   my indent');
+  assert.strictEqual(safeBlock('a\n\n\n\nb'), 'a\n\nb');
+});
+
+test('a card body is built out of markdown, not printed as markdown', async () => {
+  const md = fs.readFileSync(path.join(UI, 'md3d.js'), 'utf8');
+  // The file says what it does not do, in prose, at the top — so the negative
+  // checks below read the CODE and not the commentary about it.
+  const code = md.replace(/^\s*\/\/.*$/gm, '');
+  // The lexer, never the parser: tokens in, uikit nodes out. Nothing in the
+  // room ever holds a string of HTML, so no sanitizer is in the picture.
+  assert.match(md, /import \{ lexer \} from 'marked'/, 'md3d walks something other than marked tokens');
+  assert.ok(!/marked\.parse|parseInline|innerHTML|DOMPurify|sanitize/.test(code),
+    'md3d reaches for HTML — the room has no DOM to put it in and no sanitizer to clean it');
+
+  // Every block the mapping names has somewhere to land.
+  for (const kind of ['heading', 'paragraph', 'code', 'blockquote', 'list', 'hr', 'table', 'codespan', 'strong', 'em', 'link']) {
+    assert.ok(new RegExp(`'${kind}'`).test(code), `md3d has no case for a ${kind}`);
+  }
+  // A fence keeps its line breaks, which takes BOTH halves: safeBlock keeps
+  // them through the glyph filter, and whiteSpace 'pre' stops uikit collapsing
+  // them again on the way to the atlas. uikit's default is 'normal', and
+  // normal means collapse — miss this and a code block is one long line.
+  assert.match(code, /safeBlock\(str\)/, 'a fenced block goes through the line-collapsing filter');
+  assert.match(code, /whiteSpace: 'pre'/, "uikit will collapse the fence's line breaks straight back out");
+
+  // 49 characters cannot hold a grid — a table is unrolled into one block per
+  // row rather than squeezed into columns.
+  assert.ok(!/gridTemplate|columnGap/.test(code), 'md3d lays a table out as a grid');
+  assert.match(code, /paddingY: cm\(this\.pad \* 0\.3\)/, 'the unrolled table rows have no air between them');
+
+  // A scroll container hands its children their natural height, and a child
+  // that shrinks lands on top of the one above it — the failure that looks
+  // like a font bug and is a flex bug. Every block md3d builds says so.
+  const shrink = code.match(/new Container\(\{/g) || [];
+  assert.ok(shrink.length >= 3, 'md3d builds no containers at all');
+  assert.ok(!/new Container\(\{(?![^}]*flexShrink: 0)[^}]*\}\)/.test(code.replace(/\n\s*/g, ' ')),
+    'a block in md3d can be shrunk by its scroll container');
+
+  // And the card screen actually uses it.
+  const board = fs.readFileSync(path.join(UI, 'board.js'), 'utf8');
+  assert.match(board, /addMarkdown\(this, c\.body\)/, 'the card body is still one flat Text');
+  assert.ok(!/addText\(c\.body/.test(board), 'the old one-Text card body is still there');
+
+  // The 5 s refresh rebuilds the body from scratch, so whatever md3d adds has
+  // to be on the list clearBody walks — otherwise the card grows a copy of
+  // itself every five seconds.
+  const panel = fs.readFileSync(path.join(UI, 'panel.js'), 'utf8');
+  assert.match(panel, /addBlock\(node\) \{[\s\S]*this\._kids\.push\(node\)/, 'addBlock does not register with clearBody');
+  assert.match(code, /panel\.addBlock\(node\)/, 'md3d adds to the body behind clearBody\'s back');
+});

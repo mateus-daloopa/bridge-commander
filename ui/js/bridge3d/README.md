@@ -187,8 +187,10 @@ emulate; `window.__bridge` is not, so the room can still be driven by hand.
 | `voice3d.js` | the crew, out loud — `../voice.js`'s speech, arriving from the berth the lieutenant is standing in |
 | `list.js` | the mat on the floor that opens the board |
 | `hover.js` | the ray, and the six states a thing goes through when it is pointed at |
-| `kit.js` | uikit wired in once: layout, MSDF text, the palette, and what the font can actually draw |
+| `kit.js` | uikit wired in once: layout, MSDF text, the palette |
+| `type.js` | the glyph filter — what the font can actually draw, and what to do about the rest. No imports, so a test can load it |
+| `md3d.js` | a markdown body as things in the room: marked's lexer in, uikit nodes out, no HTML anywhere near it |
 | `viewpoints.js` | the places the room is photographed from, and the things the ray must reach — pure |
 | `devxr.js` | the emulated headset, behind `?xr=emulate` |
-| `../../vendor/` | three, uikit, pointer-events, IWER — all vendored unmodified, see `ui/vendor/README.md` |
+| `../../vendor/` | three, uikit, pointer-events, marked, IWER — vendored unmodified except the font atlas, see `ui/vendor/README.md` |
 | `../../../dev/room-shots.js` | the capture script |
