@@ -714,27 +714,53 @@ test('the ray is the vendored pointer library, not a hand-rolled rectangle', asy
 
 // ---- the headset stays in the session ---------------------------------------
 
-test('nothing in the room focuses a DOM node, and no field is a hidden input', async () => {
-  // This is the one that took the whole browser. Focusing a text input inside
-  // an immersive session asks the Quest browser for the system keyboard, which
-  // is a shell surface that has to composite over the immersive layer, and the
-  // session dies — with nothing thrown that a handler could catch. It killed a
-  // chat the instant it opened and the wall's search field on the first press.
+test('only the system keyboard focuses anything, and its field is in the viewport', async () => {
+  // The rule this used to hold — "nothing in the room ever focuses a DOM node"
+  // — was built on a wrong diagnosis, and the correction is the point of the
+  // test now. The Quest system keyboard IS supported inside an immersive
+  // session from Browser 26.1, focusing a field is how you raise it, and the
+  // session survives it. What took the browser out was the ELEMENT: uikit parks
+  // its hidden input at `left: -1000vw`, and an off-screen text field is the
+  // pitfall Meta's doc names by name — the page scrolls to it when typing
+  // starts.
   //
-  // The captain is the only one with a headset, so no test can reproduce it.
-  // What a test CAN do is hold the line: the crash needs a focused DOM element,
-  // and there is no longer any code in the room that could produce one.
+  // So the line held here moved. One file may focus, and the field it focuses
+  // has to be inside the viewport.
   for (const f of fs.readdirSync(UI)) {
     if (!f.endsWith('.js')) continue;
+    if (f === 'syskb.js') continue;
     const src = fs.readFileSync(path.join(UI, f), 'utf8');
-    assert.ok(!/\.focus\s*\(/.test(src), `${f} focuses something — that is the crash`);
+    assert.ok(!/\.focus\s*\(/.test(src),
+      `${f} focuses something — the system keyboard is syskb.js's job alone`);
     assert.ok(!/activeElement/.test(src),
       `${f} reads the document's active element instead of the room's own state`);
-    // uikit's Input focuses its own hidden element from its pointerdown
-    // handler, so one standing in the room is enough on its own.
+    // uikit's Input is still out, and now for a reason we can point at: it owns
+    // the off-screen element above, and it draws its own glyphs in a room where
+    // nothing is rendered by the browser.
     assert.ok(!/components\/input\.js/.test(src) && !/\bnew Input\(/.test(src),
-      `${f} builds a uikit Input, which focuses a hidden <input> when it is pressed`);
+      `${f} builds a uikit Input, whose hidden element sits at left:-1000vw`);
   }
+
+  // The one field that is focused, and the property the crash turned on. It is
+  // asserted against the STYLE the module ships, because that string is the
+  // whole difference between the supported mechanism and the documented bug.
+  const kb = fs.readFileSync(path.join(UI, 'syskb.js'), 'utf8');
+  const style = (/const STYLE = ([\s\S]*?);\n/.exec(kb) || [])[1] || '';
+  assert.match(style, /position:fixed/, 'the keyboard field can be scrolled to');
+  assert.match(style, /left:0;top:0/, 'the keyboard field is not at the viewport origin');
+  assert.ok(!/:\s*-/.test(style),
+    'the keyboard field is parked off-screen — that is the bug, not the fix');
+  // Focusable at all: `display:none` and `visibility:hidden` cannot take focus,
+  // so a field hidden either of those ways raises no keyboard.
+  assert.ok(!/display:none|visibility:hidden/.test(style),
+    'an unfocusable field raises no keyboard');
+  // uikit's element, quoted, so this test fails loudly if a vendor bump ever
+  // makes the ban unnecessary rather than leaving the reason to rot.
+  assert.match(
+    fs.readFileSync(path.join(ROOT, 'ui', 'vendor', 'uikit', 'text', 'input', 'hidden-input.js'), 'utf8'),
+    /'left',\s*'-1000vw'/,
+    "uikit no longer parks its input off-screen — the reason kit.js bans Input has changed",
+  );
 
   // And what replaced it: the room's own field, holding the keys as a module
   // reference rather than as a browser state, routed at the window.
@@ -785,6 +811,167 @@ test('nothing in the room focuses a DOM node, and no field is a hidden input', a
   wall.release();
   assert.equal(keysHeld(), null);
   assert.equal(routeKey(key('b')), false, 'the shortcuts are still dead after the panel closed');
+});
+
+// A browser, in as much detail as syskb.js can tell. `type()` is what the
+// system keyboard and a paired bluetooth keyboard both do to a focused field:
+// set the value and fire `input`. There are no key events to fake, because the
+// system keyboard does not send any — that is the whole shape of the thing.
+function fakeDom() {
+  const win = { scrollX: 0, scrollY: 0, scrollTo(x, y) { win.scrollX = x; win.scrollY = y; } };
+  const doc = {
+    defaultView: win,
+    activeElement: null,
+    body: { children: [], appendChild(el) { doc.body.children.push(el); } },
+    createElement() {
+      const handlers = {};
+      const fire = (t) => { for (const fn of handlers[t] || []) fn(); };
+      const el = {
+        style: { cssText: '' }, value: '', attrs: {},
+        setAttribute(k, v) { el.attrs[k] = v; },
+        addEventListener(t, fn) { (handlers[t] = handlers[t] || []).push(fn); },
+        focus() { doc.activeElement = el; },
+        blur() { if (doc.activeElement === el) doc.activeElement = null; fire('blur'); },
+        remove() { doc.body.children = doc.body.children.filter((c) => c !== el); },
+        // Named away from `type`: syskb.js sets `el.type = 'text'` on the real
+        // element, and a fake whose method shares that name loses it.
+        typed(v) { el.value = v; fire('input'); },
+      };
+      return el;
+    },
+  };
+  return { doc, win };
+}
+
+test('the system keyboard drives the composer, and never types a letter twice', async () => {
+  const { Composer, routeKey, setKeyboard, keysHeld } = await load('keys.js');
+  const { SystemKeyboard, seamOf } = await load('syskb.js');
+  const key = (k, over) => Object.assign({ key: k, preventDefault() {} }, over);
+
+  // ---- a browser that does not offer one -----------------------------------
+  //
+  // The guard is the part that must not be clever: no session, an old browser,
+  // or a session that does not advertise the keyboard, and the room is exactly
+  // what it was — bluetooth through the window, no element, no half-raised
+  // anything.
+  const off = fakeDom();
+  const quiet = new SystemKeyboard(off.doc);
+  setKeyboard(quiet);
+  const flat = new Composer();
+  flat.take();
+  assert.equal(off.doc.body.children.length, 0, 'a field was built with no session at all');
+  assert.equal(quiet.driving(), false);
+  routeKey(key('h')); routeKey(key('i'));
+  assert.equal(flat.value, 'hi', 'the bluetooth path stopped working without a system keyboard');
+  quiet.attach({ isSystemKeyboardSupported: false });
+  assert.equal(off.doc.body.children.length, 0, 'a browser that says no still got a field');
+  assert.equal(quiet.raise(flat), false, 'the keyboard was raised on a browser that has none');
+  flat.release();
+
+  // ---- and one that does ----------------------------------------------------
+  const { doc, win } = fakeDom();
+  const kb = new SystemKeyboard(doc);
+  setKeyboard(kb);
+  kb.attach({ isSystemKeyboardSupported: true });
+  assert.equal(doc.body.children.length, 1, 'the session started and no field was built');
+  const el = doc.body.children[0];
+  assert.match(el.style.cssText, /position:fixed/);
+  assert.ok(!/left:-/.test(el.style.cssText), 'the field is off-screen — the page will scroll to it');
+
+  const sent = [];
+  const chat = new Composer({ onSubmit: (v) => sent.push(v) });
+
+  // Opening a panel takes the keys WITHOUT raising the keyboard: he gets the
+  // caret and his bluetooth keyboard, and the shell surface only when he asks.
+  chat.take({ raise: false });
+  assert.equal(keysHeld(), chat);
+  assert.equal(kb.driving(), false, 'opening a panel raised the system keyboard by itself');
+  routeKey(key('o'));
+  assert.equal(chat.value, 'o', 'bluetooth stopped working before the keyboard was raised');
+
+  // Pressing the field is what raises it, and it opens onto what he has already
+  // written rather than onto a blank.
+  chat.take();
+  assert.equal(kb.driving(), true, 'pressing the field did not raise the keyboard');
+  assert.equal(el.value, 'o', 'the field was not seeded with the composer text');
+
+  // The documented behaviour: a new editing session, whose first key press
+  // overwrites the whole value. What arrives is a delta, and the composer keeps
+  // what it had.
+  el.typed('l');
+  assert.equal(chat.value, 'ol', 'the first keystroke wiped the text he had already written');
+  el.typed('lá');
+  assert.equal(chat.value, 'olá', 'the accented letter did not arrive intact');
+
+  // While that field is focused it is the only source of characters. A
+  // bluetooth keystroke reaches it AND the window; applying both would type
+  // everything twice. The shortcuts still stay dead, and Enter still sends —
+  // neither of those changes the field's value, so neither arrives twice.
+  assert.equal(routeKey(key('x')), true, 'a shortcut woke up while he was typing');
+  assert.equal(chat.value, 'olá', 'the keystroke was applied twice');
+  assert.equal(routeKey(key('Backspace')), true);
+  assert.equal(chat.value, 'olá', 'backspace deleted two characters, one per path');
+  routeKey(key('Enter'));
+  assert.deepEqual(sent, ['olá'], 'Enter did not send with the keyboard up');
+
+  // Sending clears the composer, and the field has to be told — otherwise it
+  // still holds the sent message and hands it back with the next letter.
+  chat.setValue('');
+  assert.equal(el.value, '', 'the field kept the message that was already sent');
+  el.typed('t');
+  assert.equal(chat.value, 't', 'the sent message came back attached to the next letter');
+
+  // Dismissing the keyboard — Done, the Meta button, a press outside it — blurs
+  // the field. He KEEPS the keys: bluetooth still types, the shortcuts stay
+  // dead, and pressing the field is how he asks for the keyboard back.
+  el.blur();
+  assert.equal(kb.driving(), false);
+  assert.equal(keysHeld(), chat, 'dismissing the keyboard let go of the keys');
+  routeKey(key('u'));
+  assert.equal(chat.value, 'tu', 'bluetooth stopped working after the keyboard was dismissed');
+  chat.take();
+  assert.equal(kb.driving(), true, 'pressing the field again did not bring the keyboard back');
+  assert.equal(el.value, 'tu', 'it came back onto a blank instead of onto what he had written');
+
+  // The page never scrolls. The field is in the viewport so there should be
+  // nothing to scroll to; if the browser finds something anyway, the flat board
+  // is put back where it was, because that is the page he leaves the session
+  // onto.
+  win.scrollY = 500;
+  el.typed('tudo');
+  assert.equal(win.scrollY, 0, 'the page was left scrolled somewhere he did not put it');
+
+  // Releasing lets go of everything, and the session ending takes the field out
+  // of the page — an input left behind is a focus trap on the flat board.
+  chat.release();
+  assert.equal(keysHeld(), null);
+  assert.equal(kb.driving(), false, 'the field is still focused with nobody holding the keys');
+  kb.detach();
+  assert.equal(doc.body.children.length, 0, 'the field outlived the session');
+
+  // The seam itself, which is the one decision this design cannot read off the
+  // API: whether the first value of an editing session replaced what he had
+  // written or was typed after it.
+  assert.equal(seamOf('olá', ' '), 'olá', 'an overwritten field threw away his sentence');
+  assert.equal(seamOf('olá', 'olá tudo'), '', 'a surviving seed was pasted in front of itself');
+  assert.equal(seamOf('', 'a'), '', 'an empty composer grew a prefix');
+
+  setKeyboard(null);
+});
+
+test('opening a chat takes the keys but does not raise the keyboard', () => {
+  // The distinction is worth a test of its own because it is the exact line the
+  // old crash was on: whatever the room does automatically the instant a panel
+  // opens is the worst possible place to be wrong about a shell surface.
+  assert.match(
+    fs.readFileSync(path.join(UI, 'chat.js'), 'utf8'),
+    /this\.field\.take\(\{ raise: false \}\)/,
+    'opening a chat fills the room with a keyboard he did not ask for',
+  );
+  // And the session owns the field's whole life.
+  const main = fs.readFileSync(path.join(UI, 'main.js'), 'utf8');
+  assert.match(main, /syskb\.attach\(session\)/, 'the keyboard is never told a session started');
+  assert.match(main, /syskb\.detach\(\)/, 'the keyboard field outlives the session');
 });
 
 // ---- the old room is gone --------------------------------------------------

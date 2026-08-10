@@ -30,7 +30,8 @@ import { Rays, setVoice } from './hover.js';
 import { Windows } from './windows.js';
 import { ChatPanel } from './chat.js';
 import { BoardWall, CardPanel } from './board.js';
-import { routeKey } from './keys.js';
+import { routeKey, setKeyboard } from './keys.js';
+import { SystemKeyboard } from './syskb.js';
 import { Grabs } from './grab.js';
 import { Sound } from './sound.js';
 import { installSky, installToneMapping } from './sky.js';
@@ -120,6 +121,13 @@ const grabs = new Grabs(scene);
 // created here and started in enter() rather than on load.
 const sound = new Sound();
 setVoice(sound);
+
+// The system keyboard. It has nothing to do until a session starts and tells it
+// whether this browser advertises one — before then, and on any browser that
+// does not, every call into it is a no-op and text arrives the way it always
+// has, from a paired bluetooth keyboard through the window's keydown.
+const syskb = new SystemKeyboard();
+setKeyboard(syskb);
 
 // Click a lieutenant, get its chat. This is the shortest path between "I can
 // see my crew" and "I am talking to them", and it is the whole reason the
@@ -232,7 +240,15 @@ async function enter() {
   await renderer.xr.setSession(session);
   gate.hidden = true;
   rays.setPresenting(true);
-  session.addEventListener('end', () => { gate.hidden = false; rays.setPresenting(false); });
+  // The keyboard's DOM field exists only for the length of the session. Meta's
+  // doc asks for exactly that, and it is right to: an input left behind on the
+  // flat board is a focus trap on a page he is about to be looking at again.
+  syskb.attach(session);
+  session.addEventListener('end', () => {
+    gate.hidden = false;
+    rays.setPresenting(false);
+    syskb.detach();
+  });
 }
 
 // ---- squeeze to pick a window up -------------------------------------------

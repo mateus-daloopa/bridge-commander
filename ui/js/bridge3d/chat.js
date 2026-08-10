@@ -10,15 +10,18 @@
 // bottom, and a composer in the foot.
 //
 // **Input, honestly.** The composer is a `Field` — a surface the room draws and
-// types into itself, with no DOM focus anywhere near it, because focusing a
-// hidden <input> inside an immersive session summons the Quest system keyboard
-// and takes the browser out of the session with it. See keys.js. A paired
-// Bluetooth keyboard delivers keydown to the document regardless, main.js hears
-// it at the window, and it goes to whichever composer holds the keys — opening
-// a chat is an intention to talk, so this one takes them. Enter sends. There is
-// no on-screen keyboard: typing on a floating keyboard in VR is miserable, and
-// a half-built one would be worse than saying plainly that a keyboard is
-// required. When dictation lands it plugs in here, at `send()`.
+// paints itself; nothing here is ever rendered by the browser. Two things can
+// put characters in it. A paired Bluetooth keyboard delivers keydown to the
+// document regardless of focus, main.js hears it at the window, and it goes to
+// whichever composer holds the keys — opening a chat is an intention to talk,
+// so this one takes them, and Enter sends. And PRESSING the field raises the
+// Quest system keyboard, which is where dictation comes from: he speaks, the
+// words arrive through the field's `value`, and `send` puts them on the board.
+// See keys.js and syskb.js.
+//
+// The system keyboard has no Enter that reaches us — Done dismisses it and
+// nothing is delivered — so the `send` box beside the field is not decoration.
+// It is the only way to send a dictated message.
 //
 // Sending is `POST /api/feedback` — the captain side of chat.say. Write-ahead:
 // the server queues the delivery before it wakes anybody, so a message never
@@ -92,7 +95,15 @@ export class ChatPanel extends Panel {
     // chats open never has two of them listening, because taking the keys takes
     // them off whoever had them. Closing gives them back to the room, which is
     // what makes `b`/`c`/`x` work again.
-    if (on) this.field.take(); else this.field.release();
+    //
+    // `raise: false` is the one thing opening does NOT do. Taking the keys is
+    // cheap — a caret, a ring, and his bluetooth keyboard live — but raising the
+    // system keyboard puts a shell surface in front of the conversation he has
+    // just opened and has not asked to write in yet. Pressing the composer is
+    // what asks. It is also, not by accident, the one path that used to take the
+    // headset out of the session: whatever the room does automatically the
+    // instant a panel opens is the worst place to be wrong.
+    if (on) this.field.take({ raise: false }); else this.field.release();
   }
 
   // Paint the tail of a thread. `messages` is the board's own shape:
@@ -171,7 +182,13 @@ export class ChatPanel extends Panel {
       this.sending = false;
       // Pressing `send` with a ray put the keys wherever they were; typing
       // straight on is the next thing he does either way.
-      this.field.take();
+      //
+      // `raise: false`, and it is not the same call as pressing the field. If
+      // the system keyboard is up it STAYS up — nothing blurred it, and
+      // `setValue('')` above already emptied the field under it — so he can
+      // keep dictating. Raising here would instead mean that sending with
+      // Enter on a bluetooth keyboard summons a keyboard he is not using.
+      this.field.take({ raise: false });
     }
   }
 }

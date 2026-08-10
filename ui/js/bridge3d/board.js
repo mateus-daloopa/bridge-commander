@@ -249,9 +249,13 @@ export class BoardWall {
     }
 
     // The field: still here, still free text, and it ANDs with the faces rather
-    // than replacing them. A Composer rather than uikit's Input — pressing an
-    // Input focuses its hidden DOM element, and that is what took the headset
-    // browser out of the session the moment he pressed this. See keys.js.
+    // than replacing them. A Composer rather than uikit's Input, for the two
+    // reasons in kit.js — and pressing it raises the system keyboard, so the
+    // wall can be filtered by voice as well as by a face. Every character it
+    // gets goes through `onChange` below, which is the same door a bluetooth
+    // keystroke comes through, so a dictated word filters exactly like a typed
+    // one. MNC-4 — "search all cards crashed the headset browser" — was the
+    // off-screen element, not this press. See syskb.js.
     this.field = new Field({
       box: {
         width: '100%', height: cm(barM), flexShrink: 0,

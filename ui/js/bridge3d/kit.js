@@ -11,12 +11,20 @@
 // not vendor, and in the finished kits it pulls an icon set of 1,595 modules.
 // Per-component is the intended workflow — see `building.md`.
 
-// **uikit's `Input` is deliberately not here.** It owns a hidden DOM <input>
-// and focuses it from its own pointerdown handler, and focusing a DOM input
-// inside an immersive session summons the Quest system keyboard and takes the
-// browser out of the session — so a field the ray can press is a crash. Text
-// fields in this room are `Field` (field.js): a Container, a Text, and a caret
-// the room paints. Not importing it here is what keeps one out.
+// **uikit's `Input` is deliberately not here**, and the reason has been
+// corrected: it is not that focusing a DOM input is fatal. It is not — the Quest
+// system keyboard is supported inside a session from Browser 26.1 and the room
+// raises it on purpose now (syskb.js). It is WHERE uikit puts the element. Its
+// hidden input is parked at `left: -1000vw`
+// (`ui/vendor/uikit/text/input/hidden-input.js`), and an off-screen text field
+// is the one pitfall Meta's own doc names: the page scrolls to it the moment
+// typing starts, so the flat board is somewhere else when he leaves the
+// session. The room's own field is one transparent pixel INSIDE the viewport.
+//
+// The second reason stands on its own: an `Input` draws its own text with its
+// own caret and selection, and nothing in this room is rendered by the browser.
+// Text fields here are `Field` (field.js) — a Container, a Text, and a caret the
+// room paints. Not importing it here is what keeps one out.
 import { Container } from '../../vendor/uikit/components/container.js';
 import { Text } from '../../vendor/uikit/components/text.js';
 import { Image } from '../../vendor/uikit/components/image.js';

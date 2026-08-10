@@ -1,15 +1,20 @@
 // field.js — a text field the room draws itself.
 //
-// uikit's `Input` cannot be used for one here, and the reason is the bug this
-// file exists for: an Input owns a hidden DOM <input> and focuses it from its
-// own pointerdown handler, so merely PRESSING one inside an immersive session
-// is enough to summon the Quest system keyboard and take the browser out of the
-// room. See `keys.js` for the whole of it.
+// A field is a Container with a Text in it. The value, and whether the keys are
+// here, come from `Composer`; this adds the box, the caret and the ring around
+// it — and all three paint from the same state the keys are routed by, so what
+// he sees is what will receive the next letter.
 //
-// So a field is a Container with a Text in it. The value, and whether the keys
-// are here, come from `Composer`; this adds the box, the caret and the ring
-// around it — and all three paint from the same state the keys are routed by,
-// so what he sees is what will receive the next letter.
+// It is drawn here rather than by uikit's `Input` for two reasons, and the
+// first one used to be stated wrongly: focusing a DOM input inside a session is
+// FINE and the room does it on purpose to raise the system keyboard (syskb.js).
+// What is not fine is where uikit puts its element — `left: -1000vw`, the
+// off-screen field Meta's doc says the page will scroll to. The other reason
+// needs no correction: nothing in this room is rendered by the browser, and an
+// `Input` brings its own glyphs, its own caret and its own selection.
+//
+// So the DOM field is a source of characters with no appearance, and this is
+// the appearance. `paint()` is called for a keystroke from either of them.
 
 import { Container, Text, COL, cm, inert, safe } from './kit.js';
 import { Composer } from './keys.js';
