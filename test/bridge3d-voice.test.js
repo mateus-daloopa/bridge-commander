@@ -16,6 +16,7 @@
 // to the room's listener. bridge3d/sound.js has to move both.
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
@@ -186,4 +187,54 @@ test('the room’s own context is never listed twice as somewhere else to hear',
   s.ctx = new FakeCtx();
   s.alsoHear(s.ctx);
   assert.deepEqual(s.heard, [], 'it is already the one setEars starts with');
+});
+
+test('a context that died is forgotten, not written to for the rest of the visit', async () => {
+  const { Sound } = await load('bridge3d', 'sound.js');
+  const s = new Sound();
+  s.ctx = new FakeCtx();
+  // An iOS audio-session interruption leaves speech.js's context closed; it
+  // builds another, routes the next voice into it, and calls alsoHear again.
+  const corpse = new FakeCtx();
+  s.alsoHear(corpse);
+  corpse.state = 'closed';
+  const fresh = new FakeCtx();
+  s.alsoHear(fresh);
+
+  s.setEars({ x: 0, y: 1.6, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+  assert.equal(fresh.listener.positionY.value, 1.6, 'the context the voice is really in got the head');
+  assert.deepEqual(s.heard, [fresh],
+    'and the dead one was dropped the first frame after it died, rather than written to '
+    + 'ninety times a second for the rest of the visit');
+});
+
+// ── the room's own two answers, wired ─────────────────────────────────────
+// Neither can be exercised here: main.js, list.js and voice3d.js all pull in
+// three.js and uikit, which is exactly why test/bridge3d.test.js reads the room's
+// source for the wiring it cannot run. Behaviour lives in test/voice.test.js;
+// what is asserted below is that the room is plugged into it at all.
+
+test('a failure the captain cannot see a toast for is written where he is looking', () => {
+  const main = fs.readFileSync(path.join(ROOT, 'ui', 'js', 'bridge3d', 'main.js'), 'utf8');
+  assert.match(main, /installVoice\(sound, agents, say\)/,
+    'the room does not hand voice.js anywhere to report a silence, so in a headset it has none');
+  assert.match(main, /if \(plate\) plate\.setNote\(m\)/,
+    'say() writes only to #status, which is inside the gate and hidden the moment he enters');
+
+  const voice3d = fs.readFileSync(path.join(ROOT, 'ui', 'js', 'bridge3d', 'voice3d.js'), 'utf8');
+  assert.match(voice3d, /setSilenceReport\(report\)/, 'and voice.js is never told about it');
+
+  const list = fs.readFileSync(path.join(ROOT, 'ui', 'js', 'bridge3d', 'list.js'), 'utf8');
+  assert.match(list, /setNote\(text\)/, 'the mat has nowhere to put a note');
+  assert.match(list, /if \(!t\) return;/,
+    'an empty status line clears the note — and the room empties it on every five-second poll');
+});
+
+test('pressing the lieutenant that is talking is what stops it', () => {
+  const main = fs.readFileSync(path.join(ROOT, 'ui', 'js', 'bridge3d', 'main.js'), 'utf8');
+  const chat = main.slice(main.indexOf('function openChat('));
+  assert.ok(/^[\s\S]{0,400}hush\(lt\)/.test(chat),
+    'the press opens the chat without silencing the voice first — and there is no other '
+    + 'control in here: no toolbar, and no keyboard on a face wearing a headset');
+  assert.ok(!/keydown[\s\S]*stopSpeaking/.test(main), 'a key is not a control he has');
 });

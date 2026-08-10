@@ -96,7 +96,17 @@ export class Sound {
   // own world position and orientation.
   setEars(pos, forward, up) {
     if (this.ctx) placeEars(this.ctx.listener, pos, forward, up);
-    for (const c of this.heard) placeEars(c.listener, pos, forward, up);
+    // Backwards, because a dead one is spliced out on the way past. speech.js
+    // closes its context and builds a new one when an audio-session
+    // interruption leaves a corpse, then routes into the new one and calls
+    // alsoHear again — so without this the room keeps writing nine AudioParams
+    // into a listener that renders nothing, ninety times a second, one more
+    // corpse per interruption for the rest of the visit.
+    for (let i = this.heard.length - 1; i >= 0; i--) {
+      const c = this.heard[i];
+      if (c.state === 'closed') { this.heard.splice(i, 1); continue; }
+      placeEars(c.listener, pos, forward, up);
+    }
   }
 
   setLevel(v) {

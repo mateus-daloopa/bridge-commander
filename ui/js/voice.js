@@ -17,7 +17,10 @@
 // NOT have is the toolbar — a <select> and two buttons are furniture a person
 // inside an immersive session cannot see or press — so every lookup of one is
 // optional here, and a page without them reads the same localStorage the board
-// writes. The room adds one thing on top: setSpeechRoute, below.
+// writes. What the room adds on top is three hooks, all of them null on the flat
+// board: setSpeechRoute (where the voice comes from), setSilenceReport (where a
+// failure is written when a toast cannot be seen) and speakingAuthor (who is
+// talking, so that pressing them can shut them up).
 import { api } from './api.js';
 import { speak as engineSpeak, stop as engineStop } from './speech.js';
 import { push as toast } from './toast.js';
@@ -168,10 +171,26 @@ const queue = [];         // [{plain, who, voice}], oldest first
 let draining = false;     // a message is being spoken, or is about to be
 let session = 0;          // bumped by stopSpeaking: a drain past its session is stale
 
+// Who is talking right now, or null. In the room this is the difference between
+// "something is speaking" and "THAT one is speaking": pressing the lieutenant
+// mid-monologue shuts it up, and there is no toolbar in a headset to do it with.
+let speaking = null;
+export function speakingAuthor() { return speaking; }
+
 // A silence the captain can see. Every way this board can fail to speak comes
 // through here — no path ends in nothing happening.
+//
+// A toast is only visible on a page that has one. bridge3d.html carries no toast
+// CSS, and inside an immersive session no page DOM composites at all, so in the
+// headset every one of these would land nowhere — the one place he cannot glance
+// at a toolbar to find out why it went quiet. A page with a surface of its own
+// hands one in here; the flat board sets none and keeps exactly the toast it had.
+let silenceReport = null;
+export function setSilenceReport(fn) { silenceReport = fn || null; }
+
 function mute(text) {
   toast({ emoji: '🔇', text });
+  if (silenceReport) { try { silenceReport(text); } catch (e) {} }
 }
 
 // The message is spoken whole. It used to be cut at 1200 characters, from when a
@@ -220,6 +239,7 @@ async function drain() {
       const { plain, who, voice } = queue.shift();
       const my = session;
       let heardAt = 0;
+      speaking = who || null;
       try {
         const said = await engineSpeak({
           url: engine.url + '/v1/audio/speech',
@@ -238,7 +258,7 @@ async function drain() {
         if (my === session) mute('speech failed: ' + (err && err.message ? err.message : err));
       }
     }
-  } finally { draining = false; }
+  } finally { draining = false; speaking = null; }
 }
 export function speak(text, who) {
   if (!voiceOn) return;
@@ -250,6 +270,7 @@ export function speak(text, who) {
 export function stopSpeaking() {
   session++;              // whatever the engine still owes us is stale
   queue.length = 0;       // stop stops what is waiting too, not just what is heard
+  speaking = null;        // and nobody is talking, as of now
   engineStop();
 }
 

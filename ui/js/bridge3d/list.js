@@ -18,6 +18,10 @@ import { Target } from './hover.js';
 
 // ---- the mat that summons the board ---------------------------------------
 
+// How long a note stays up. Long enough to be read after he has looked down for
+// it, short enough that it never becomes part of the furniture.
+const NOTE_MS = 12000;
+
 // On the floor, dead ahead, in the lane where nothing else lives. A control you
 // glance DOWN at rather than something you read — which is the only reason it is
 // allowed to sit below the band everything readable is held to, and it is still
@@ -71,6 +75,17 @@ export class ListPlate {
       text: 'the board', color: COL.text, fontWeight: 'semi-bold',
       fontSize: fontFor(W.TYPE.body, p.dist),
     }));
+    // A second line, under it, empty until something has to be said to a person
+    // who cannot see a toast — the speech engine refusing, the board not
+    // answering. The mat is the surface for it: it is already in his view, it
+    // already carries one line of type, and it is the only readable thing in
+    // the room that is not a window he has to have opened.
+    this.note = new Text({
+      text: '', display: 'none', color: COL.warn, fontWeight: 'medium',
+      fontSize: fontFor(W.TYPE.meta, p.dist),
+    });
+    this.ui.add(this.note);
+    this.noteUntil = 0;
 
     this.target = new Target({
       mesh: face, spot, name: 'list-plate',
@@ -78,5 +93,21 @@ export class ListPlate {
     });
   }
 
-  tick(now) { this.target.tick(now); }
+  // Nothing to say is NOT "clear it": the room writes its status line empty on
+  // every poll, five seconds apart, and a warning wiped by the next tick of a
+  // clock is a warning he never read. A note times itself out instead.
+  setNote(text) {
+    const t = String(text || '');
+    if (!t) return;
+    this.note.setProperties({ text: t, display: 'flex' });
+    this.noteUntil = performance.now() + NOTE_MS;
+  }
+
+  tick(now) {
+    this.target.tick(now);
+    if (this.noteUntil && now >= this.noteUntil) {
+      this.noteUntil = 0;
+      this.note.setProperties({ text: '', display: 'none' });
+    }
+  }
 }

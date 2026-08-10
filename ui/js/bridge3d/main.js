@@ -34,14 +34,24 @@ import { routeKey, setKeyboard } from './keys.js';
 import { SystemKeyboard } from './syskb.js';
 import { Grabs } from './grab.js';
 import { Sound } from './sound.js';
-import { installVoice, askForSound } from './voice3d.js';
+import { installVoice, askForSound, hush } from './voice3d.js';
 import { trackMessages } from '../voice.js';
 import { S } from '../state.js';
 import { installSky, installToneMapping } from './sky.js';
 import { buildTerrace, crewInlay, setAnisotropy } from './place.js';
 import { updateRoots, sortTransparent, rootCount, COL } from './kit.js';
 
-const say = (m) => { const el = document.getElementById('status'); if (el) el.textContent = m; };
+// What the room says out loud in type. #status is the gate's line, which is
+// worth nothing once he is inside: it is hidden on entering and no page DOM
+// composites into an immersive session anyway. So the same words also go on the
+// mat, which is a surface he is standing in front of — see ListPlate.setNote.
+// Declared before the mat exists because the WebGL failure below speaks first.
+let plate = null;
+const say = (m) => {
+  const el = document.getElementById('status');
+  if (el) el.textContent = m;
+  if (plate) plate.setNote(m);
+};
 
 // The dev loop's two switches, both off unless the URL asks — see README.md.
 // `?capture=1` keeps the drawing buffer so a screenshot is not an empty PNG;
@@ -105,7 +115,7 @@ scene.add(agents.group);
 // card on it, filterable, one press deep. There is no second flat list any
 // more: two "every card" surfaces in one room is clutter he would have to
 // learn his way around for no gain.
-const plate = new ListPlate(() => openBoard());
+plate = new ListPlate(() => openBoard());
 scene.add(plate.group);
 
 const rays = new Rays(renderer, scene, camera, renderer.domElement);
@@ -135,13 +145,17 @@ setKeyboard(syskb);
 // And the crew is audible. The room speaks a lieutenant's message the same way
 // the flat board does — same file, same voices, same queue — with one thing the
 // flat board has no answer to: the voice comes from the berth the lieutenant is
-// standing in. See voice3d.js.
-installVoice(sound, agents);
+// standing in. And when it cannot speak it says so on the mat, because a toast
+// is invisible to a man in a headset. See voice3d.js.
+installVoice(sound, agents, say);
 
 // Click a lieutenant, get its chat. This is the shortest path between "I can
 // see my crew" and "I am talking to them", and it is the whole reason the
 // spheres were worth drawing.
 function openChat(lt) {
+  // And if that is the one currently talking, the press shuts it up first — the
+  // only stop control a person wearing a headset has. See voice3d.js.
+  hush(lt);
   const key = 'lieutenant:' + lt.id;
   const p = windows.show(key, () => new ChatPanel({
     target: key,

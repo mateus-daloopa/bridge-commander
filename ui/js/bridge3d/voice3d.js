@@ -31,11 +31,18 @@
 // no reason. Direction is the whole point; loudness stays exactly as it was.
 
 import * as THREE from 'three';
-import { setSpeechRoute, setVoiceOn } from '../voice.js';
+import { setSpeechRoute, setVoiceOn, setSilenceReport, speakingAuthor, stopSpeaking } from '../voice.js';
 
 const _at = new THREE.Vector3();
 
-export function installVoice(sound, agents) {
+// `report` is how the room says something out loud in the only medium a person
+// in a headset has: type on a surface he is standing in front of. voice.js's own
+// answer is a toast, and a toast is a page element — this page has no CSS for
+// one and an immersive session composites no page at all, so every way the board
+// can fail to speak would fail silently in here. It is passed in rather than
+// looked up because a file about panners has no business knowing about the DOM.
+export function installVoice(sound, agents, report) {
+  if (report) setSilenceReport(report);
   // One panner per author, kept because the berths never move and eight nodes
   // are cheaper than one per message. Dropped whole whenever the graph under
   // them changes — a context replaced after an audio-session interruption, or a
@@ -72,6 +79,20 @@ export function installVoice(sound, agents) {
       return pan;
     };
   });
+}
+
+// Press the one that is talking and it shuts up. Entering the room turns speech
+// on for the visit and there is nothing in here to turn it back off — no
+// toolbar, and no keyboard on a face wearing a headset — so the lieutenant
+// himself is the control. The press keeps its old meaning as well: the chat it
+// opens is where the message he just silenced is written down. Matched by id OR
+// name, the same rule Agents.placeOf uses, because either can be the author
+// stamped on a message.
+export function hush(lt) {
+  const who = speakingAuthor();
+  if (!lt || !who || (who !== lt.id && who !== lt.name)) return false;
+  stopSpeaking();
+  return true;
 }
 
 // The room asking for sound, from inside the gesture that entered it. Separate

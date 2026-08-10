@@ -62,6 +62,9 @@ export const COL = {
   rim: '#8ea2c0',
   field: '#111b27',
   mine: '#1b2b3d',
+  // Something went wrong and he is wearing a headset, so there is no toolbar to
+  // glance at and no toast to see. 10.3:1 on `panel` — measured, not guessed.
+  warn: '#ffb454',
 };
 
 // Every root has to be told to lay itself out each frame. One registry rather

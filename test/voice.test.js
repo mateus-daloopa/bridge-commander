@@ -14,7 +14,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-let speak, stopSpeaking, stripForSpeech, setSpeechRoute;
+let speak, stopSpeaking, stripForSpeech, setSpeechRoute, setSilenceReport, speakingAuthor;
 
 const ENGINE = 'http://127.0.0.1:8883';
 const tick = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -159,7 +159,7 @@ test.before(async () => {
   fakePage();
   fakeEngine();
   answer = () => said();
-  ({ speak, stopSpeaking, stripForSpeech, setSpeechRoute } =
+  ({ speak, stopSpeaking, stripForSpeech, setSpeechRoute, setSilenceReport, speakingAuthor } =
     await import(pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'voice.js')).href));
   // The catalogue lands a few promises after import; the board is mute (and says
   // so) until it does, so every test would otherwise be testing that instead.
@@ -175,6 +175,7 @@ test.beforeEach(async () => {
   made.length = 0;
   wiredTo.length = 0;
   setSpeechRoute(null);            // a flat board again, unless a test says otherwise
+  setSilenceReport(null);          // and nowhere but the toast to report a silence
   answer = () => said();
 });
 
@@ -326,4 +327,46 @@ test('a route is handed the speech graph, and the sound goes through what it giv
   speak('e agora', 'server');
   await until(() => wiredTo.length >= 1, 'the second message to be wired');
   assert.equal(wiredTo[0], theSink, 'an author with no place is spoken from everywhere, as before');
+});
+
+// ── a silence that reaches somebody who cannot see a toast ────────────────
+// A toast is a page element. The room's page has no CSS for one, and inside an
+// immersive session no page element is drawn at all — so in a headset every one
+// of these failures would be exactly the silent fallthrough this file exists to
+// have got rid of. A page with a surface of its own says so there as well.
+
+test('a page that cannot show a toast is told the same thing another way', async () => {
+  const told = [];
+  setSilenceReport((t) => told.push(t));
+  answer = () => refused('engine is out of memory');
+
+  speak('me responde', 'monica');
+  await until(() => told.length >= 1, 'the room to be told why it went quiet');
+  assert.match(told[0], /speech failed: engine is out of memory/,
+    'and told the reason, not merely that something happened');
+  assert.ok(toasts().some((t) => /speech failed/.test(t)),
+    'the flat board still gets its toast — nothing was taken away from it');
+});
+
+// ── who is talking, so that pressing them can stop them ───────────────────
+// In the room there is no toggle to reach for and no keyboard on his face. The
+// lieutenant is the control, which only works if the board can say whose voice
+// is in the air right now.
+
+test('the board knows who is talking, and stopping makes it nobody', async () => {
+  assert.equal(speakingAuthor(), null, 'a quiet board is nobody talking');
+  answer = (input, signal) => stillGoing(signal);
+
+  speak('relatório do dia', 'monica');
+  await until(() => speakingAuthor() === 'monica', 'monica to be named as the one talking');
+
+  stopSpeaking();
+  assert.equal(speakingAuthor(), null, 'pressing her stops her, and then nobody is talking');
+  assert.equal(speaker().paused, true, 'and the sound stopped there and then');
+});
+
+test('when the queue runs out, nobody is talking any more', async () => {
+  speak('acabou', 'monica');
+  await until(() => asked.length >= 1, 'the message to be spoken');
+  await until(() => speakingAuthor() === null, 'the board to fall quiet on its own');
 });
