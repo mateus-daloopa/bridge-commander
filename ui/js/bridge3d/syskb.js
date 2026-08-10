@@ -157,7 +157,13 @@ export class SystemKeyboard {
     const c = this.composer;
     if (!c) return;
     const v = this.el.value;
-    if (this.seam === null) this.seam = seamOf(this.base, v);
+    if (this.seam === null) {
+      const seam = seamOf(this.base, v);
+      // An empty first value says nothing about whether the seed survived, so
+      // the decision waits for the next one and the composer keeps its text.
+      if (seam === null) { this._unscroll(); return; }
+      this.seam = seam;
+    }
     this.applying = true;
     try { c.setValue(this.seam + v); } finally { this.applying = false; }
     this._unscroll();
@@ -179,6 +185,21 @@ export class SystemKeyboard {
 // What survives of the composer's earlier text once the system keyboard has had
 // its first say. Exported for the test; the reasoning is in keys.js beside the
 // routing rules, because both are about who owns a character.
+//
+// The seed survives an EDIT in either direction: he can type after it, and he
+// can backspace into it — the second is the whole reason the field is seeded at
+// all, so reading it as an overwrite would defeat the point. `null` means the
+// value decides nothing and the next one is asked instead.
+//
+// One ambiguity has no answer from the value alone: if the field really did
+// overwrite and his first character happens to begin the seed — base "olá", he
+// types "o" — the backspace rule reads it as a surviving seed and the earlier
+// text stays. It costs one character, and no API we have distinguishes the two.
 export function seamOf(base, first) {
-  return base && String(first).startsWith(base) ? '' : base;
+  if (!base) return '';
+  const v = String(first);
+  if (v === '') return null;
+  if (v.startsWith(base)) return '';
+  if (base.startsWith(v)) return '';
+  return base;
 }

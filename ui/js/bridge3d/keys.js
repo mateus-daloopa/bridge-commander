@@ -47,7 +47,6 @@ let keyboard = null;
 
 export function keysHeld() { return holder; }
 export function setKeyboard(kb) { keyboard = kb || null; return keyboard; }
-export function keyboardIn() { return keyboard; }
 
 // The window's keydown comes through here FIRST. `true` means a composer took
 // the key and no shortcut may see it — held is held, so `b`/`c`/`x` are dead
@@ -93,6 +92,11 @@ export class Composer {
     if (holder !== this) {
       const was = holder;
       holder = this;
+      // The system keyboard belongs to whoever holds the keys. When they move
+      // without asking for it, the old holder is dismissed rather than left
+      // being typed into by a field it no longer owns — and blurring makes
+      // `driving()` false, so bluetooth resumes into the new holder at once.
+      if (was && !raise && keyboard) keyboard.dismiss(was);
       if (was) was.paint();
       this.paint();
     }

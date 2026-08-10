@@ -286,11 +286,11 @@ window.addEventListener('pointermove', (e) => {
 });
 // Keystrokes belong to whatever composer holds the keys — a chat panel takes
 // them when it opens, and Enter inside it sends. `routeKey` is the room's own
-// notion of that, and it never asks the document which element is active:
-// nothing here focuses a DOM node, because focusing one inside an immersive
-// session is what crashes the headset browser out of the room. It returns true
-// when a composer took the key, which is what keeps the shortcuts below off
-// while he is typing.
+// notion of that, and it runs first, which is what keeps the shortcuts below
+// off while he is typing. The room DOES focus a DOM node, deliberately: the one
+// in-viewport field in `syskb.js`, which is how the system keyboard is raised.
+// While that field is focused `routeKey` leaves the characters to its `input`
+// event. Why, and what the old crash really was, is in `keys.js` and `syskb.js`.
 window.addEventListener('keydown', (e) => {
   if (routeKey(e)) return;
   if (e.key === 'b') openBoard();

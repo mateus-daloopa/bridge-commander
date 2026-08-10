@@ -741,6 +741,17 @@ test('only the system keyboard focuses anything, and its field is in the viewpor
       `${f} builds a uikit Input, whose hidden element sits at left:-1000vw`);
   }
 
+  // The wrong theory itself, hunted by phrase. A stale copy of "focusing a node
+  // takes the browser out of the session" is exactly what this change exists to
+  // correct, and greping for `.focus(` above cannot see one rotting in a
+  // comment.
+  for (const f of fs.readdirSync(UI)) {
+    if (!f.endsWith('.js')) continue;
+    const src = fs.readFileSync(path.join(UI, f), 'utf8');
+    assert.ok(!/focus\w*[^.]{0,80}(out of the (session|room)|crash)/i.test(src),
+      `${f} still says focusing a DOM node takes the browser out of the session — it does not`);
+  }
+
   // The one field that is focused, and the property the crash turned on. It is
   // asserted against the STYLE the module ships, because that string is the
   // whole difference between the supported mechanism and the documented bug.
@@ -951,11 +962,70 @@ test('the system keyboard drives the composer, and never types a letter twice', 
 
   // The seam itself, which is the one decision this design cannot read off the
   // API: whether the first value of an editing session replaced what he had
-  // written or was typed after it.
+  // written or was typed after it. All five branches, because the seed survives
+  // an edit in EITHER direction — typing after it and backspacing into it —
+  // and the second is the whole reason the field is seeded at all.
   assert.equal(seamOf('olá', ' '), 'olá', 'an overwritten field threw away his sentence');
   assert.equal(seamOf('olá', 'olá tudo'), '', 'a surviving seed was pasted in front of itself');
+  assert.equal(seamOf('olá', 'ol'), '', 'a first backspace was read as an overwrite');
+  assert.equal(seamOf('olá', ''), null, 'an empty first value decided a seam it cannot know');
   assert.equal(seamOf('', 'a'), '', 'an empty composer grew a prefix');
 
+  setKeyboard(null);
+});
+
+test('the keyboard survives a first backspace, an empty field, and the keys moving', async () => {
+  const { Composer, routeKey, setKeyboard, keysHeld } = await load('keys.js');
+  const { SystemKeyboard } = await load('syskb.js');
+  const key = (k, over) => Object.assign({ key: k, preventDefault() {} }, over);
+
+  // ---- his first action is a backspace --------------------------------------
+  //
+  // The seed is there so he can delete back into what he already wrote. Reading
+  // that first shorter value as an overwrite pastes the whole sentence back in
+  // front of the edit, and it stays wrong for the rest of the showing.
+  const { doc } = fakeDom();
+  const kb = new SystemKeyboard(doc);
+  setKeyboard(kb);
+  kb.attach({ isSystemKeyboardSupported: true });
+  const el = doc.body.children[0];
+  const a = new Composer();
+  a.setValue('ola');
+  a.take();
+  el.typed('ol');
+  assert.equal(a.value, 'ol', 'a first backspace pasted the seed back in front of the edit');
+  el.typed('o');
+  assert.equal(a.value, 'o', 'the seam was re-decided after the first value');
+
+  // ---- and a field that goes empty ------------------------------------------
+  //
+  // An empty value is the one that says nothing: the overwrite model can empty
+  // the field on its own. The composer keeps what it had and the next value
+  // decides.
+  a.setValue('ola');
+  a.take();
+  el.typed('');
+  assert.equal(a.value, 'ola', 'an empty first value wiped text it knew nothing about');
+  el.typed('ol');
+  assert.equal(a.value, 'ol', 'the deferred seam decided wrong on the next value');
+
+  // ---- the keys move to another composer without asking for the keyboard ----
+  //
+  // `take({ raise: false })` is what opening a chat does. If the keyboard were
+  // left driving the composer that no longer holds the keys, `routeKey` would
+  // swallow every bluetooth character while the field wrote into the old one.
+  const b = new Composer();
+  a.take();
+  assert.equal(kb.driving(), true);
+  b.take({ raise: false });
+  assert.equal(keysHeld(), b);
+  assert.equal(kb.driving(), false, 'the keyboard is still editing the composer that lost the keys');
+  const before = a.value;
+  routeKey(key('z'));
+  assert.equal(b.value, 'z', 'bluetooth did not resume into the composer that took the keys');
+  assert.equal(a.value, before, 'the old composer was still being written into');
+
+  kb.detach();
   setKeyboard(null);
 });
 
