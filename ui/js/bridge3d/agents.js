@@ -234,6 +234,17 @@ export class Agents {
     }
   }
 
+  // Where a message's author is standing, in world coordinates — or null for
+  // anybody who is not on the arc (the captain, a worker, a lieutenant past the
+  // eighth berth). `actor` is matched by id OR name because that is what the
+  // server stamps on a message and what state.js resolves by, and the two paths
+  // disagreeing about who someone is would put a voice in the wrong place.
+  placeOf(actor, out) {
+    if (!actor) return null;
+    const s = this.slots.find((x) => x.lt && (x.lt.id === actor || x.lt.name === actor));
+    return s ? s.group.getWorldPosition(out || new THREE.Vector3()) : null;
+  }
+
   tick(now) {
     const t = now / 1000;
     for (const s of this.slots) {

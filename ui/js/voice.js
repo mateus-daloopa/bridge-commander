@@ -11,6 +11,13 @@
 // chosen, the board is silent AND says so on screen. It used to fall through to
 // the browser voice without a word, which is how it spoke English in a
 // Portuguese room for an afternoon while the bug was hunted somewhere else.
+//
+// The 3D room (`bridge3d/`) speaks through this same file, and that is the
+// point: it is the same policy, the same voices and the same queue. What it does
+// NOT have is the toolbar — a <select> and two buttons are furniture a person
+// inside an immersive session cannot see or press — so every lookup of one is
+// optional here, and a page without them reads the same localStorage the board
+// writes. The room adds one thing on top: setSpeechRoute, below.
 import { api } from './api.js';
 import { speak as engineSpeak, stop as engineStop } from './speech.js';
 import { push as toast } from './toast.js';
@@ -46,7 +53,14 @@ function savedVoiceId() {
 export function voiceOptions(keep) {
   return voicesReady.then(() => sortedVoices(voiceList, voiceFilter, keep));
 }
+// The board's own voice — the one that speaks for anybody without their own.
+// The picker holds it where there is a picker; where there is not, the same
+// answer comes from the same two places the picker itself was filled from.
+function boardVoice() {
+  return voiceSelect ? voiceSelect.value : (savedVoiceId() || (engine && engine.voice) || '');
+}
 function populatePicker() {
+  if (!voiceSelect) return;
   // The workspace may name a voice; that is the board's until the captain picks
   // another. Nothing at all is a real state, and a loud one — see enqueue.
   const saved = savedVoiceId() || (engine && engine.voice) || '';
@@ -64,7 +78,7 @@ function populatePicker() {
   }
   if (saved && sorted.some((v) => v.id === saved)) voiceSelect.value = saved;
 }
-voiceSelect.onchange = () => {
+if (voiceSelect) voiceSelect.onchange = () => {
   const id = voiceSelect.value;
   try { if (id) localStorage.setItem(VOICE_KEY, id); else localStorage.removeItem(VOICE_KEY); } catch (e) {}
 };
@@ -73,7 +87,7 @@ voiceSelect.onchange = () => {
 // looks the author up. A `who` that is nobody — the voice test, a worker — is
 // simply the board's voice.
 function voiceForAuthor(who) {
-  return pickVoice((lieutenantByActor(who) || {}).voice, voiceSelect.value, voiceList);
+  return pickVoice((lieutenantByActor(who) || {}).voice, boardVoice(), voiceList);
 }
 function stripEmoji(s) { // spoken text only
   return s
@@ -140,6 +154,15 @@ export function stripForSpeech(text) {
 // The board never asks for a second speech while one is in flight. Stopping —
 // and turning the voice off, which stops — empties the queue as well: silence
 // means silence, not a pause before the backlog resumes.
+// WHERE the voice comes from, if anywhere. A message on a flat board comes from
+// the board, so this is null there and the sound leaves through the speakers as
+// it always has. In the room it is not: the lieutenant who said it is standing
+// somewhere, and a voice arriving from that direction is the reason the room is
+// worth being in. Given the author, the function hands back speech.js's `route`
+// — or nothing, for an author with no place, who is then spoken from everywhere.
+let routeFor = null;
+export function setSpeechRoute(fn) { routeFor = fn || null; }
+
 const QUEUE_MAX = 3;      // waiting messages, NOT counting the one being spoken
 const queue = [];         // [{plain, who, voice}], oldest first
 let draining = false;     // a message is being spoken, or is about to be
@@ -205,6 +228,7 @@ async function drain() {
           params: engine.params && Object.keys(engine.params).length ? engine.params : undefined,
           title: who || 'Bridge Commander',
           artist: 'Bridge Commander',
+          route: (routeFor && routeFor(who)) || undefined,
           onFirstSound: () => { heardAt = performance.now(); },
         });
         if (my === session) await wait(tailMs(said, heardAt));
@@ -247,12 +271,20 @@ export function speakMessage(text, key, who) {
   enqueue(plain, who);
   return true;
 }
-function setVoiceOn(on) {
+// `remember` is what the BUTTON does — the captain pressed it, so it holds
+// across reloads. The room passes false: entering it is a decision about this
+// visit, and it must not reach across and switch the flat board's speech on
+// behind his back.
+export function setVoiceOn(on, remember = true) {
   voiceOn = on;
-  voiceBtn.classList.toggle('on', on);
-  voiceBtn.textContent = on ? '🔊 on' : '🔊 off';
-  document.getElementById('voice-tools').classList.toggle('dim', !on);
+  if (voiceBtn) {
+    voiceBtn.classList.toggle('on', on);
+    voiceBtn.textContent = on ? '🔊 on' : '🔊 off';
+  }
+  const tools = document.getElementById('voice-tools');
+  if (tools) tools.classList.toggle('dim', !on);
   if (!on) stopSpeaking(); // turning voice off silences anything mid-utterance
+  if (!remember) return;
   try { if (on) localStorage.setItem(VOICE_ON_KEY, '1'); else localStorage.removeItem(VOICE_ON_KEY); } catch (e) {}
 }
 // No gesture-primer: nothing is ever spoken except real content and the
@@ -260,9 +292,10 @@ function setVoiceOn(on) {
 // already rides a genuine user gesture — a card's Speak button click
 // (speakMessage) and the voice-test button both speak inside the click, and that
 // real in-gesture utterance is itself the unlock.
-voiceBtn.onclick = () => setVoiceOn(!voiceOn);
+if (voiceBtn) voiceBtn.onclick = () => setVoiceOn(!voiceOn);
 try { if (localStorage.getItem(VOICE_ON_KEY) === '1') setVoiceOn(true); } catch (e) {} // restore toggle
-document.getElementById('voice-test').onclick = () => enqueue('Hello, this is my voice.');
+const voiceTest = document.getElementById('voice-test');
+if (voiceTest) voiceTest.onclick = () => enqueue('Hello, this is my voice.');
 
 // ---------- speak only NEW lieutenant messages ----------
 let firstLoad = true;

@@ -34,6 +34,9 @@ import { routeKey, setKeyboard } from './keys.js';
 import { SystemKeyboard } from './syskb.js';
 import { Grabs } from './grab.js';
 import { Sound } from './sound.js';
+import { installVoice, askForSound } from './voice3d.js';
+import { trackMessages } from '../voice.js';
+import { S } from '../state.js';
 import { installSky, installToneMapping } from './sky.js';
 import { buildTerrace, crewInlay, setAnisotropy } from './place.js';
 import { updateRoots, sortTransparent, rootCount, COL } from './kit.js';
@@ -129,6 +132,12 @@ setVoice(sound);
 const syskb = new SystemKeyboard();
 setKeyboard(syskb);
 
+// And the crew is audible. The room speaks a lieutenant's message the same way
+// the flat board does — same file, same voices, same queue — with one thing the
+// flat board has no answer to: the voice comes from the berth the lieutenant is
+// standing in. See voice3d.js.
+installVoice(sound, agents);
+
 // Click a lieutenant, get its chat. This is the shortest path between "I can
 // see my crew" and "I am talking to them", and it is the whole reason the
 // spheres were worth drawing.
@@ -205,7 +214,15 @@ function repaint() {
 async function refresh() {
   try {
     doc = await fetch('/api/board').then((r) => r.json());
+    // voice.js reads the roster through state.js — whose voice an author gets is
+    // one rule and it lives there. The room has no SSE and no state layer of its
+    // own, so the poll IS the update.
+    S.doc = doc;
     repaint();
+    // Whatever arrived since the last poll gets spoken. The first call is the
+    // one that seeds what has already been said, so walking in never replays the
+    // backlog — the same firstLoad the flat board has, and the same file.
+    trackMessages(doc);
     say('');
   } catch (e) { say('the board did not answer: ' + ((e && e.message) || e)); }
 }
@@ -226,6 +243,7 @@ async function enter() {
   // Inside the gesture, before any await: a browser only allows audio to start
   // from a real user action, and an await here would put us outside it.
   sound.start(DEV.get('track'));
+  askForSound();
   if (emulated) await emulated;
   const flat = (why) => { say(why); gate.hidden = true; };
   if (!navigator.xr) return flat('no WebXR in this browser — flat view: drag to look, click to point');

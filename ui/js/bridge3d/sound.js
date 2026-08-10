@@ -35,12 +35,35 @@ const BED = 0.16;
 // you want behind a surface somebody is reading.
 const DEFAULT_TRACK = 'drift';
 
+function placeEars(l, pos, forward, up) {
+  if (!l) return;
+  if (l.positionX) {
+    l.positionX.value = pos.x; l.positionY.value = pos.y; l.positionZ.value = pos.z;
+    l.forwardX.value = forward.x; l.forwardY.value = forward.y; l.forwardZ.value = forward.z;
+    l.upX.value = up.x; l.upY.value = up.y; l.upZ.value = up.z;
+  } else if (l.setPosition) {
+    // Safari still ships the deprecated pair and nothing else.
+    l.setPosition(pos.x, pos.y, pos.z);
+    l.setOrientation(forward.x, forward.y, forward.z, up.x, up.y, up.z);
+  }
+}
+
 export class Sound {
   constructor(listener) {
     this.ctx = null;
     this.music = null;
     this.listener = listener || null;   // three's AudioListener, for placing sounds
     this.level = BED;
+    this.heard = [];                    // other contexts the ears are also in
+  }
+
+  // Another AudioContext whose listener has to follow the head. The speech path
+  // (`../speech.js`) owns its own and has to — that context feeds the <audio>
+  // the OS sees as a media player, and it is not ours to take over — so a voice
+  // panned in THAT graph faces wherever the listener was left, which is the
+  // origin looking down -Z, until its ears are moved with these ones.
+  alsoHear(ctx) {
+    if (ctx && ctx !== this.ctx && !this.heard.includes(ctx)) this.heard.push(ctx);
   }
 
   // Called from the gesture that enters the room. Safe to call twice.
@@ -72,17 +95,8 @@ export class Sound {
   // the wrong way the moment he turns. Called from the loop with the camera's
   // own world position and orientation.
   setEars(pos, forward, up) {
-    const l = this.ctx && this.ctx.listener;
-    if (!l) return;
-    if (l.positionX) {
-      l.positionX.value = pos.x; l.positionY.value = pos.y; l.positionZ.value = pos.z;
-      l.forwardX.value = forward.x; l.forwardY.value = forward.y; l.forwardZ.value = forward.z;
-      l.upX.value = up.x; l.upY.value = up.y; l.upZ.value = up.z;
-    } else if (l.setPosition) {
-      // Safari still ships the deprecated pair and nothing else.
-      l.setPosition(pos.x, pos.y, pos.z);
-      l.setOrientation(forward.x, forward.y, forward.z, up.x, up.y, up.z);
-    }
+    if (this.ctx) placeEars(this.ctx.listener, pos, forward, up);
+    for (const c of this.heard) placeEars(c.listener, pos, forward, up);
   }
 
   setLevel(v) {

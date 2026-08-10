@@ -184,6 +184,7 @@ emulate; `window.__bridge` is not, so the room can still be driven by hand.
 | `windows.js` | how many panels are open, where they land, and the rule that the room never moves one he has placed |
 | `grab.js` | squeeze to pick a window up, and what happens when he lets go |
 | `sound.js` | the music bed, and the sound a press, a grab and a release make |
+| `voice3d.js` | the crew, out loud — `../voice.js`'s speech, arriving from the berth the lieutenant is standing in |
 | `list.js` | the mat on the floor that opens the board |
 | `hover.js` | the ray, and the six states a thing goes through when it is pointed at |
 | `kit.js` | uikit wired in once: layout, MSDF text, the palette, and what the font can actually draw |

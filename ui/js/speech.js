@@ -6,6 +6,9 @@
    ponytail: `ui/js/speech.js` is a hand-copy of chatterbox_server's
    console/speech.js. Two copies drift. If a third consumer ever appears, that is
    the moment to publish it properly instead of copying again.
+   ponytail: speak()'s `route` was written HERE first, for the 3D room, and the
+   copy upstream does not have it yet. It belongs there for the same reason the
+   rest of this file does: it is about the audio graph, not about the board.
    ponytail: hold() — the keep-alive at the bottom — was written HERE first,
    against the captain's phone, and the copy upstream does not have it yet. It
    belongs in the original for the same reason the rest of this file does: it is
@@ -376,11 +379,19 @@ async function errText(r) {
      params         engine knobs, passed through untouched (optional).
      title, artist  what the lock screen and the transport say (optional).
      onFirstSound   called with the ms to first audible chunk (optional).
+     route          (ctx, out) => node, for a caller that has somewhere for the
+                    voice to COME FROM (optional). It is handed this module's
+                    own context and the destination the buffers would have gone
+                    to, and hands back a node to render through instead — a
+                    panner, a filter, whatever. Everything the OS sees is
+                    downstream of it and untouched: the sink, the element, the
+                    lock screen. Return nothing and the sound goes straight out
+                    as it always has, which is what the flat board does.
 
    Resolves when the stream is over with {blob, bytes, rate, ttfs, stopped} —
    the same audio as a WAV, replayable. Rejects if the engine refuses or the
    network fails, with .status carrying the HTTP status when there was one. */
-export async function speak({url, voice, input, params, title, artist, onFirstSound}) {
+export async function speak({url, voice, input, params, title, artist, onFirstSound, route}) {
   if (!url) throw new Error('speak() needs the engine url — there is no default');
   if (!voice) throw new Error('speak() needs a voice — there is no default');
   stop();                     // one voice at a time
@@ -406,6 +417,11 @@ export async function speak({url, voice, input, params, title, artist, onFirstSo
     rate = parseInt(r.headers.get('x-sample-rate')) || 24000;
     const reader = r.body.getReader();
     let carry = null, nextAt = 0;
+    // Where the buffers go, decided per chunk and memoised. Per chunk because
+    // `sink` can still fall to null under us — openSink()'s play() is a promise
+    // and a browser that refuses autoplay drops this message to the bare
+    // speakers mid-stream — and the route has to follow it there.
+    let into = null, intoFor = null;
     for (;;) {
       const {done, value} = await reader.read();
       if (done) break;
@@ -427,7 +443,9 @@ export async function speak({url, voice, input, params, title, artist, onFirstSo
       for (let i = 0; i < i16.length; i++) ch[i] = i16[i] / 32768;
       const src = ctx.createBufferSource();
       src.buffer = abuf;
-      src.connect(sink || ctx.destination);
+      const out = sink || ctx.destination;
+      if (out !== intoFor) { intoFor = out; into = (route && route(ctx, out)) || out; }
+      src.connect(into);
       const at = Math.max(ctx.currentTime, nextAt);   // seamless queue
       src.start(at);
       nextAt = at + abuf.duration;

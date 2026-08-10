@@ -14,7 +14,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-let speak, stopSpeaking, stripForSpeech;
+let speak, stopSpeaking, stripForSpeech, setSpeechRoute;
 
 const ENGINE = 'http://127.0.0.1:8883';
 const tick = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -87,12 +87,18 @@ const speaker = () => audioEl;
 // ── the speakers ──────────────────────────────────────────────────────────
 // Enough AudioContext to schedule buffers into. Timing is irrelevant here — the
 // assertions are about requests, not sound.
+//
+// It records where each buffer was CONNECTED, which is the only evidence that a
+// route the board handed down was used at all: the engine request looks
+// identical either way.
+const wiredTo = [];
+let theSink = null;               // the MediaStream destination, made once and kept
 class FakeCtx {
   constructor() { this.state = 'running'; this.destination = {}; }
   get currentTime() { return 0; }
   resume() { this.state = 'running'; return Promise.resolve(); }
   suspend() { this.state = 'suspended'; return Promise.resolve(); }
-  createMediaStreamDestination() { return { stream: { id: 'live' } }; }
+  createMediaStreamDestination() { return (theSink = { stream: { id: 'live' } }); }
   createBuffer(ch, len, rate) {
     const data = new Float32Array(len);
     return { length: len, duration: len / rate, getChannelData: () => data };
@@ -100,7 +106,7 @@ class FakeCtx {
   createBufferSource() {
     let cb = null;
     return {
-      connect() {}, start() { setTimeout(() => cb && cb(), 1); },
+      connect(n) { wiredTo.push(n); }, start() { setTimeout(() => cb && cb(), 1); },
       set onended(f) { cb = f; }, get onended() { return cb; },
     };
   }
@@ -153,7 +159,7 @@ test.before(async () => {
   fakePage();
   fakeEngine();
   answer = () => said();
-  ({ speak, stopSpeaking, stripForSpeech } =
+  ({ speak, stopSpeaking, stripForSpeech, setSpeechRoute } =
     await import(pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'voice.js')).href));
   // The catalogue lands a few promises after import; the board is mute (and says
   // so) until it does, so every test would otherwise be testing that instead.
@@ -167,6 +173,8 @@ test.beforeEach(async () => {
   await tick(10);
   asked.length = 0;
   made.length = 0;
+  wiredTo.length = 0;
+  setSpeechRoute(null);            // a flat board again, unless a test says otherwise
   answer = () => said();
 });
 
@@ -282,4 +290,40 @@ test('a speech that fails toasts, and the queue keeps going', async () => {
   assert.deepEqual(asked, ['one', 'two', 'three'], 'the failure took only its own message down');
   assert.ok(toasts().some((t) => /speech failed: engine is out of memory/.test(t)),
     'and the captain was told why he did not hear it: ' + JSON.stringify(toasts()));
+});
+
+// ── where the voice comes from ────────────────────────────────────────────
+// On a flat board a message comes from the screen, so there is nowhere for the
+// sound to arrive from and it goes straight out. In the 3D room the one who
+// said it is standing somewhere, and the room hands this file a route so the
+// buffers are rendered through a panner in that berth. Same queue, same voices,
+// same engine request — the difference is one node, and the request cannot show
+// it, so what these two assert is where the audio was WIRED.
+
+test('with no route, the sound goes straight out — the flat board, untouched', async () => {
+  speak('olá', 'monica');
+  await until(() => wiredTo.length >= 1, 'the audio to be wired somewhere');
+  assert.equal(wiredTo[0], theSink,
+    'straight into the sink the <audio> element plays, with nothing in between');
+});
+
+test('a route is handed the speech graph, and the sound goes through what it gives back', async () => {
+  const seen = [];
+  const panner = { it: 'the berth monica is standing in' };
+  setSpeechRoute((who) => (who === 'monica' ? (ctx, out) => { seen.push({ who, ctx, out }); return panner; } : null));
+
+  speak('olá', 'monica');
+  await until(() => wiredTo.length >= 1, 'the audio to be wired somewhere');
+  assert.equal(seen.length, 1, 'asked once for this message, not once per chunk');
+  assert.equal(seen[0].ctx.constructor, FakeCtx, 'handed the context the speech is rendered in');
+  assert.equal(seen[0].out, theSink, 'and the destination it would otherwise have gone to');
+  assert.equal(wiredTo[0], panner, 'the buffers went through the route, not past it');
+
+  // The captain has no berth on the arc, so there is nowhere for HIS voice to
+  // come from — and a route that answers nothing must leave the path alone
+  // rather than break it.
+  wiredTo.length = 0;
+  speak('e agora', 'server');
+  await until(() => wiredTo.length >= 1, 'the second message to be wired');
+  assert.equal(wiredTo[0], theSink, 'an author with no place is spoken from everywhere, as before');
 });
