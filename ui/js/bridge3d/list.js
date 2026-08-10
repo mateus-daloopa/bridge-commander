@@ -13,7 +13,7 @@
 
 import * as THREE from 'three';
 import * as W from './world.js';
-import { root, Text, COL, fontFor, inert } from './kit.js';
+import { root, Text, COL, fontFor, inert, safe } from './kit.js';
 import { Target } from './hover.js';
 
 // ---- the mat that summons the board ---------------------------------------
@@ -21,6 +21,14 @@ import { Target } from './hover.js';
 // How long a note stays up. Long enough to be read after he has looked down for
 // it, short enough that it never becomes part of the furniture.
 const NOTE_MS = 12000;
+
+// And how much of one there can be. The mat is 0.41 m across and 0.25 m deep,
+// meta type at that distance is ~0.039 m per em, so a line holds about twenty
+// characters and 'the board' has already taken a line's worth of the depth —
+// which leaves four lines, eighty characters. 'speech failed: ' plus whatever
+// the engine said is unbounded, and type that runs off the plate is orange on
+// pale stone, which is none of the contrast the colour was chosen for.
+const NOTE_CHARS = 80;
 
 // On the floor, dead ahead, in the lane where nothing else lives. A control you
 // glance DOWN at rather than something you read — which is the only reason it is
@@ -97,8 +105,12 @@ export class ListPlate {
   // every poll, five seconds apart, and a warning wiped by the next tick of a
   // clock is a warning he never read. A note times itself out instead.
   setNote(text) {
-    const t = String(text || '');
-    if (!t) return;
+    // Through the same door every string the room paints goes through: the
+    // atlas has the glyphs it has, and an em dash it cannot draw is a hole in
+    // the middle of the sentence explaining why the room went quiet.
+    const full = safe(text);
+    if (!full) return;
+    const t = full.length <= NOTE_CHARS ? full : full.slice(0, NOTE_CHARS - 3).trimEnd() + '...';
     this.note.setProperties({ text: t, display: 'flex' });
     this.noteUntil = performance.now() + NOTE_MS;
   }

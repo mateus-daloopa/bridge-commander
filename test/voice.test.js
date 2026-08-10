@@ -14,7 +14,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-let speak, stopSpeaking, stripForSpeech, setSpeechRoute, setSilenceReport, speakingAuthor;
+let speak, stopSpeaking, skipSpeaking, stripForSpeech, setSpeechRoute, setSilenceReport, speakingAuthor;
 
 const ENGINE = 'http://127.0.0.1:8883';
 const tick = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -159,7 +159,7 @@ test.before(async () => {
   fakePage();
   fakeEngine();
   answer = () => said();
-  ({ speak, stopSpeaking, stripForSpeech, setSpeechRoute, setSilenceReport, speakingAuthor } =
+  ({ speak, stopSpeaking, skipSpeaking, stripForSpeech, setSpeechRoute, setSilenceReport, speakingAuthor } =
     await import(pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'voice.js')).href));
   // The catalogue lands a few promises after import; the board is mute (and says
   // so) until it does, so every test would otherwise be testing that instead.
@@ -369,4 +369,34 @@ test('when the queue runs out, nobody is talking any more', async () => {
   speak('acabou', 'monica');
   await until(() => asked.length >= 1, 'the message to be spoken');
   await until(() => speakingAuthor() === null, 'the board to fall quiet on its own');
+});
+
+// ── stopping one voice, and stopping the board ────────────────────────────
+// Two gestures that both make a noise go away, and they are not the same
+// gesture. The toggle is a statement about the whole board. A press on one
+// lieutenant in the room is aimed at one person, and a reply from somebody else
+// that he has not heard yet is not his to throw away.
+
+test('cutting off the one talking lets the next one be heard', async () => {
+  answer = (input, signal) => (input === 'monica fala' ? stillGoing(signal) : said());
+  speak('monica fala', 'monica');
+  speak('rex responde', 'rex');
+  await until(() => speakingAuthor() === 'monica', 'monica to be the one talking');
+
+  skipSpeaking();
+  await until(() => asked.includes('rex responde'), 'rex to be spoken right after her');
+  assert.deepEqual(asked, ['monica fala', 'rex responde'],
+    'she was cut off where she stood and he was NOT thrown away with her');
+});
+
+test('turning the voice off is about the whole board, and the backlog goes too', async () => {
+  answer = (input, signal) => (input === 'monica fala' ? stillGoing(signal) : said());
+  speak('monica fala', 'monica');
+  speak('rex responde', 'rex');
+  await until(() => speakingAuthor() === 'monica', 'monica to be the one talking');
+
+  stopSpeaking();
+  await tick(40);
+  assert.deepEqual(asked, ['monica fala'],
+    'silence means silence — rex is not spoken a moment after the room was told to be quiet');
 });

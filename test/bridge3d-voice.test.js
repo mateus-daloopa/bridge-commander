@@ -226,8 +226,13 @@ test('a failure the captain cannot see a toast for is written where he is lookin
 
   const list = fs.readFileSync(path.join(ROOT, 'ui', 'js', 'bridge3d', 'list.js'), 'utf8');
   assert.match(list, /setNote\(text\)/, 'the mat has nowhere to put a note');
-  assert.match(list, /if \(!t\) return;/,
-    'an empty status line clears the note — and the room empties it on every five-second poll');
+  assert.match(list, /const full = safe\(text\);\n\s*if \(!full\) return;/,
+    'either the note skips safe() — a hole in the middle of the one sentence explaining '
+    + 'why the room went quiet — or an empty status line clears it, and the room writes '
+    + 'one empty on every five-second poll');
+  assert.match(list, /slice\(0, NOTE_CHARS - 3\)/,
+    'an engine error of any length runs off the plate onto pale stone, where the warning '
+    + 'colour has none of the contrast it was measured for');
 });
 
 test('pressing the lieutenant that is talking is what stops it', () => {
@@ -237,4 +242,10 @@ test('pressing the lieutenant that is talking is what stops it', () => {
     'the press opens the chat without silencing the voice first — and there is no other '
     + 'control in here: no toolbar, and no keyboard on a face wearing a headset');
   assert.ok(!/keydown[\s\S]*stopSpeaking/.test(main), 'a key is not a control he has');
+
+  const voice3d = fs.readFileSync(path.join(ROOT, 'ui', 'js', 'bridge3d', 'voice3d.js'), 'utf8');
+  assert.match(voice3d, /skipSpeaking\(\)/,
+    'the press stops the whole board instead of the one he pressed — a reply from another '
+    + 'berth he has not heard yet is not his to throw away');
+  assert.ok(!/stopSpeaking/.test(voice3d), 'and the blanket stop has no business on a berth');
 });

@@ -31,7 +31,7 @@
 // no reason. Direction is the whole point; loudness stays exactly as it was.
 
 import * as THREE from 'three';
-import { setSpeechRoute, setVoiceOn, setSilenceReport, speakingAuthor, stopSpeaking } from '../voice.js';
+import { setSpeechRoute, setVoiceOn, setSilenceReport, speakingAuthor, skipSpeaking } from '../voice.js';
 
 const _at = new THREE.Vector3();
 
@@ -87,11 +87,13 @@ export function installVoice(sound, agents, report) {
 // himself is the control. The press keeps its old meaning as well: the chat it
 // opens is where the message he just silenced is written down. Matched by id OR
 // name, the same rule Agents.placeOf uses, because either can be the author
-// stamped on a message.
+// stamped on a message. It cuts THAT message and nothing else — a reply from
+// somebody on another berth is still waiting to be heard, and pressing this one
+// is not a decision about it.
 export function hush(lt) {
   const who = speakingAuthor();
   if (!lt || !who || (who !== lt.id && who !== lt.name)) return false;
-  stopSpeaking();
+  skipSpeaking();
   return true;
 }
 

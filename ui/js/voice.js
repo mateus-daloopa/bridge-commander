@@ -157,6 +157,12 @@ export function stripForSpeech(text) {
 // The board never asks for a second speech while one is in flight. Stopping —
 // and turning the voice off, which stops — empties the queue as well: silence
 // means silence, not a pause before the backlog resumes.
+//
+// Skipping is the other verb, and the difference is who the gesture is aimed at.
+// Turning the voice off is a statement about the whole board, so it takes the
+// backlog with it. A press on one lieutenant's berth in the room is aimed at one
+// person — it must not swallow a reply from somebody else he has not heard yet —
+// so it cuts the utterance in flight and the queue carries straight on.
 // WHERE the voice comes from, if anywhere. A message on a flat board comes from
 // the board, so this is null there and the sound leaves through the speakers as
 // it always has. In the room it is not: the lieutenant who said it is standing
@@ -271,6 +277,15 @@ export function stopSpeaking() {
   session++;              // whatever the engine still owes us is stale
   queue.length = 0;       // stop stops what is waiting too, not just what is heard
   speaking = null;        // and nobody is talking, as of now
+  engineStop();
+}
+// Cut the one in flight; the queue is untouched and the next message follows it
+// out. Nothing else is needed: speech.js's stop() aborts the request and its
+// speak() resolves with stopped, tailMs is 0 for a stopped utterance, and the
+// drain loop is still in its own session — so it takes the next one straight
+// away rather than treating the cut as the end of everything.
+export function skipSpeaking() {
+  manualSpeakingKey = null;
   engineStop();
 }
 
