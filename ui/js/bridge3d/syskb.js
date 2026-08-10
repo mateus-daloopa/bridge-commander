@@ -30,8 +30,9 @@
 // keyboard is shown it starts a new editing session in which the first key
 // press overwrites whatever the field held. So nothing here counts keys. The
 // composer's text at the moment the keyboard went up is remembered, the field's
-// `input` event carries the rest, and `seam()` in keys.js decides — once per
-// showing — whether what arrived replaced the seed or was typed after it.
+// `input` event carries the rest, and `seamOf()` at the foot of this file
+// decides — once per showing — whether what arrived replaced the seed or was
+// typed after it.
 
 // One transparent pixel, fixed to the corner of the viewport. Fixed rather than
 // absolute so it cannot extend the page and give the browser somewhere to
@@ -183,8 +184,8 @@ export class SystemKeyboard {
 }
 
 // What survives of the composer's earlier text once the system keyboard has had
-// its first say. Exported for the test; the reasoning is in keys.js beside the
-// routing rules, because both are about who owns a character.
+// its first say. Exported for the test. It is the other half of the question
+// `routeKey` in keys.js answers — both are about who owns a character.
 //
 // The seed survives an EDIT in either direction: he can type after it, and he
 // can backspace into it — the second is the whole reason the field is seeded at
