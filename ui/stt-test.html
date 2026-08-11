@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>STT — is this fast enough to talk to?</title>
+<!--
+  A bench for the whisper engine, proxied through the board's own origin so it
+  works over https in the headset (see server/sttproxy.js). One utterance goes
+  down both paths at once — the websocket, partial by partial, and a single
+  POST at the end — so the two can be compared on the same words.
+
+  Standalone on purpose: no modules, no imports from the board's UI. Everything
+  that goes wrong is printed below the button, because nobody wearing a headset
+  is opening devtools.
+-->
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 20px;
+    font: 20px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0e1116; color: #e6edf3;
+  }
+  h1 { font-size: 26px; margin: 0 0 14px; color: #7ee0ff; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: stretch; }
+  #talk {
+    width: 100%; min-height: 150px; font-size: 40px; font-weight: 700;
+    border: 0; border-radius: 18px; background: #1f6feb; color: #fff;
+    cursor: pointer; touch-action: manipulation; user-select: none;
+  }
+  #talk.rec { background: #d1242f; }
+  #talk:disabled { background: #444c56; color: #9aa4ae; }
+  .card {
+    flex: 1 1 340px; min-width: 0; background: #161b22; border: 1px solid #30363d;
+    border-radius: 14px; padding: 16px; margin-top: 18px;
+  }
+  .card h2 { margin: 0 0 10px; font-size: 21px; color: #7ee0ff; }
+  .ms { font-variant-numeric: tabular-nums; font-size: 30px; font-weight: 700; color: #3fb950; }
+  .ms .unit { font-size: 17px; font-weight: 400; color: #9aa4ae; }
+  .lbl { font-size: 15px; color: #9aa4ae; text-transform: uppercase; letter-spacing: .06em; }
+  .timings { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 12px; }
+  .text {
+    min-height: 4.2em; background: #0d1117; border: 1px solid #30363d; border-radius: 10px;
+    padding: 12px; white-space: pre-wrap; word-break: break-word; font-size: 22px;
+  }
+  #log {
+    margin-top: 18px; background: #0d1117; border: 1px solid #30363d; border-radius: 10px;
+    padding: 12px; font-family: ui-monospace, monospace; font-size: 15px;
+    white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow: auto;
+  }
+  .err { color: #ff7b72; }
+  .ok { color: #3fb950; }
+</style>
+</head>
+<body>
+<h1>🎤 STT bench</h1>
+<button id="talk">Press to talk</button>
+
+<div class="row">
+  <div class="card">
+    <h2>Streaming (websocket)</h2>
+    <div class="timings">
+      <div><div class="lbl">first partial</div><div class="ms" id="t-first">—</div></div>
+      <div><div class="lbl">stop → final</div><div class="ms" id="t-streamfinal">—</div></div>
+    </div>
+    <div class="text" id="stream-text"></div>
+  </div>
+  <div class="card">
+    <h2>Batch (POST /transcribe)</h2>
+    <div class="timings">
+      <div><div class="lbl">stop → transcript</div><div class="ms" id="t-batch">—</div></div>
+    </div>
+    <div class="text" id="batch-text"></div>
+  </div>
+</div>
+
+<div id="log"></div>
+
+<script>
+'use strict';
+var PREFIX = '/api/stt';
+var LANG = 'pt';
+var FINAL_WAIT_MS = 15000;      // how long a partial-less stop is given before we call it
+
+var $ = function (id) { return document.getElementById(id); };
+function log(msg, cls) {
+  var line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = new Date().toLocaleTimeString() + '  ' + msg;
+  $('log').appendChild(line);
+  $('log').scrollTop = $('log').scrollHeight;
+}
+function ms(el, v) { $(el).innerHTML = Math.round(v) + ' <span class="unit">ms</span>'; }
+
+// Nothing may fail quietly on a page being read through a headset.
+window.addEventListener('error', function (e) { log('js error: ' + (e.message || e), 'err'); });
+window.addEventListener('unhandledrejection', function (e) {
+  log('unhandled: ' + ((e.reason && e.reason.message) || e.reason), 'err');
+});
+
+var rec = null;        // MediaRecorder
+var ws = null;
+var stream = null;
+var chunks = [];       // the same bytes the socket got, kept for the batch POST
+var recording = false;
+var t0 = 0;            // recording started
+var tStop = 0;         // stop pressed
+var gotFirst = false;
+var finalTimer = null;
+
+function wsUrl() {
+  return (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + PREFIX + '/ws/transcribe';
+}
+
+$('talk').addEventListener('click', function () { recording ? stop() : start(); });
+
+async function start() {
+  $('stream-text').textContent = '';
+  $('batch-text').textContent = '';
+  $('t-first').textContent = $('t-streamfinal').textContent = $('t-batch').textContent = '—';
+  gotFirst = false;
+  chunks = [];
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    return log('microphone refused: ' + (e.message || e) + ' (https and a granted permission are both required)', 'err');
+  }
+  ws = new WebSocket(wsUrl());
+  ws.onopen = function () {
+    log('ws open → ' + wsUrl(), 'ok');
+    var mime = MediaRecorder.isTypeSupported('audio/webm') ? { mimeType: 'audio/webm' } : {};
+    if (!mime.mimeType) log('audio/webm unsupported here — recording in the browser default', 'err');
+    try {
+      rec = new MediaRecorder(stream, mime);
+    } catch (e) { return fail('MediaRecorder: ' + (e.message || e)); }
+    rec.ondataavailable = function (e) {
+      if (!e.data || !e.data.size) return;
+      chunks.push(e.data);
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(e.data);
+    };
+    rec.onerror = function (e) { fail('recorder: ' + ((e.error && e.error.message) || e)); };
+    t0 = performance.now();
+    rec.start(1000);                       // a chunk a second, the engine's own cadence
+    recording = true;
+    $('talk').textContent = 'Recording — press to stop';
+    $('talk').className = 'rec';
+  };
+  ws.onmessage = function (e) {
+    var d;
+    try { d = JSON.parse(e.data); } catch (err) { return log('ws sent non-json: ' + e.data, 'err'); }
+    if (d.error) return log('engine: ' + d.error, 'err');
+    // The engine sends the transcript of everything so far, not the newest
+    // chunk — replace, never append.
+    $('stream-text').textContent = d.text || '';
+    if (!gotFirst) { gotFirst = true; ms('t-first', performance.now() - t0); }
+    if (tStop) {                            // the first thing said after stop is the final
+      clearTimeout(finalTimer);
+      ms('t-streamfinal', performance.now() - tStop);
+      tStop = 0;
+      if (ws) ws.close();
+    }
+  };
+  ws.onerror = function () { log('ws error (the proxy or the engine refused the upgrade)', 'err'); };
+  ws.onclose = function (e) { log('ws closed (code ' + e.code + ')'); };
+}
+
+function stop() {
+  recording = false;
+  $('talk').textContent = 'Press to talk';
+  $('talk').className = '';
+  tStop = performance.now();
+  if (rec && rec.state !== 'inactive') rec.stop();     // flushes one last chunk into both paths
+  if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+  finalTimer = setTimeout(function () {
+    if (!tStop) return;
+    log('no final from the websocket within ' + FINAL_WAIT_MS + 'ms', 'err');
+    tStop = 0;
+    if (ws) ws.close();
+  }, FINAL_WAIT_MS);
+  // The batch path runs on exactly the bytes the socket already saw.
+  setTimeout(postBatch, 60);                            // let the flushed chunk land in `chunks`
+}
+
+async function postBatch() {
+  if (!chunks.length) return log('nothing recorded — no batch request sent', 'err');
+  var blob = new Blob(chunks, { type: chunks[0].type || 'audio/webm' });
+  var fd = new FormData();
+  fd.append('file', blob, 'utterance.webm');
+  fd.append('language', LANG);
+  var t = performance.now();
+  log('POST ' + PREFIX + '/transcribe (' + blob.size + ' bytes)');
+  try {
+    var r = await fetch(PREFIX + '/transcribe', { method: 'POST', body: fd });
+    var body = await r.text();
+    if (!r.ok) return log('transcribe → HTTP ' + r.status + ': ' + body.slice(0, 400), 'err');
+    var d = JSON.parse(body);
+    if (d.error) return log('engine: ' + d.error, 'err');
+    ms('t-batch', performance.now() - t);
+    $('batch-text').textContent = d.text || '';
+  } catch (e) {
+    log('transcribe failed: ' + (e.message || e), 'err');
+  }
+}
+
+function fail(msg) {
+  log(msg, 'err');
+  recording = false;
+  $('talk').textContent = 'Press to talk';
+  $('talk').className = '';
+  if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+  if (ws) ws.close();
+}
+
+log('ready — ' + location.origin + PREFIX + ', ws at ' + wsUrl());
+// The microphone needs a secure context, and the browser is the authority on
+// what counts as one (https, or loopback) — say so before the button is pressed.
+if (!window.isSecureContext) log('not a secure context: the browser will refuse the microphone here', 'err');
+</script>
+</body>
+</html>

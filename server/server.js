@@ -77,6 +77,7 @@ const gitrev = require(path.join(__dirname, 'gitrev.js'));
 const { charterPath, readCharter, writeCharter } = require(path.join(__dirname, 'charter.js'));
 const { ONBOARDING_STEPS } = require(path.join(__dirname, 'firstrun.js'));
 const { proxyTts } = require(path.join(__dirname, 'ttsproxy.js'));
+const { proxyStt, proxySttUpgrade } = require(path.join(__dirname, 'sttproxy.js'));
 const { execFile, execFileSync } = require('child_process');
 
 // ---------- args ----------
@@ -180,6 +181,9 @@ const DEFAULT_PORT = 4780;
 // The one prefix the TTS engine is served under, both ends of it: what the
 // browser is handed as its engine address, and what the proxy strips.
 const TTS_PREFIX = '/api/tts';
+// Same idea for the STT engine, http and websocket both. Nothing is handed to
+// the UI under this one — ui/stt-test.html is the only page that speaks it.
+const STT_PREFIX = '/api/stt';
 // ---------- workspace config (.bridge-commander/config.json) ----------
 function readConfig() {
   try {
@@ -220,6 +224,17 @@ function ttsConfig() {
     voice: str(t.voice),
     params: t.params && typeof t.params === 'object' && !Array.isArray(t.params) ? t.params : {},
   };
+}
+// External STT engine (whisper API), optional: config.json
+//   "stt": { "url": "http://127.0.0.1:8878" }
+// Anything malformed (or a missing url) reads as "not configured", and the
+// /api/stt routes 404 like they were never there.
+function sttConfig() {
+  const t = readConfig().stt;
+  if (!t || typeof t !== 'object' || Array.isArray(t)) return null;
+  const url = typeof t.url === 'string' ? t.url.trim().replace(/\/+$/, '') : '';
+  if (!/^https?:\/\/\S+$/.test(url)) return null;
+  return { url };
 }
 // Port: --port flag > config.json "port" > 4780. The resolved port is written
 // back into config.json when absent, so the CLI and UI can always find it.
@@ -3724,6 +3739,11 @@ const server = http.createServer(async (req, res) => {
       // p, not a decoded path: what the browser encoded is what the engine gets.
       if (t) return proxyTts(req, res, t.url, p.slice(TTS_PREFIX.length) + url.search);
     }
+    // ----- the STT engine, same deal (the websocket half is on 'upgrade') -----
+    if (p === STT_PREFIX || p.startsWith(STT_PREFIX + '/')) {
+      const t = sttConfig();
+      if (t) return proxyStt(req, res, t.url, p.slice(STT_PREFIX.length) + url.search);
+    }
     if (route === 'GET /api/status') {
       let pending = 0;
       for (const lt of queueIds()) pending += pendingItems(lt).length;
@@ -4954,6 +4974,20 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// The only websocket the board has an opinion about: the STT engine's. Anything
+// else asking to upgrade gets the socket dropped, which is what an http server
+// with no upgrade handler does anyway.
+function onUpgrade(req, socket, head) {
+  const u = new URL(req.url, 'http://localhost');
+  const p = u.pathname;
+  if (p === STT_PREFIX || p.startsWith(STT_PREFIX + '/')) {
+    const t = sttConfig();
+    if (t) return proxySttUpgrade(req, socket, head, t.url, p.slice(STT_PREFIX.length) + u.search);
+  }
+  socket.destroy();
+}
+server.on('upgrade', onUpgrade);
+
 server.on('error', (e) => { console.error('server error: ' + e.message); cleanup(); process.exit(1); });
 server.listen(PORT, BIND_HOST, () => {
   console.log('bridge-commander server up: http://localhost:' + PORT + '/ host=' + BIND_HOST +
@@ -4962,6 +4996,7 @@ server.listen(PORT, BIND_HOST, () => {
 // Non-loopback bind: also listen on loopback so local CLI/UI keep working.
 if (!LOOPBACKS.includes(BIND_HOST) && BIND_HOST !== '0.0.0.0') {
   const local = http.createServer(server.listeners('request')[0]);
+  local.on('upgrade', onUpgrade);
   local.on('error', (e) => { console.error('loopback listener error: ' + e.message); });
   local.listen(PORT, '127.0.0.1');
 }
