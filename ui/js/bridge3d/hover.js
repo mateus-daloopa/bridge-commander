@@ -38,14 +38,19 @@ const _at = new THREE.Vector3();
 // A thing you can point at. `mesh` answers the ray; `mark` is what visibly
 // reacts (usually the slab or sphere standing in front of it); `spot` is the
 // shrinking spotlight ring drawn on the surface.
+// `onPress` is the other half of a press, and there is exactly one thing in the
+// room that wants it: hold to talk. A button fires on the RELEASE — that is the
+// grammar and nothing else here breaks it — but a hold has to know when the
+// trigger went down. A target takes one or the other, never both.
 export class Target {
-  constructor({ mesh, mark, spot, base, baseOpacity, onSelect, name }) {
+  constructor({ mesh, mark, spot, base, baseOpacity, onSelect, onPress, name }) {
     this.mesh = mesh;
     this.mark = mark || null;
     this.spot = spot || null;
     this.base = base ? base.clone() : new THREE.Color('#161f2b');
     this.baseOpacity = baseOpacity == null ? 0.14 : baseOpacity;
     this.onSelect = onSelect || null;
+    this.onPress = onPress || null;
     this.name = name || '';
     this.state = 'idle';
     this.distance = Infinity;
@@ -71,6 +76,7 @@ export class Target {
   _down() {
     this._set('contact');
     if (voice) voice.press(this.mesh.getWorldPosition(_at));
+    if (this.onPress) this.onPress(this);
   }
   _up() {
     // Released, and only then does the thing actually happen — the same order a

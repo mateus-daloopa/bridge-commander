@@ -34,7 +34,8 @@ import { routeKey, setKeyboard } from './keys.js';
 import { SystemKeyboard, crumb, crumbs, clearCrumbs, beat, lastBeat } from './syskb.js';
 import { Grabs } from './grab.js';
 import { Sound } from './sound.js';
-import { installVoice, askForSound, hush } from './voice3d.js';
+import { installVoice, askForSound, hush, silence } from './voice3d.js';
+import * as talk from './talk.js';
 import { trackMessages } from '../voice.js';
 import { S } from '../state.js';
 import { installSky, installToneMapping } from './sky.js';
@@ -172,6 +173,11 @@ window.addEventListener('unhandledrejection', (e) => crumb('REJECTED ' + ((e && 
 // is invisible to a man in a headset. See voice3d.js.
 installVoice(sound, agents, say);
 
+// ...and they shut up while he is dictating. The crew speaks out loud now, the
+// microphone is in the same room, and a lieutenant talking over him lands in
+// the transcript as if he had said it. See voice3d.js.
+talk.setHush(silence);
+
 // Click a lieutenant, get its chat. This is the shortest path between "I can
 // see my crew" and "I am talking to them", and it is the whole reason the
 // spheres were worth drawing.
@@ -287,6 +293,24 @@ async function enter() {
   // from a real user action, and an await here would put us outside it.
   sound.start(DEV.get('track'));
   askForSound();
+  // The microphone, HERE, on the flat page. A permission prompt is a browser
+  // surface and an immersive session composites none of them — asking once he
+  // is inside suspends or ends it. So the stream is taken at the gate and
+  // carried in, and a refusal is a line on the gate rather than a dead bar he
+  // presses in the room and nothing happens. See talk.js.
+  const asked = performance.now();
+  const noMic = await talk.arm();
+  // Granting the permission spends the press: `requestSession` wants a fresh
+  // user gesture and the prompt outlived it. That only ever happens on the very
+  // first entry, and the answer is one more press — said in those words rather
+  // than as "the headset refused", which is what it looks like from here.
+  const prompted = performance.now() - asked > 800;
+  const mic = document.getElementById('mic');
+  if (mic) {
+    mic.hidden = !noMic;
+    mic.textContent = noMic ? 'no microphone: ' + noMic + ' — everything else in the room works, but you cannot talk to a lieutenant' : '';
+  }
+  if (noMic) say('no microphone — ' + noMic);
   if (emulated) await emulated;
   const flat = (why) => { say(why); gate.hidden = true; };
   if (!navigator.xr) return flat('no WebXR in this browser — flat view: drag to look, click to point');
@@ -297,7 +321,10 @@ async function enter() {
     session = await navigator.xr.requestSession('immersive-vr', {
       optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
     });
-  } catch (e) { return flat('the headset refused the session: ' + ((e && e.message) || e)); }
+  } catch (e) {
+    if (prompted) return flat('the microphone question used up the press — press enter again');
+    return flat('the headset refused the session: ' + ((e && e.message) || e));
+  }
   await renderer.xr.setSession(session);
   gate.hidden = true;
   rays.setPresenting(true);
@@ -317,6 +344,7 @@ async function enter() {
     gate.hidden = false;
     rays.setPresenting(false);
     syskb.detach();
+    talk.disarm();
   });
 }
 
@@ -335,6 +363,13 @@ for (const c of rays.controllers) {
     const p = grabs.end(c);
     if (p) sound.drop(p.group.getWorldPosition(new THREE.Vector3()));
   });
+  // Letting go of the trigger stops the recording, WHEREVER the ray has
+  // wandered to since it started. The talk bar's own pointerup would only
+  // arrive if the ray were still on it, and a man speaking a sentence moves his
+  // hand — a microphone that stays open because he drifted off the bar is the
+  // one failure with no way out from inside a headset. talk.end() is a no-op
+  // unless something is recording, so this costs every other press nothing.
+  c.addEventListener('selectend', () => talk.end());
 }
 document.getElementById('enter').addEventListener('click', enter);
 
@@ -346,7 +381,7 @@ document.getElementById('enter').addEventListener('click', enter);
 
 let dragging = false, yaw = 0, pitch = 0;
 renderer.domElement.addEventListener('pointerdown', () => { dragging = true; });
-window.addEventListener('pointerup', () => { dragging = false; });
+window.addEventListener('pointerup', () => { dragging = false; talk.end(); });
 window.addEventListener('pointermove', (e) => {
   if (!dragging || renderer.xr.isPresenting) return;
   yaw -= e.movementX * 0.003;
@@ -432,6 +467,13 @@ window.__bridge = {
       || cards.slice().sort((a, b) => (b.body || '').length - (a.body || '').length)[0];
     return c ? !!openCard(c) : false;
   },
+  // Hold to talk, by name. The bar answers a RAY and nothing else, and a ray is
+  // the one thing a script cannot aim — so the press, the release and what came
+  // back are here, on the chat that is open. Same reason openChat is.
+  hold: () => { const p = frontChat(); if (p) p.startTalking(); return !!p; },
+  letGo: () => { talk.end(); return talk.state(); },
+  take: () => { const p = frontChat(); return (p && p.take) || null; },
+  sendTake: () => { const p = frontChat(); if (p) p.sendTake(); return !!p; },
   panels: () => [...windows].filter((p) => p.open).map((p) => ({
     key: p.key, slot: p.slot, placed: p.placed,
     at: W.angleOf(p.group.position),
@@ -460,6 +502,10 @@ window.__bridge = {
     .map((t) => ({ name: t.name, state: t.state, distance: +t.distance.toFixed(2) })),
   get doc() { return doc; },
 };
+
+function frontChat() {
+  return [...windows].reverse().find((p) => p.open && /^lieutenant:/.test(p.key || '')) || null;
+}
 
 function targets() {
   const out = [];

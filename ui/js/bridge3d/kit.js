@@ -69,6 +69,11 @@ export const COL = {
   // Something went wrong and he is wearing a headset, so there is no toolbar to
   // glance at and no toast to see. 10.3:1 on `panel` — measured, not guessed.
   warn: '#ffb454',
+  // The microphone is open. The one place in the room where a control changes
+  // colour to say a thing is HAPPENING rather than that it is being pointed at,
+  // and red is the only convention for it anybody arrives already knowing.
+  // `text` is 5.4:1 on it — measured, not guessed.
+  live: '#8c2b34',
 };
 
 // Every root has to be told to lay itself out each frame. One registry rather

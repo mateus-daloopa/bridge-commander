@@ -19,6 +19,10 @@
      only place a man in a headset can read it. See syskb.js. */
   #crumbs { color: #d8a05b; margin: 10px auto 0; font-size: 12px; text-align: left;
             max-width: 760px; max-height: 30vh; overflow: auto; white-space: pre-wrap; }
+  /* The microphone was refused. It has a box of its own rather than #status,
+     which the five-second refresh clears — this is the one thing on the gate he
+     has to still be able to read after he has finished reading it. */
+  #mic { color: #ffb454; margin: 10px auto 0; font-size: 13px; max-width: 760px; }
 </style>
 
 <div id="gate">
@@ -28,9 +32,11 @@
     the lieutenants are the arc above — <b>point at one and pull the trigger to open its chat</b> ·
     the mat on the floor ahead opens <b>the board</b>, and a press on a card brings it forward<br>
     in the headset — <b>trigger</b>: press · <b>squeeze</b> a window's title bar: pick it up and put it
-    where you want · type on a paired keyboard, <b>enter</b> sends<br>
+    where you want · <b>hold the bar at the foot of a chat and speak</b>, then send it or say it again ·
+    type on a paired keyboard, <b>enter</b> sends<br>
     at a desk — drag to look · click to press · <b>b</b>: the board · <b>c</b>: a chat · <b>x</b>: close the front window
   </div>
+  <div id="mic" hidden></div>
   <div id="crumbs" hidden></div>
 </div>
 

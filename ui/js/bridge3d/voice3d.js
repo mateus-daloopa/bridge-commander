@@ -97,6 +97,22 @@ export function hush(lt) {
   return true;
 }
 
+// The crew shuts up while he is dictating, and starts again when he stops.
+//
+// `hush` above is not enough for this and was never meant to be: it cuts ONE
+// author's current message, because pressing a lieutenant is a decision about
+// that lieutenant. A microphone is open to the whole room — anybody's voice
+// arriving mid-sentence gets transcribed as if he had said it — so this is the
+// blunt one, and it is the whole queue.
+//
+// Not remembered, same as askForSound: this is a state that lasts as long as
+// his finger is on the trigger, and the flat board's toggle is his.
+let held = false;
+export function silence(on) {
+  if (on && !held) { held = true; setVoiceOn(false, false); }
+  else if (!on && held) { held = false; setVoiceOn(true, false); }
+}
+
 // The room asking for sound, from inside the gesture that entered it. Separate
 // from installVoice because the route is wired at load — a message that arrives
 // while he is still at the gate should already know where it is coming from —
