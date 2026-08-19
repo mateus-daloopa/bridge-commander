@@ -155,6 +155,11 @@ function build() {
   noteEl = note;
 
   handle = (open.draw ? mountDrawing : mountFileEditor)(body, {
+    // The file's own uri — the editor's markdown preview resolves a relative
+    // image against its directory, the same way the artifact viewer does.
+    // Forget it and `![](shot.png)` renders here against the board page and
+    // 404s, while the attachment:// beside it (which needs no base) loads.
+    key: open.key,
     name: open.name,
     markdown: open.markdown,
     content: open.content,
