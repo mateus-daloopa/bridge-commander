@@ -813,7 +813,25 @@ body.resizing { user-select: none; cursor: col-resize; }
 #dt-menu-btn:hover { color: var(--accent); border-color: var(--accent2); }
 #dt-close { flex: none; color: var(--dim); font-size: 17px; padding: 2px 6px; }
 #dt-close:hover { color: var(--text); }
-.dt-attrs { flex: none; display: flex; flex-wrap: wrap; gap: 5px 7px; padding: 0 16px 4px; }
+/* the collapsed line under the header: one row, never wraps. The PR chip keeps
+   its width; the event text takes what is left and ellipses out of the rest. */
+.dt-strip {
+  flex: none; display: flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 6px 16px 8px; border-bottom: 1px solid var(--line); min-width: 0;
+}
+.dt-strip:hover { background: var(--panel); }
+.dt-strip-chev { flex: none; color: var(--faint); font-size: 10px; }
+.dt-strip-chev::before { content: "\25b8"; }
+.dt-strip.open .dt-strip-chev::before { content: "\25be"; }
+.dt-strip-prs { flex: none; display: inline-flex; gap: 5px; }
+.dt-strip-ev {
+  flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 13px; color: var(--dim);
+}
+.dt-strip-ev.none { color: var(--faint); font-size: 12px; }
+/* the fold: everything the line stands in for */
+.dt-fold { padding-bottom: 10px; }
+.dt-attrs { flex: none; display: flex; flex-wrap: wrap; gap: 5px 7px; padding: 0 0 4px; }
 .attr {
   display: inline-flex; align-items: center; gap: 5px; font-size: 13px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px;
@@ -821,7 +839,7 @@ body.resizing { user-select: none; cursor: col-resize; }
 .attr .k { color: var(--faint); }
 .attr .v { color: var(--text); font-family: var(--mono); font-size: 12.5px; max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attr a.v { color: var(--accent); }
-.dt-labels { flex: none; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; padding: 5px 16px 10px; border-bottom: 1px solid var(--line); }
+.dt-labels { flex: none; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; padding: 5px 0 10px; }
 #dt-label-add {
   background: var(--panel); border: 1px dashed var(--line2); border-radius: 4px; color: var(--dim);
   font-size: 11px; padding: 2px 8px;
@@ -860,11 +878,17 @@ body.resizing { user-select: none; cursor: col-resize; }
 .dt-artifacts:empty { display: none; }
 .dt-arts-head {
   font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: 1px;
-  color: var(--faint); border-top: 1px solid var(--line); padding-top: 12px; margin-top: 4px;
+  color: var(--faint); padding-bottom: 2px; cursor: pointer;
 }
+.dt-arts-head:hover { color: var(--dim); }
+.dt-arts-head::before { content: "\25be"; margin-right: 5px; font-size: 9px; }
+.dt-artifacts.closed .dt-arts-head::before { content: "\25b8"; }
+/* the description sits under the artifacts, so the rule between them is here */
+.dt-artifacts:not(:empty) { border-bottom: 1px solid var(--line); margin-bottom: 14px; }
 /* Two aligned columns; the wrapper — not the page — scrolls sideways when the
    filenames are wider than the pane, so nothing gets clipped. */
 .arts-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 14px; }
+.dt-artifacts.closed .arts-scroll { display: none; }
 .dt-artifacts .arts { border-collapse: collapse; }
 .dt-artifacts .arts td { padding: 7px 0 0; vertical-align: baseline; white-space: nowrap; }
 .dt-artifacts .a-label { font-size: 13px; padding-right: 8px; }

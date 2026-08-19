@@ -1,6 +1,6 @@
 // card detail: attributes header + markdown body + event timeline (chat lives in the chat panel)
 import { S, card, lieutenant, lieutenants, lieutenantColor, cardStatus, cardActivityTs, cardRecency, kindEmoji, render, toggleFilter, filterSelected } from './state.js';
-import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, artifactsHtml, uriBasename, setHtmlIfChanged, isImageMime, playbookAttrHtml } from './util.js';
+import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, artifactsHtml, cardStripHtml, uriBasename, setHtmlIfChanged, isImageMime, playbookAttrHtml } from './util.js';
 import { md, mdEnhance, copyText } from './md.js';
 import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
@@ -108,6 +108,28 @@ document.getElementById('dt-talk').onclick = () => {
     openCardThread(id);
   }
 };
+// ---------- the collapsed line, and the artifacts accordion ----------
+// Both are per-card view state, and the card viewer remembers nothing across
+// cards: opening a different card collapses the line again and re-opens
+// artifacts. `foldCardId` is what tells a re-render (SSE push) apart from a
+// card switch, so a repaint never clobbers a toggle he just made.
+const stripEl = document.getElementById('dt-strip');
+let foldCardId = null;
+let foldOpen = false;   // the attribute/label/timeline fold under the line
+let artsOpen = true;    // the artifacts accordion — open on every card
+function toggleFold() {
+  foldOpen = !foldOpen;
+  applyFold();
+}
+function applyFold() {
+  stripEl.classList.toggle('open', foldOpen);
+  document.getElementById('dt-fold').hidden = !foldOpen;
+}
+stripEl.onclick = toggleFold;
+stripEl.onkeydown = (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleFold(); }
+};
+
 document.getElementById('dt-menu-btn').onclick = (e) => {
   e.stopPropagation();
   if (S.openCardId) {
@@ -777,6 +799,9 @@ export function renderDetail() {
   }
   el.hidden = false;
   el.classList.toggle('frozen', !!arch);
+  // a different card = a fresh view: line collapsed, artifacts open
+  if (foldCardId !== c.id) { foldCardId = c.id; foldOpen = false; artsOpen = true; }
+  applyFold();
   // header actions per mode: live cards talk and move; a frozen snapshot's one
   // action is unarchive (restoring keeps the panel open — it becomes the live card)
   document.getElementById('dt-talk').hidden = !!arch;
@@ -806,6 +831,9 @@ export function renderDetail() {
         (rsn === 'merged' ? '🏁 merged' : '🪦 killed') + '</span>'
       : esc(' · updated ') + agoSpanHtml(cardRecency(c)) + esc(' ago')) +
     (worker ? '<span class="dt-worker dt-worker-' + worker.state + '" title="worker: ' + esc(worker.state) + '">' + esc(worker.id) + '</span>' : ''));
+
+  // the collapsed line: what he needs before he needs anything else
+  setHtmlIfChanged(stripEl, cardStripHtml(c, kindEmoji));
 
   // attributes header. The owner (the owning lieutenant) leads, in the
   // lieutenant's color and clickable as a filter. prs and artifacts are
@@ -904,6 +932,16 @@ export function renderDetail() {
   if (artsChanged) artEl.querySelectorAll('.a-uri[data-view]').forEach((n) => {
     n.onclick = () => openArtifact(n.dataset.view);
   });
+  // ...as an accordion, open by default. The block's own head is the summary;
+  // a card with no artifacts renders nothing at all (.dt-artifacts:empty).
+  artEl.classList.toggle('closed', !artsOpen);
+  if (artsChanged) {
+    const artsHead = artEl.querySelector('.dt-arts-head');
+    if (artsHead) artsHead.onclick = () => {
+      artsOpen = !artsOpen;
+      artEl.classList.toggle('closed', !artsOpen);
+    };
+  }
 
   // frozen thread snapshot, inline: live cards converse in the chat panel, but
   // an archived card's thread is part of the snapshot — show it read-only here

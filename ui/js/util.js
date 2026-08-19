@@ -121,6 +121,27 @@ export function artifactsHtml(arts) {
     }).join('') + '</tbody></table></div>';
 }
 
+// The COLLAPSED LINE at the top of an open card. One row, filled in the order
+// he reads it: the PR state first (the attribute he actually looks for), then
+// as much of the last timeline event as the row has room for. The row never
+// wraps — the CSS gives the event cell min-width:0 and an ellipsis, so a wide
+// PR chip simply eats the room the event would have used, which IS the
+// "drop whatever does not fit" rule.
+// `emojiFor` resolves an event kind to its emoji (state.js owns the kinds map);
+// passing it keeps this module import-free and testable.
+// Lives here, not detail.js, for the same reason artifactsHtml does.
+export function cardStripHtml(card, emojiFor) {
+  const prs = cardPrs(card).map((pr) => prChipHtml(pr, true)).join('');
+  const events = (card && card.events) || [];
+  const last = events.length ? events[events.length - 1] : null;
+  const em = last && emojiFor ? emojiFor(last.kind) : '';
+  return '<span class="dt-strip-chev"></span>' +
+    (prs ? '<span class="dt-strip-prs">' + prs + '</span>' : '') +
+    (last
+      ? '<span class="dt-strip-ev">' + (em ? esc(em) + ' ' : '') + esc(last.text || '') + '</span>'
+      : '<span class="dt-strip-ev none">no events yet</span>');
+}
+
 // The PLAYBOOK chip on the card detail screen: which playbook card.start
 // renders into the worker's brief. Shown on every card that can start — a card
 // with none does not start, and that has to be visible before the drag, not

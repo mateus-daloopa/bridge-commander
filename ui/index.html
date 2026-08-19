@@ -295,9 +295,19 @@
     <button id="dt-unarch" class="tv-unarch" hidden>🧟 unarchive</button>
     <button id="dt-close" title="close">✕</button>
   </div>
-  <div class="dt-attrs" id="dt-attrs"></div>
-  <div class="dt-labels" id="dt-labels"></div>
+  <!-- the collapsed line: PR state and the tail of the timeline, one row, no wrap.
+       Clicking it opens #dt-fold below, which holds the full attribute list,
+       the labels and the whole timeline. -->
+  <div class="dt-strip" id="dt-strip" role="button" tabindex="0"
+       title="click for every attribute, label and event"></div>
   <div class="dt-scroll">
+    <div class="dt-fold" id="dt-fold" hidden>
+      <div class="dt-attrs" id="dt-attrs"></div>
+      <div class="dt-labels" id="dt-labels"></div>
+      <div class="dt-events-head">timeline</div>
+      <div class="dt-events" id="dt-events"></div>
+    </div>
+    <div class="dt-artifacts" id="dt-artifacts"></div>
     <div class="dt-body md" id="dt-body"></div>
     <button id="dt-body-edit" type="button" title="edit description">✎ edit</button>
     <div id="dt-body-editor" hidden>
@@ -307,12 +317,9 @@
         <button type="button" id="dt-body-save">save</button>
       </div>
     </div>
-    <div class="dt-artifacts" id="dt-artifacts"></div>
     <!-- archived snapshots: the frozen thread, inline (live cards chat on the left) -->
     <div class="dt-events-head" id="dt-thread-head" hidden>thread (frozen)</div>
     <div id="dt-thread" hidden></div>
-    <div class="dt-events-head">timeline</div>
-    <div class="dt-events" id="dt-events"></div>
   </div>
 </aside>
 
