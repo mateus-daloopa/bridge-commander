@@ -22,8 +22,7 @@ import { renderLabelManager, renderPicker, pickerIsOpen, closeLabelPicker } from
 import { renderPlaybooks } from './pbmanager.js';
 import { renderProjects } from './projmanager.js';
 import { renderLieutenants } from './ltmanager.js';
-import { renderHooks, focusHook } from './hkmanager.js';
-import { renderSchedules, onOpenHook } from './scmanager.js';
+import { renderAutomation } from './automation.js';
 import './resize.js'; // draggable side-panel widths
 import './keepalivesettings.js'; // the pocket switch: hold the audio session open
 
@@ -111,7 +110,7 @@ document.getElementById('config-open').onclick = () => {
 // section is a <section data-sec>, a <button data-tab> and one entry here; the
 // switching below never learns its name.
 const WS_RENDER = { labels: renderLabelManager, playbooks: renderPlaybooks, projects: renderProjects,
-  lieutenants: renderLieutenants, hooks: renderHooks, schedules: renderSchedules };
+  lieutenants: renderLieutenants };
 let wsTab = 'labels';
 function setWsTab(tab) {
   wsTab = tab;
@@ -126,21 +125,23 @@ function setWsTab(tab) {
 for (const b of document.querySelectorAll('#ss-tabs button')) {
   b.onclick = () => setWsTab(b.dataset.tab);
 }
-// A schedule fires a hook, so its row names one — and the name is a way there.
-// The tab switching is this file's, so the schedules section is handed the
-// action instead of reaching for it (the shape filepane's onModeSwitch uses).
-onOpenHook((name) => { setWsTab('hooks'); focusHook(name); });
-
-// ---------- board region mode: kanban ⇄ table ⇄ archived ⇄ file ⇄ settings ----
+// ---- board region mode: kanban ⇄ table ⇄ archived ⇄ automation ⇄ file ⇄ settings ----
 // Board and table are two views over the LIVE cards; 🧊 is the archived
-// snapshots' own read-only mode. Those three are the switcher, and the choice
-// sticks per browser.
+// snapshots' own read-only mode; ⚡ is the clock and the scripts it fires, which
+// is watched rather than configured and so is a mode rather than a config tab.
+// Those four are the switcher, and the choice sticks per browser.
 // 'file' and 'settings' are the screens: not in the switcher (you enter them by
 // opening a file, or from the gear), and never remembered — MODE_BTN is the
 // whole rule, so a reload comes back to the last switcher mode.
-const MODE_BTN = { board: 'vs-board', table: 'vs-table', archive: 'vs-arch' };
+const MODE_BTN = { board: 'vs-board', table: 'vs-table', archive: 'vs-arch', auto: 'vs-auto' };
 const SCREENS = ['file', 'settings'];
+// Entering ⚡ is a fresh look at the clock, not last visit's answer — the same
+// contract setWsTab gives a config section. The render loop below hands this to
+// renderAutomation once and clears it, so the board events that follow repaint
+// without re-entering.
+let enteringAuto = false;
 function setBoardMode(mode) {
+  if (mode === 'auto' && S.boardMode !== 'auto') enteringAuto = true;
   if (!MODE_BTN[mode] && !SCREENS.includes(mode)) mode = 'board';
   if (mode !== 'file') forgetFile(); // anything else leaves the file screen
   S.boardMode = mode;
@@ -148,6 +149,7 @@ function setBoardMode(mode) {
   const wrap = document.getElementById('board-wrap');
   wrap.classList.toggle('table-mode', mode === 'table');
   wrap.classList.toggle('archive-mode', mode === 'archive');
+  wrap.classList.toggle('auto-mode', mode === 'auto');
   wrap.classList.toggle('file-mode', mode === 'file');
   wrap.classList.toggle('settings-mode', mode === 'settings');
   for (const [m, id] of Object.entries(MODE_BTN)) {
@@ -176,11 +178,11 @@ document.getElementById('ss-back').onclick = leaveScreen;
 onModeSwitch(setBoardMode);   // the file screen flips the mode through this one owner
 onQuoteSource(fileQuote);     // …and is where every message's file context comes from
 // Mobile collapses the switcher to just the active mode's button; tapping it
-// opens a small dropdown of the three modes. Desktop shows all three buttons,
+// opens a small dropdown of the four modes. Desktop shows all four buttons,
 // where clicking the active one was always a no-op — so the dropdown branch
 // can never fire there.
 const modeMenuEl = document.getElementById('mode-menu');
-const MODE_LABEL = { board: '▦ kanban', table: '☰ table', archive: '🧊 archived' };
+const MODE_LABEL = { board: '▦ kanban', table: '☰ table', archive: '🧊 archived', auto: '⚡ automation' };
 function modeMenuIsOpen() { return !modeMenuEl.hidden; }
 function closeModeMenu() { modeMenuEl.hidden = true; }
 function openModeMenu(anchor) {
@@ -292,6 +294,7 @@ onRender(() => {
   // under the captain's cursor would eat what he is typing.
   if (S.boardMode === 'file') { /* nothing to repaint */ }
   else if (S.boardMode === 'settings') WS_RENDER[wsTab]();
+  else if (S.boardMode === 'auto') { renderAutomation(enteringAuto); enteringAuto = false; }
   else if (S.boardMode === 'archive') renderArchive();
   else if (S.boardMode === 'table') renderTable();
   else renderBoard();

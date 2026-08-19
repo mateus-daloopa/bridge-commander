@@ -34,11 +34,14 @@
     <!-- mobile only: leaves search mode (the filter itself stays applied) -->
     <button id="filter-close" title="done">✕</button>
   </span>
-  <!-- board ⇄ table over the live cards; 🧊 is the archived cards' own mode -->
+  <!-- board ⇄ table over the live cards; 🧊 is the archived cards' own mode;
+       ⚡ is the clock and the scripts it fires, which are watched rather than
+       configured and so are a mode of their own rather than a config tab -->
   <span id="view-seg" role="group" aria-label="board view">
     <button id="vs-board" class="on" title="kanban board">▦</button>
     <button id="vs-table" title="table view">☰</button>
     <button id="vs-arch" title="archived cards">🧊</button>
+    <button id="vs-auto" title="hooks &amp; schedules">⚡</button>
   </span>
   <span id="status-dot" title="connecting…"></span>
   <button id="bell" title="notifications">🔔<span id="bell-n" class="badge-n" hidden></span></button>
@@ -48,8 +51,8 @@
 <!-- filter popup (filterpop.js renders its content) -->
 <div id="filter-panel" hidden></div>
 
-<!-- mobile board-mode dropdown: the collapsed ▦☰🧊 switcher opens this
-     (main.js renders the three modes, current one marked) -->
+<!-- mobile board-mode dropdown: the collapsed ▦☰🧊⚡ switcher opens this
+     (main.js renders the four modes, current one marked) -->
 <div id="mode-menu" hidden></div>
 
 <!-- notifications dropdown -->
@@ -146,10 +149,11 @@
     <div class="pane-resize" id="chat-resize" title="drag to resize · double-click to reset"></div>
   </section>
 
-  <!-- board: right — one region, five modes (kanban | table | archived | file |
-       settings). The file and settings screens are not in the switcher (you
-       enter them by opening a file, or from the gear): they take the board's
-       place with the chat still at its side. -->
+  <!-- board: right — one region, six modes (kanban | table | archived |
+       automation | file | settings). The first four are the switcher and are
+       remembered; the file and settings screens are not in it (you enter them
+       by opening a file, or from the gear). All of them take the board's place
+       with the chat still at its side. -->
   <section id="board-wrap">
     <div id="board"><div class="empty">waiting for board…</div></div>
     <div id="table"></div>
@@ -159,10 +163,10 @@
          the browser looking at it — labels, playbooks, projects, lieutenants. -->
     <div id="settings-screen">
       <!-- the heading row carries the tabs: one button per section, wearing the
-           same segmented look as the ▦☰🧊 switcher. data-tab pairs with the
+           same segmented look as the ▦☰🧊⚡ switcher. data-tab pairs with the
            section's data-sec — that pairing IS the switching logic, so a new
            section is a section element and a button, nothing else. -->
-      <!-- the way out, on every viewport: on a phone the ▦☰🧊 switcher has
+      <!-- the way out, on every viewport: on a phone the ▦☰🧊⚡ switcher has
            collapsed to the active mode's button and this screen has none, so
            without the ⟵ there is no exit. Wears the file screen's crumb look. -->
       <div class="ss-headrow">
@@ -173,8 +177,6 @@
           <button type="button" data-tab="playbooks">playbooks</button>
           <button type="button" data-tab="projects">projects</button>
           <button type="button" data-tab="lieutenants">lieutenants</button>
-          <button type="button" data-tab="hooks">hooks</button>
-          <button type="button" data-tab="schedules">schedules</button>
         </span>
       </div>
       <section class="ss-sec on" id="ss-labels" data-sec="labels">
@@ -214,60 +216,80 @@
         <div class="ss-title">lieutenants</div>
         <div id="lt-list"></div>
       </section>
-      <!-- hooks: the workspace's own executable scripts. One dense row each —
-           name, when it last ran and how it ended, ▶ to run it, ✎ to open the
-           file in the same editor a playbook opens in. A directory in hooks/ is
-           a lifecycle event (the row says which); a file directly in hooks/ is a
-           named hook that nothing fires but the ▶. No create button: naming a
-           file, making it executable and writing bash into a text box on a phone
-           is the worst way to do all three. -->
-      <section class="ss-sec" id="ss-hooks" data-sec="hooks">
-        <div class="ss-title">hooks</div>
-        <div id="hk-list"></div>
-        <!-- what the last ▶ or ✎ did. Outside the list on purpose: the list is
-             cleared on every repaint, and a board event a second later would
-             swallow the only answer a press gives. -->
-        <div id="hk-note" class="hk-note"></div>
-        <div id="hk-dir" class="ss-note"></div>
-      </section>
-      <!-- schedules: the board's own clock, beside the hooks it fires. One block
-           per schedule — what it fires (the hook name jumps to its row on the
-           hooks tab), when, next fire, last fire, owner, and PAUSED where it
-           cannot be mistaken for a greyed row. A schedule with a `problem` says
-           it in full and in red: a hook deleted out from under a schedule is the
-           exact silent failure the clock exists to end. Clicking a block opens
-           its recent firings. The form is here rather than terminal-only because
-           the pickers are the point: a hook that exists and an owner who is
-           registered are the two refusals `add` spends most of its time on. -->
-      <section class="ss-sec" id="ss-schedules" data-sec="schedules">
-        <div class="ss-title">schedules</div>
-        <div id="sc-list"></div>
-        <!-- outside the list on purpose, like the hooks note: paint() clears the
-             list on every board event and would swallow a press's only answer.
-             The server's refusal is shown VERBATIM here — it names the offending
-             `when`, which "invalid" would throw away. -->
-        <div id="sc-note" class="hk-note"></div>
-        <details id="sc-add">
-          <summary>add a schedule</summary>
-          <form id="sc-form">
-            <input id="sc-name" placeholder="name" autocomplete="off">
-            <select id="sc-hook" title="the named hook this fires"></select>
-            <input id="sc-when" placeholder="when — 5m, or 0 9 * * mon" autocomplete="off">
-            <select id="sc-owner" title="the lieutenant a failed firing wakes"></select>
-            <select id="sc-overlap" title="what a firing does when the previous one is still running">
-              <option value="skip">overlap: skip</option>
-              <option value="queue">overlap: queue</option>
-              <option value="restart">overlap: restart</option>
-            </select>
-            <select id="sc-catchup" title="what to do with windows that came due while the board was down">
-              <option value="latest">catch-up: latest</option>
-              <option value="all">catch-up: all</option>
-              <option value="none">catch-up: none</option>
-            </select>
-            <button type="submit">add</button>
-          </form>
-        </details>
-      </section>
+    </div>
+    <!-- automation (⚡): the board's clock and the scripts it fires. A schedule
+         fires a hook, so the two are ONE screen rather than two tabs — the
+         relationship reads off the cards (a schedule names its hook, a hook
+         names what fires it) instead of being inferred across a tab switch.
+         Anything red is what this screen is opened for, so it sorts to the top
+         of its column and the masthead counts it. -->
+    <div id="auto-screen">
+      <div class="au-masthead">
+        <div class="au-head">automation</div>
+        <!-- the one line that answers "is anything wrong" without scrolling -->
+        <div id="au-alarm" class="au-alarm" hidden></div>
+        <div id="au-counts" class="au-counts"></div>
+      </div>
+      <div class="au-cols">
+        <!-- schedules: one card per schedule — what it fires, when, the next
+             fire counting down, how the last one ended, and who a failure
+             wakes. PAUSED is a state on the card, never a shade. A `problem`
+             (a hook deleted out from under a schedule, a `when` that stopped
+             parsing) is the exact silent failure the clock exists to end, so it
+             is the whole sentence, in red, on a red card. Clicking a card opens
+             its recent firings. The form's two pickers are why it is here and
+             not terminal-only: a hook that exists and an owner who is
+             registered are the refusals `add` spends most of its time on. -->
+        <section class="au-col">
+          <div class="au-col-head">
+            <div class="au-title">schedules</div>
+            <div id="sc-count" class="au-count"></div>
+          </div>
+          <div id="sc-list"></div>
+          <!-- outside the list on purpose: paint() clears the list on every
+               board event and would swallow a press's only answer. The server's
+               refusal is shown VERBATIM here — it names the offending `when`,
+               which "invalid" would throw away. -->
+          <div id="sc-note" class="au-note"></div>
+          <details id="sc-add">
+            <summary>add a schedule</summary>
+            <form id="sc-form">
+              <input id="sc-name" placeholder="name" autocomplete="off">
+              <select id="sc-hook" title="the named hook this fires"></select>
+              <input id="sc-when" placeholder="when — 5m, or 0 9 * * mon" autocomplete="off">
+              <select id="sc-owner" title="the lieutenant a failed firing wakes"></select>
+              <select id="sc-overlap" title="what a firing does when the previous one is still running">
+                <option value="skip">overlap: skip</option>
+                <option value="queue">overlap: queue</option>
+                <option value="restart">overlap: restart</option>
+              </select>
+              <select id="sc-catchup" title="what to do with windows that came due while the board was down">
+                <option value="latest">catch-up: latest</option>
+                <option value="all">catch-up: all</option>
+                <option value="none">catch-up: none</option>
+              </select>
+              <button type="submit">add</button>
+            </form>
+          </details>
+        </section>
+        <!-- hooks: the workspace's own executable scripts. One card each — what
+             fires it (a lifecycle event, a schedule by name, or nothing but the
+             ▶), how the last run ended, ▶ to run it, ✎ to open the file in the
+             same editor a playbook opens in. No create button: naming a file,
+             making it executable and writing bash into a text box on a phone is
+             the worst way to do all three. -->
+        <section class="au-col">
+          <div class="au-col-head">
+            <div class="au-title">hooks</div>
+            <div id="hk-count" class="au-count"></div>
+          </div>
+          <div id="hk-list"></div>
+          <!-- what the last ▶ or ✎ did. Outside the list for the same reason
+               the schedules note is. -->
+          <div id="hk-note" class="au-note"></div>
+          <div id="hk-dir" class="au-dir"></div>
+        </section>
+      </div>
     </div>
   </section>
 </main>

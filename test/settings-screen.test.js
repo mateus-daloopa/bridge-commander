@@ -78,9 +78,11 @@ test('the config row hands off to the screen the way monitoring hands off to the
 // ---------- the tab strip ----------
 // The sections stack no longer: one tab per section in the heading row, one
 // section visible. The pairing is data-tab ⇄ data-sec, so a fourth section
-// (lieutenants) — or a fifth (hooks) — is markup plus one WS_RENDER entry: the
-// switching below never learns its name.
-const SECTIONS = ['labels', 'playbooks', 'projects', 'lieutenants', 'hooks', 'schedules'];
+// (lieutenants) is markup plus one WS_RENDER entry: the switching below never
+// learns its name. Hooks and schedules were two of these tabs and are not any
+// more — they are watched rather than configured, so they took the ⚡ mode of
+// their own (see automation-screen.test.js).
+const SECTIONS = ['labels', 'playbooks', 'projects', 'lieutenants'];
 test('the heading row carries a tab per section', () => {
   const screen = element('settings-screen');
   const tabs = element('ss-tabs');
@@ -115,10 +117,9 @@ function loadSetWsTab() {
   const painted = [];
   const stub = (name) => (reload) => painted.push([name, reload]);
   const make = new Function('document', 'renderLabelManager', 'renderPlaybooks', 'renderProjects',
-    'renderLieutenants', 'renderHooks', 'renderSchedules',
+    'renderLieutenants',
     mainSrc.slice(start, end) + '\nreturn { setWsTab, wsTab: () => wsTab };');
-  const api = make(document, stub('labels'), stub('playbooks'), stub('projects'), stub('lieutenants'),
-    stub('hooks'), stub('schedules'));
+  const api = make(document, stub('labels'), stub('playbooks'), stub('projects'), stub('lieutenants'));
   return { secs, tabs, painted, ...api };
 }
 
@@ -173,7 +174,7 @@ function loadSetBoardMode() {
 
 test('the switcher modes are remembered; the screens are not', () => {
   const { S, stored, setBoardMode } = loadSetBoardMode();
-  for (const mode of ['board', 'table', 'archive']) {
+  for (const mode of ['board', 'table', 'archive', 'auto']) {
     setBoardMode(mode);
     assert.strictEqual(S.boardMode, mode);
     assert.deepStrictEqual(stored[stored.length - 1], ['bc-board-mode', mode], mode + ' sticks');
@@ -228,7 +229,7 @@ test('the config heading row carries a back control', () => {
 });
 
 test('the ⟵ leaves the screen for the remembered switcher mode', () => {
-  for (const mode of ['table', 'archive', 'board']) {
+  for (const mode of ['table', 'archive', 'auto', 'board']) {
     const { S, setBoardMode, leaveScreen } = loadScreenExits(mode);
     setBoardMode('settings');
     leaveScreen();
@@ -257,7 +258,7 @@ test('the mobile board tab is that same exit while a screen is up', () => {
 });
 
 test('…and does exactly what it always did while a switcher mode is up', () => {
-  for (const mode of ['board', 'table', 'archive']) {
+  for (const mode of ['board', 'table', 'archive', 'auto']) {
     const { S, renders, setBoardMode, tapBoardTab } = loadScreenExits('archive');
     setBoardMode(mode);
     S.view = 'chat';

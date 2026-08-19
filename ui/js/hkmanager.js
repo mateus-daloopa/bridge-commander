@@ -1,36 +1,44 @@
-// The config screen's hooks section: the workspace's own executable scripts,
-// what fires each one, and when it last ran.
+// The ⚡ screen's hooks column: the workspace's own executable scripts, what
+// fires each one, and how the last run ended.
 //
-// A hook already was everything a hook should be — an executable spawned with
-// BC_* in its env, cwd the workspace, a timeout that kills the tree. What it
-// could not be is named, triggered or SEEN. This section is the seen half: one
-// dense row per hook, the way the lieutenants tab is one row per lieutenant.
+// A hook is a script somebody wrote. It has a kind, a last exit code, and — when
+// it went red — output worth reading. So it is a card with those facts under
+// captions rather than a line of 11px grey:
 //
-//   gh-watch          ran 4m ago · exit 0        ▶ ✎
-//   teardown-devcont  worker-done · ran 2h · 0   ▶ ✎
+//   gh-watch                                                    ▶  ✎
+//   FIRED BY            LAST RUN
+//   ⚡ gh-watch          ran 4m ago · exit 0
+//
+// FIRED BY is the half of the story the two config tabs could not tell: a
+// lifecycle hook names its event, a named hook names the SCHEDULES that fire it
+// (clicking one jumps to that schedule beside this column), and one nothing
+// fires says so. Red sorts to the top, because a failed run is why this screen
+// gets opened.
 //
 // ▶ posts to the same door `bc-axi hook run` posts to — one code path, three
-// callers. ✎ opens the file on the file screen, the same editor a playbook
-// opens in, which is where "he asks a lieutenant to help build one" happens: a
-// file on a screen he can point at.
+// callers. ✎ opens the file on the file screen, the same editor a playbook opens
+// in, which is where "he asks a lieutenant to help build one" happens: a file on
+// a screen he can point at.
 //
 // One rule governs every ▶ here: a refusal is visible. Enabled-and-works and
 // disabled-with-a-reason are both fine; enabled-and-silently-refuses is the
-// worst of the three, because it teaches him the tab is broken and he is right.
-// So the ▶ on a lifecycle row is disabled WITH a title saying why, and the ▶ on
-// a hook someone else is already running is not disabled at all — the server
-// locks per name, so the tab does too, and a press it would refuse never looks
-// live. Same principle, opposite answer.
+// worst of the three, because it teaches him the screen is broken and he is
+// right. So the ▶ on a lifecycle card is disabled WITH a title saying why, and
+// the ▶ on a hook someone else is already running is not disabled at all — the
+// server locks per name, so the screen does too, and a press it would refuse
+// never looks live. Same principle, opposite answer.
 //
 // Deliberately absent: run detail (the output tail lives in hookruns.jsonl and
-// is read with `bc-axi hook runs`) and a create button (naming a file, making it
-// executable and typing bash into a text box on a phone is the worst way to do
-// all three).
+// is read with `bc-axi hook runs`, or through the schedule that fired it) and a
+// create button (naming a file, making it executable and typing bash into a text
+// box on a phone is the worst way to do all three).
 import { api } from './api.js';
 import { ago } from './util.js';
 import { openArtifactFile } from './detail.js';
+import { schedulesForHook } from './scmanager.js';
 
 const listEl = document.getElementById('hk-list');
+const countEl = document.getElementById('hk-count');
 const noteEl = document.getElementById('hk-note');
 const dirEl = document.getElementById('hk-dir');
 
@@ -39,14 +47,28 @@ let dir = '';
 let loading = false;
 let stale = false; // a render arrived while a read was in flight
 const running = new Set(); // hook names whose ▶ was pressed HERE — state, not a mutated button
-let focus = ''; // a hook the schedules tab sent us to — highlighted until this tab is re-entered
+let focus = ''; // a hook the schedules column sent us to — marked until the mode is re-entered
 
-// Same contract as the playbooks and lieutenants sections: `reload` is what the
-// tab passes on the way in. Every render ASKS, though, not just the entering
-// one: a hook run from the CLI, or a lifecycle hook firing, changes what a row
-// says about its last run, and the board event that brought us here is the only
-// nudge this tab gets. That is also why there is no polling — nothing runs at
-// all while another tab is up.
+// A hook card names the schedules that fire it, and each name is a way there.
+// The schedules column owns that focus, so this module is handed the action
+// rather than reaching for it — the shape filepane's onModeSwitch uses.
+let openScheduleFn = null;
+export function onOpenSchedule(fn) { openScheduleFn = fn; }
+
+// What the masthead counts. `bad` is a hook whose last run did not come back
+// clean — the reason this screen gets opened.
+export function hookCounts() {
+  const list = items || [];
+  return { total: list.length, bad: list.filter(isBad).length };
+}
+function isBad(h) { return !!(h.last && !h.last.ok); }
+
+// Same contract as every other list on the board: `reload` is what ENTERING the
+// mode passes. Every render ASKS, though, not just the entering one — a hook run
+// from the CLI, or a lifecycle hook firing, changes what a card says about its
+// last run, and the board event that brought us here is the only nudge this
+// screen gets. That is also why there is no polling: nothing runs at all while
+// another mode is up.
 export async function renderHooks(reload) {
   if (reload) { noteEl.textContent = ''; focus = ''; } // entering is a fresh look, not last visit's answer
   if (loading) { stale = true; return; } // the read in flight answers for both askers
@@ -68,12 +90,10 @@ export async function renderHooks(reload) {
   paint();
 }
 
-// The other half of the schedules tab's hook link: land on the hooks tab with
-// the hook it named marked, so "which one is nightly-digest firing" is answered
-// by looking rather than by reading a list. main.js switches the tab first, so
-// this only has to say which row — and the highlight lasts until the tab is
-// entered fresh, because a mark that vanished on the next board event would be
-// gone before he looked up.
+// The other half of a schedule's hook link: mark the hook it named, so "which
+// one is nightly-digest firing" is answered by looking. The mark lasts until the
+// mode is entered fresh, because one that vanished on the next board event would
+// be gone before he looked up.
 export function focusHook(name) {
   focus = name;
   renderHooks();
@@ -83,41 +103,61 @@ function paint() {
   if (!items) return;
   listEl.textContent = '';
   let marked = null;
-  for (const h of items) {
+  for (const h of ordered()) {
     const el = row(h);
     if (h.name === focus) marked = el;
     listEl.appendChild(el);
   }
-  if (!items.length) listEl.textContent = 'no hooks';
+  if (!items.length) {
+    const el = document.createElement('div');
+    el.className = 'au-empty';
+    el.textContent = 'no hooks — nothing executable in the hooks directory yet';
+    listEl.append(el);
+  }
+  countEl.textContent = items.length ? countText() : '';
   // A hook a schedule names and this list does not have is the deleted-hook
   // case, and the schedule's own row already says so in full — so the note says
   // it here too rather than leaving a jump that silently did nothing.
   if (focus) {
     if (marked) marked.scrollIntoView({ block: 'nearest' });
-    else noteEl.textContent = 'no hook "' + focus + '" here — the schedule that fires it says so on its row';
+    else noteEl.textContent = 'no hook "' + focus + '" here — the schedule that fires it says so on its card';
   }
   dirEl.textContent = dir + ' — a file here is a named hook; a directory is a lifecycle event';
 }
 
+// Failed first, everything else in the order the server listed it — a red card
+// below the fold is a red card he does not see. Stable within a rank, so
+// nothing shuffles under a finger while everything is green.
+function ordered() {
+  return items.map((h, i) => [h, i]).sort((a, b) => (isBad(b[0]) - isBad(a[0])) || a[1] - b[1])
+    .map(([h]) => h);
+}
+
+function countText() {
+  const bad = items.filter(isBad).length;
+  return items.length + ' total' + (bad ? ' · ' + bad + ' failing' : '');
+}
+
 function row(h) {
   const el = document.createElement('div');
-  el.className = 'hk-row' + (h.name === focus ? ' hk-focus' : '');
   const busy = running.has(h.name);
-  el.append(name(h), facts(h, busy), actions(h, busy));
+  el.className = 'hk-row' + (isBad(h) ? ' au-bad' : '') + (h.name === focus ? ' au-focus' : '');
+  el.append(head(h, busy), facts(h, busy));
   return el;
 }
 
-function name(h) {
-  const el = document.createElement('span');
-  el.className = 'hk-name';
-  el.textContent = h.name;
-  el.title = h.file;
+function head(h, busy) {
+  const el = document.createElement('div');
+  el.className = 'hk-head';
+  const nm = document.createElement('span');
+  nm.className = 'hk-name';
+  nm.textContent = h.name;
+  nm.title = h.file;
+  el.append(nm, actions(h, busy));
   return el;
 }
 
-// How the last run ended, in the words a row has space for. A lifecycle hook
-// leads with the event that owns it; a named one shows nothing there, because
-// nothing fires it but the ▶.
+// How the last run ended, in the words the CLI uses for it.
 function outcome(r) {
   if (!r) return 'never ran';
   const when = ago(r.started); // 'now' | '4m' | '2h' | '3d'
@@ -126,18 +166,68 @@ function outcome(r) {
       : r.code === null ? 'killed' : 'exit ' + r.code);
 }
 
-// `busy` is a press this tab is still waiting on; h.running is the server's own
-// answer, which is how a run started from the CLI reads as running here too.
+// The two facts a hook IS: what fires it, and how the last run ended.
+//
+// `busy` is a press this screen is still waiting on; h.running is the server's
+// own answer, which is how a run started from the CLI reads as running here too.
 function facts(h, busy) {
-  const el = document.createElement('span');
-  el.className = 'hk-facts';
-  el.title = h.event ? 'fires on ' + h.event + '; last run' : 'nothing fires this one — ▶ does';
-  if (h.event) el.append(h.event + ' · ');
+  const el = document.createElement('div');
+  el.className = 'au-stats';
+  el.append(firedBy(h), lastRun(h, busy));
+  return el;
+}
+
+// The relationship the two config tabs made him infer. A lifecycle hook is
+// fired by its event; a named one by whichever schedules point at it, and each
+// of those is a button that lands on that schedule.
+function firedBy(h) {
+  const el = document.createElement('div');
+  el.className = 'au-stat';
+  const cap = document.createElement('div');
+  cap.className = 'au-cap';
+  cap.textContent = 'fired by';
+  const v = document.createElement('div');
+  v.className = 'au-val';
+  el.append(cap, v);
+  if (h.event) {
+    const ev = document.createElement('span');
+    ev.className = 'hk-event';
+    ev.textContent = h.event;
+    ev.title = 'the card lifecycle event that fires this one';
+    v.append(ev);
+    return el;
+  }
+  const names = schedulesForHook(h.name);
+  if (!names.length) {
+    v.classList.add('au-off');
+    v.textContent = 'nothing — ▶ only';
+    return el;
+  }
+  for (const n of names) v.append(scheduleLink(n));
+  return el;
+}
+
+function scheduleLink(name) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'hk-sched';
+  b.textContent = '⚡ ' + name;
+  b.title = 'the schedule that fires this — show it beside this column';
+  b.onclick = () => { if (openScheduleFn) openScheduleFn(name); };
+  return b;
+}
+
+function lastRun(h, busy) {
+  const el = document.createElement('div');
+  el.className = 'au-stat';
+  const cap = document.createElement('div');
+  cap.className = 'au-cap';
+  cap.textContent = 'last run';
   const live = busy || !!h.running;
-  const last = document.createElement('span');
-  last.className = live ? 'hk-running' : !h.last ? 'hk-never' : h.last.ok ? 'hk-ok' : 'hk-bad';
-  last.textContent = live ? 'running now' : outcome(h.last);
-  el.append(last);
+  const v = document.createElement('div');
+  v.className = 'au-val ' + (live ? 'hk-running' : !h.last ? 'hk-never' : h.last.ok ? 'hk-ok' : 'hk-bad');
+  v.textContent = live ? 'running now' : outcome(h.last);
+  el.append(cap, v);
   return el;
 }
 
@@ -159,7 +249,7 @@ function actions(h, busy) {
 function action(label, title, onClick) {
   const b = document.createElement('button');
   b.type = 'button';
-  b.className = 'hk-act';
+  b.className = 'au-act';
   b.textContent = label;
   b.title = title;
   b.onclick = onClick;

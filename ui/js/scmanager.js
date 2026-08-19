@@ -1,22 +1,22 @@
-// The config screen's schedules section: the board's own clock, beside the
-// hooks it fires.
+// The ⚡ screen's schedules column: the board's own clock, beside the hooks it
+// fires.
 //
-// MNC-25 shipped the clock and gave it no screen, so the board could be
-// scheduled and nothing on the board said so. This is the said-so half — one
-// block per schedule, the facts the CLI prints, in the words the CLI prints
-// them in:
+// MNC-25 shipped the clock and gave it no screen; MNC-84 gave it a row of grey
+// text on a config tab. A schedule is a LIVE thing — a countdown to the next
+// fire, a last run that passed or failed, and an owner a failure wakes — so it
+// is a card with those four facts under captions, at a size he can read from
+// across the room:
 //
-//   ▸ gh-watch  → gh-watch                              ⏸ ✕
-//     every 5m · in 3m · fired 2m ago · exit 0 · tonylampada
+//   ▸ gh-watch   → gh-watch                                    ‖  ✕
+//     WHEN         NEXT FIRE      LAST FIRE            OWNER
+//     every 5m     in 3m          fired 2m ago exit 0  tonylampada
 //
-//   ▸ nightly   → digest            PAUSED              ▶ ✕
-//     cron 0 9 * * mon · paused · never fired · tonylampada
-//
-// The `problem` is why this section is worth having at all. A schedule whose
+// The `problem` is why this column is worth having at all. A schedule whose
 // hook was deleted, or whose `when` stopped parsing, fires nothing forever and
 // looks exactly like one that is working — that is the silent failure the clock
-// exists to end, so a broken row is a red bar and the server's whole sentence,
-// never a subtly greyed line and the word "invalid".
+// exists to end, so a broken card is red, carries the server's whole sentence,
+// and SORTS TO THE TOP. Red is the reason the screen gets opened; it must not
+// be below the fold.
 //
 // Same rule for the add form's refusals: the server names the offending text
 // ("bad schedule expression \"*/5 * * *\": a cron expression has 5 fields…"),
@@ -32,6 +32,7 @@ import { ansiToHtml } from './ansi.js';
 import { hhmm } from './util.js';
 
 const listEl = document.getElementById('sc-list');
+const countEl = document.getElementById('sc-count');
 const noteEl = document.getElementById('sc-note');
 const addEl = document.getElementById('sc-add');
 const formEl = document.getElementById('sc-form');
@@ -63,13 +64,37 @@ const busy = new Set(); // names with a press still in flight — state, not a m
 let openHookFn = null;
 export function onOpenHook(fn) { openHookFn = fn; }
 
+// A card the hooks column sent us to — marked until the mode is entered fresh,
+// because a mark that vanished on the next board event would be gone before he
+// looked up.
+let focus = '';
+export function focusSchedule(name) {
+  focus = name;
+  renderSchedules();
+}
+
+// What the masthead counts. `bad` is the number this screen exists for: a
+// schedule that fires nothing, or whose last firing did not come back clean. A
+// skip is neither — it is the overlap policy doing its job.
+export function scheduleCounts() {
+  const list = items || [];
+  return { total: list.length, bad: list.filter(isBad).length };
+}
+function isBad(s) { return !!s.problem || !!(s.last && !s.last.skipped && !s.last.ok); }
+
+// The other half of the one-story rule: a hook card says which schedules fire
+// it, and reads that off the answer this module already holds.
+export function schedulesForHook(hook) {
+  return (items || []).filter((s) => s.hook === hook).map((s) => s.name);
+}
+
 // Same contract as its neighbours: `reload` is what the tab passes on the way
 // in. Every render ASKS, though, not just the entering one — a schedule fires,
 // is paused from the CLI, or has its hook deleted out from under it, and the
 // board event that brought us here is the only nudge this tab gets. Which is
 // also why there is no polling: nothing runs while another tab is up.
 export async function renderSchedules(reload) {
-  if (reload) say(''); // entering is a fresh look, not last visit's answer
+  if (reload) { say(''); focus = ''; } // entering is a fresh look, not last visit's answer
   if (loading) { stale = true; return; } // the read in flight answers for both askers
   loading = true;
   try {
@@ -98,14 +123,52 @@ export async function renderSchedules(reload) {
 function paint() {
   if (!items) return;
   listEl.textContent = '';
-  for (const s of items) listEl.appendChild(row(s));
-  if (!items.length) listEl.textContent = 'no schedules';
+  let marked = null;
+  for (const s of ordered()) {
+    const el = row(s);
+    if (s.name === focus) marked = el;
+    listEl.appendChild(el);
+  }
+  if (!items.length) listEl.append(empty('no schedules — the board keeps no clock yet'));
+  countEl.textContent = items.length ? countText(items) : '';
+  if (marked) marked.scrollIntoView({ block: 'nearest' });
+}
+
+// Broken first, paused next, working last — a red card below the fold is a red
+// card he does not see, and this screen is opened BECAUSE something went red.
+// Stable within a rank, so the server's order survives and nothing shuffles
+// under a finger while everything is green.
+function ordered() {
+  const rank = (s) => (isBad(s) ? 0 : s.paused ? 1 : 2);
+  return items.map((s, i) => [s, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1])
+    .map(([s]) => s);
+}
+
+function countText(list) {
+  const bad = list.filter(isBad).length;
+  const off = list.filter((s) => !isBad(s) && s.paused).length;
+  const parts = [list.length + ' total'];
+  if (bad) parts.push(bad + ' failing');
+  if (off) parts.push(off + ' paused');
+  return parts.join(' · ');
+}
+
+function empty(text) {
+  const el = document.createElement('div');
+  el.className = 'au-empty';
+  el.textContent = text;
+  return el;
 }
 
 function row(s) {
   const el = document.createElement('div');
-  el.className = 'sc-row' + (s.problem ? ' sc-broken' : '') + (s.paused ? ' sc-off' : '');
-  el.append(head(s), facts(s));
+  // One class for "this one is red", whichever way it went red: a `problem`
+  // (fires nothing, forever) and a last firing that came back non-zero are the
+  // same news to him, and a rail that only lit for one of them would teach him
+  // the other is fine.
+  el.className = 'sc-row' + (isBad(s) ? ' au-bad' : '') + (s.paused ? ' sc-off' : '')
+    + (s.name === focus ? ' au-focus' : '');
+  el.append(head(s), stats(s));
   // In full and above the fold: a problem is the reason to look at this tab, so
   // it is not a title attribute and it is not truncated.
   if (s.problem) el.append(problem(s));
@@ -118,10 +181,13 @@ function head(s) {
   el.className = 'sc-head';
   el.title = open.has(s.name) ? 'hide the firings' : 'the recent firings — time, how each ended, and the output';
   el.onclick = () => toggle(s);
+  const caret = document.createElement('span');
+  caret.className = 'au-caret';
+  caret.textContent = open.has(s.name) ? '▾' : '▸';
   const nm = document.createElement('span');
   nm.className = 'sc-name';
-  nm.textContent = (open.has(s.name) ? '▾ ' : '▸ ') + s.name;
-  el.append(nm, hookLink(s));
+  nm.textContent = s.name;
+  el.append(caret, nm, hookLink(s));
   // Paused is a state, not a shade: a greyed row and a row on a dim screen look
   // the same, and "why did this stop firing" is the question the tab answers.
   if (s.paused) {
@@ -165,7 +231,7 @@ function acts(s) {
 function act(label, disabled, title, onClick) {
   const b = document.createElement('button');
   b.type = 'button';
-  b.className = 'sc-act';
+  b.className = 'au-act';
   b.textContent = label;
   b.title = title;
   b.disabled = disabled;
@@ -219,22 +285,44 @@ function outcomeClass(r) {
   return r.skipped ? 'sc-skip' : r.ok ? 'sc-ok' : 'sc-bad';
 }
 
-// when · next fire · last fire · owner, as one dim run. Separators, not labels:
-// the title says what they are once, so ten rows do not each spell it out. The
-// last fire keeps a colour of its own, because a red one has to be what the eye
-// lands on.
-function facts(s) {
+// The four facts a schedule IS, each under its own caption: when it fires, how
+// long until the next one, how the last one ended, and who a failure wakes. The
+// tab this replaced ran them together as one dim line — six facts in 11px grey,
+// which is how a screen says nothing on it matters.
+//
+// The last fire keeps a colour of its own, because a red one has to be what the
+// eye lands on.
+function stats(s) {
   const el = document.createElement('div');
-  el.className = 'sc-facts';
-  el.title = 'when it fires · next fire · last fire · owner';
-  // A schedule with a problem has a next window and will not take it — the tick
-  // refuses to fire it — so "in 4m" would be the plausible-looking lie the
-  // problem is there to replace. Paused is the same shape of not-coming.
-  el.append(s.describe + ' · ' + (s.paused ? 'paused' : s.problem ? 'fires nothing' : until(s.next)) + ' · ');
-  const last = document.createElement('span');
-  last.className = outcomeClass(s.last);
-  last.textContent = fireOutcome(s.last);
-  el.append(last, ' · ' + s.owner);
+  el.className = 'au-stats';
+  el.append(
+    stat('when', s.describe),
+    stat('next fire', nextText(s), s.paused || s.problem ? 'au-off' : 'sc-next'),
+    stat('last fire', fireOutcome(s.last), outcomeClass(s.last)),
+    stat('owner', s.owner, 'au-who'),
+  );
+  return el;
+}
+
+// A schedule with a problem has a next window and will not take it — the tick
+// refuses to fire it — so "in 4m" would be the plausible-looking lie the problem
+// is there to replace. Paused is the same shape of not-coming.
+function nextText(s) {
+  return s.paused ? 'paused' : s.problem ? 'fires nothing' : until(s.next);
+}
+
+// caption over value. The caption is what lets the value be a bare "in 3m"
+// rather than "next fire: in 3m" on every card.
+function stat(cap, value, cls) {
+  const el = document.createElement('div');
+  el.className = 'au-stat';
+  const c = document.createElement('div');
+  c.className = 'au-cap';
+  c.textContent = cap;
+  const v = document.createElement('div');
+  v.className = 'au-val' + (cls ? ' ' + cls : '');
+  v.textContent = value;
+  el.append(c, v);
   return el;
 }
 
