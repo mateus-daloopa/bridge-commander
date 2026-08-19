@@ -14,9 +14,10 @@ import { renderFilterUI, filterPanelOpen, closeFilterPanel } from './filterpop.j
 import { renderChat, onOpenCard as chatOnOpenCard, openCardConversation, openLieutenantChat, onQuoteSource } from './chat.js';
 import { onModeSwitch, forgetFile, fileOpen, fileName, fileQuote } from './filepane.js';
 import { renderLtSwitcher, ltSwitcherOpen, closeLtSwitcher, ltSettingsOpen, closeLtSettings } from './ltswitcher.js';
-import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, onArtifactClose, closeOwnerMenu, ownerMenuOpen, closePlaybookMenu, playbookMenuOpen, artifactWritten } from './detail.js';
+import { renderDetail, openDetail, closeDetail, detailOpen, auxDetailKey, closeArtifact, artifactOpen, onArtifactClose, closeOwnerMenu, ownerMenuOpen, closePlaybookMenu, playbookMenuOpen, artifactWritten } from './detail.js';
 import { closePane, paneOpen } from './pane.js';
 import { openMonitor, closeMonitor, monitorOpen } from './monitor.js';
+import { closeLog, logOpen } from './logview.js';
 import { renderNotifications, onOpenCard as notifOnOpenCard } from './notify.js';
 import { renderLabelManager, renderPicker, pickerIsOpen, closeLabelPicker } from './labels.js';
 import { renderPlaybooks } from './pbmanager.js';
@@ -142,6 +143,9 @@ const SCREENS = ['file', 'settings'];
 let enteringAuto = false;
 function setBoardMode(mode) {
   if (mode === 'auto' && S.boardMode !== 'auto') enteringAuto = true;
+  // The ⚡ screen's panel belongs to that screen: leaving the mode takes it with
+  // us rather than leaving a schedule floating over the kanban.
+  if (mode !== S.boardMode && auxDetailKey()) closeDetail();
   if (!MODE_BTN[mode] && !SCREENS.includes(mode)) mode = 'board';
   if (mode !== 'file') forgetFile(); // anything else leaves the file screen
   S.boardMode = mode;
@@ -251,6 +255,7 @@ document.addEventListener('keydown', (e) => {
   // instead (✕, or click outside).
   if (e.key === 'Escape') {
     if (artifactOpen()) closeArtifact();
+    else if (logOpen()) closeLog();
     else if (paneOpen()) closePane();
     else if (monitorOpen()) closeMonitor();
     else if (newCardOpen()) closeNewCard();

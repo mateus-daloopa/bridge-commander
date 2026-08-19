@@ -167,9 +167,13 @@ function loadSetBoardMode() {
   const localStorage = { setItem: (k, v) => stored.push([k, v]) };
   const document = { getElementById: () => ({ classList: { toggle() {} } }) };
   const S = {};
+  // the ⚡ screen's detail panel goes with the mode it belongs to — stubbed
+  // here, pinned in automation-panel.test.js
   const make = new Function('document', 'localStorage', 'S', 'forgetFile', 'render',
+    'auxDetailKey', 'closeDetail',
     mainSrc.slice(start, end) + '\nreturn setBoardMode;');
-  return { S, stored, forgotten, setBoardMode: make(document, localStorage, S, () => forgotten.push(1), () => {}) };
+  return { S, stored, forgotten,
+    setBoardMode: make(document, localStorage, S, () => forgotten.push(1), () => {}, () => '', () => {}) };
 }
 
 test('the switcher modes are remembered; the screens are not', () => {
@@ -216,8 +220,10 @@ function loadScreenExits(remembered) {
   const S = {};
   const renders = [];
   const make = new Function('document', 'localStorage', 'S', 'forgetFile', 'render',
+    'auxDetailKey', 'closeDetail',
     mainSrc.slice(start, end) + '\nreturn { setBoardMode, leaveScreen, tapBoardTab };');
-  return { S, renders, ...make(document, localStorage, S, () => {}, () => renders.push(1)) };
+  return { S, renders,
+    ...make(document, localStorage, S, () => {}, () => renders.push(1), () => '', () => {}) };
 }
 
 test('the config heading row carries a back control', () => {

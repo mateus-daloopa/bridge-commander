@@ -237,7 +237,8 @@
              (a hook deleted out from under a schedule, a `when` that stopped
              parsing) is the exact silent failure the clock exists to end, so it
              is the whole sentence, in red, on a red card. Clicking a card opens
-             its recent firings. The form's two pickers are why it is here and
+             its firings in the board's own detail panel — the card itself never
+             grows, so the column never reflows under a finger. The form's two pickers are why it is here and
              not terminal-only: a hook that exists and an owner who is
              registered are the refusals `add` spends most of its time on. -->
         <section class="au-col">
@@ -323,6 +324,11 @@
   <div class="dt-strip" id="dt-strip" role="button" tabindex="0"
        title="click for every attribute, label and event"></div>
   <div class="dt-scroll">
+    <!-- the panel's second subject: a schedule or a hook from the ⚡ screen.
+         Same aside, so it opens, closes, resizes and goes full-screen on a
+         phone exactly as a card does — the module that owns the subject paints
+         this div and nothing else in the panel. -->
+    <div id="dt-aux" hidden></div>
     <div class="dt-fold" id="dt-fold" hidden>
       <div class="dt-attrs" id="dt-attrs"></div>
       <div class="dt-labels" id="dt-labels"></div>
@@ -451,6 +457,19 @@
       <div id="mon-agents"></div>
       <div id="mon-containers" hidden></div>
     </div>
+  </div>
+</div>
+
+<!-- one firing's log (⚡ screen): the output of a single run, over the screen.
+     A log is a terminal's output — mono, scrolling inside the modal, never
+     poured into a list. Backdrop and Escape close it, same as the two above. -->
+<div id="log-overlay" hidden>
+  <div id="log-modal">
+    <div class="pane-head">
+      <span class="pane-title" id="log-title"></span>
+      <button id="log-close" title="close">✕</button>
+    </div>
+    <pre id="log-body"></pre>
   </div>
 </div>
 

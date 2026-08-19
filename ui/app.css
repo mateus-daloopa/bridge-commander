@@ -764,10 +764,25 @@ body.resizing { user-select: none; cursor: col-resize; }
   letter-spacing: -0.1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* the hook this fires, and the way to it — the relationship, on the card. It
    is what gives way at a phone width, never the schedule's own name. */
-.sc-hook { flex: 0 1 auto; min-width: 0; max-width: 45%; color: var(--dim); font-size: 12px; font-family: var(--mono);
+.sc-hook-wrap { position: relative; display: flex; flex: 0 1 auto; min-width: 0; max-width: 45%; }
+.sc-hook { min-width: 0; max-width: 100%; color: var(--dim); font-size: 12px; font-family: var(--mono);
   border: 1px solid var(--line2); border-radius: 999px; padding: 2px 9px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc-hook:hover { color: var(--accent); border-color: var(--accent2); background: var(--accent-soft); }
+/* the pill's hint, ours rather than the browser's: a native title is drawn at
+   the pointer, which on this pill lands on top of the schedule's own name. This
+   one hangs UNDER the head row, where it covers nothing. It sits on the wrapper
+   because the pill clips its own overflow — inside it, it would be clipped. */
+.sc-head { position: relative; }
+.sc-hook-wrap[data-tip]::after {
+  content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 3;
+  width: max-content; max-width: 15em; white-space: normal; pointer-events: none; opacity: 0;
+  background: var(--panel3); color: var(--dim); border: 1px solid var(--line2);
+  border-radius: 7px; box-shadow: var(--shadow); padding: 5px 9px; font-size: 11.5px;
+  font-family: inherit; line-height: 1.35; transition: opacity .12s .35s;
+}
+.sc-hook-wrap:hover::after, .sc-hook-wrap:focus-within::after { opacity: 1; }
+@media (hover: none) { .sc-hook-wrap[data-tip]::after { display: none; } }
 /* paused is a STATE, not a shade: a greyed card and a card on a dim screen look
    the same, and "why did this stop firing" is the question the screen answers */
 .sc-chip { flex: none; color: var(--warn); background: var(--warn-soft); font-size: 10px; font-weight: 800;
@@ -782,14 +797,9 @@ body.resizing { user-select: none; cursor: col-resize; }
 .sc-problem { color: var(--danger); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere;
   border-top: 1px solid rgba(239, 100, 97, .3); padding-top: 8px; }
 .sc-acts { flex: none; display: flex; gap: 6px; margin-left: auto; }
-/* the firings, off the same trace `bc-axi schedule show` reads */
-.sc-runs { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 9px;
-  color: var(--faint); font-size: 12px; font-family: var(--mono); }
-.sc-run-head { color: var(--dim); display: flex; gap: 10px; align-items: baseline; }
-.sc-out { color: var(--dim); font-size: 11.5px; font-family: var(--mono); line-height: 1.4;
-  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 26vh; overflow-y: auto;
-  background: var(--bg); border-left: 2px solid var(--line2); border-radius: 0 5px 5px 0;
-  padding: 6px 8px; margin-top: 4px; }
+/* the firings open in the detail panel — the card itself never grows, so the
+   column never reflows under a finger. This is the card that is showing there. */
+.sc-row.au-open { box-shadow: 0 0 0 1px var(--accent2) inset; }
 /* a refusal reads as one — every failure in this column leads with a ⚠ */
 #sc-note.sc-warn { color: var(--danger); }
 /* the add form: closed by default — the list is what the screen is for */
@@ -979,6 +989,35 @@ a.a-uri { color: var(--accent); }
 .ev .bd { flex: 1; min-width: 0; }
 .ev .tx { font-size: 14.5px; line-height: 1.45; overflow-wrap: anywhere; }
 .ev .sub { color: var(--faint); font-size: 11px; font-family: var(--mono); margin-top: 1px; }
+
+/* ---- the panel's second subject: a schedule's firings (⚡ screen) ----
+   Same aside as a card, so everything above holds — the width, the drag
+   handle, the ✕, the full-screen at a phone width. What a card fills in is
+   simply not shown, and #dt-aux takes the room. */
+#detail.dt-aux-on .dt-strip,
+#detail.dt-aux-on .dt-fold,
+#detail.dt-aux-on .dt-artifacts,
+#detail.dt-aux-on .dt-body,
+#detail.dt-aux-on #dt-body-edit,
+#detail.dt-aux-on #dt-body-editor,
+#detail.dt-aux-on #dt-thread-head,
+#detail.dt-aux-on #dt-thread { display: none; }
+#dt-aux .dt-events-head { border-top: none; padding-top: 0; margin-top: 0; }
+/* a schedule is not renamed from here, so the title stops offering it */
+#detail.dt-aux-on .dt-title { cursor: default; }
+#detail.dt-aux-on .dt-title:hover { background: none; box-shadow: none; }
+.dt-runs { display: flex; flex-direction: column; gap: 2px; padding: 8px 0 20px; }
+/* one line per firing, and the whole line is the way to its log */
+.dt-run {
+  display: flex; align-items: baseline; gap: 12px; width: 100%; text-align: left;
+  font-family: var(--mono); font-size: 12.5px; color: var(--dim);
+  padding: 7px 8px; border-radius: 7px; border: 1px solid transparent;
+}
+.dt-run:hover { background: var(--panel); border-color: var(--line2); color: var(--text); }
+.dt-run-when { flex: none; color: var(--text); font-variant-numeric: tabular-nums; }
+.dt-run-how { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dt-run-ms { flex: none; color: var(--faint); font-variant-numeric: tabular-nums; }
+.dt-run-note { color: var(--faint); font-size: 12px; padding: 8px 2px; }
 
 /* ---------- markdown ---------- */
 /* Shared by every markdown surface: card body, agent chat bubbles, slash
@@ -1249,6 +1288,28 @@ a.a-uri { color: var(--accent); }
 .tile .t-peek:hover { color: var(--accent); background: var(--accent-soft); }
 @media (hover: none) { .tile .t-peek { opacity: .6; } } /* touch: always visible */
 
+/* ---------- one firing's log (⚡ screen) ---------- */
+/* Same overlay as the peek drawer: a log is a terminal's output, so it gets a
+   terminal's surface — mono, scrolling inside the modal, wrapping rather than
+   running off a phone. */
+#log-overlay {
+  position: fixed; inset: 0; z-index: 93; background: rgba(4, 7, 11, .6);
+  display: flex; align-items: center; justify-content: center; backdrop-filter: blur(2px);
+}
+#log-modal {
+  width: min(860px, calc(100vw - 28px)); height: min(600px, 82vh); display: flex; flex-direction: column;
+  background: #0a0c11; border: 1px solid var(--line2); border-radius: 14px;
+  box-shadow: var(--shadow); animation: pop-in .15s ease-out; overflow: hidden;
+}
+#log-close { flex: none; color: var(--dim); font-size: 15px; padding: 2px 6px; }
+#log-close:hover { color: var(--text); }
+#log-body {
+  flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 12px 14px;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.45; color: #c9d4e0;
+  white-space: pre-wrap; overflow-wrap: anywhere; overscroll-behavior: contain;
+}
+#log-body.log-empty { color: var(--faint); font-style: italic; }
+
 /* ---------- machine-load monitor (⚙️ → monitoring) ---------- */
 #mon-overlay {
   position: fixed; inset: 0; z-index: 92; background: rgba(4, 7, 11, .6);
@@ -1499,6 +1560,7 @@ a.a-uri { color: var(--accent); }
   #detail { width: 100vw; border-left: none; }
   /* the peek drawer goes full-screen — a terminal needs every column it can get */
   #pane-modal { width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; border: none; }
+  #log-modal { width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; border: none; }
   /* the typing hint would crowd the session name off a phone head, and typing
      into a pane is a physical-keyboard affordance anyway — the accent border on
      a focused screen still says everything it needs to */

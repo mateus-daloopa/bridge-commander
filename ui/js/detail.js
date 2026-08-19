@@ -16,7 +16,60 @@ const titleEl = document.getElementById('dt-title');
 const titleInput = document.getElementById('dt-title-input');
 let editingTitle = false; // true while the inline title editor is open (guards re-render clobber)
 
+// ---------- the panel's second subject ----------
+// The ⚡ screen's schedules and hooks open in THIS panel, not in one that looks
+// like it: same slide-in, same ✕, same drag-to-resize width, same full-screen
+// at a phone width. Two panels would be two of all of that to keep in step.
+//
+// `aux` is the subject; the module that owns it paints the body, because the
+// firings of a schedule are that module's business and not this file's. It
+// repaints on every render, so a board event keeps the panel current the same
+// way it keeps a card current.
+let aux = null; // {key, emoji, title, sub, paint(el), onClose?}
+const auxEl = document.getElementById('dt-aux');
+
+export function openAuxDetail(a) {
+  if (S.openCardId) closeDetail(); // one panel, one subject
+  const prev = aux;
+  aux = a;
+  if (prev && prev.onClose && prev.key !== a.key) prev.onClose();
+  render();
+}
+// The panel is going back to being a card's, or going away: let the subject's
+// owner know, so the card it came from stops saying it is showing.
+function dropAux() {
+  if (!aux) return;
+  const a = aux;
+  aux = null;
+  el.classList.remove('dt-aux-on');
+  auxEl.hidden = true;
+  auxEl.textContent = '';
+  if (a.onClose) a.onClose();
+}
+export function auxDetailKey() { return aux ? aux.key : ''; }
+// The owner re-read its data and wants the panel to say so. Cheap enough to be
+// unconditional — the paint is a list of a few lines.
+export function repaintAuxDetail() { if (aux) renderAux(); }
+
+function renderAux() {
+  el.hidden = false;
+  el.classList.remove('frozen');
+  el.classList.add('dt-aux-on');
+  document.getElementById('dt-talk').hidden = true;
+  document.getElementById('dt-menu-btn').hidden = true;
+  document.getElementById('dt-unarch').hidden = true;
+  const emojiEl = document.getElementById('dt-emoji');
+  if (emojiEl.textContent !== (aux.emoji || '')) emojiEl.textContent = aux.emoji || '';
+  if (titleEl.textContent !== aux.title) titleEl.textContent = aux.title;
+  titleEl.title = ''; // a schedule is not renamed from here
+  const subEl = document.getElementById('dt-sub');
+  if (subEl.textContent !== (aux.sub || '')) subEl.textContent = aux.sub || '';
+  auxEl.hidden = false;
+  aux.paint(auxEl);
+}
+
 export function openDetail(id) {
+  dropAux(); // a card is the other subject this panel takes
   S.openCardId = id;
   // Desktop: selecting a card also syncs the left chat into that card's thread,
   // so its detail (right) and conversation (left) show side by side. Reuses the
@@ -28,6 +81,7 @@ export function openDetail(id) {
 // Archived snapshots open in the SAME panel, read-only: no chat sync (there is
 // no live thread target behind a frozen card — its thread shows inline instead).
 export function openArchivedDetail(id) {
+  dropAux();
   S.openCardId = id;
   render();
 }
@@ -35,6 +89,12 @@ export function openArchivedDetail(id) {
 // to the lieutenant — for closing the panel on the way INTO the card's own
 // file screen, where the conversation is still about this card.
 export function closeDetail(opts) {
+  if (aux) {
+    dropAux();
+    el.hidden = true;
+    render();
+    return;
+  }
   const wasId = S.openCardId;
   S.openCardId = null;
   if (editingTitle) stopTitleEdit();
@@ -48,7 +108,7 @@ export function closeDetail(opts) {
   }
   render();
 }
-export function detailOpen() { return !!S.openCardId; }
+export function detailOpen() { return !!S.openCardId || !!aux; }
 
 document.getElementById('dt-close').onclick = closeDetail;
 
@@ -69,7 +129,7 @@ document.getElementById('dt-close').onclick = closeDetail;
 // it must run before closeDetail nulls it, and it clears editingTitle so
 // closeDetail's own stopTitleEdit is then a no-op — no double-fire.
 document.addEventListener('click', (e) => {
-  if (!S.openCardId || !isDesktop()) return;
+  if ((!S.openCardId && !aux) || !isDesktop()) return;
   const t = e.target;
   // A click on a control that removed itself on the way out reaches document
   // with a DETACHED target: every closest() below then misses and the detail
@@ -80,6 +140,9 @@ document.addEventListener('click', (e) => {
   if (t.closest && (
     t.closest('#chat') ||                     // left chat = the selected card's thread; part of its context
     t.closest('.tile') ||                     // another card — switch, handled by its onclick
+    t.closest('.sc-row') ||                   // a ⚡ card — its own handler switches the subject
+    t.closest('.hk-row') ||                   // …and a ▶ on a hook is not a navigation intent
+    t.closest('#log-overlay') ||              // a firing's log sits above the panel
     t.closest('#table tbody tr') ||           // table/archive rows switch cards the same way
     t.closest('#archive tbody tr') ||
     t.closest('#lt-overlay') ||               // new-lieutenant modal
@@ -788,6 +851,9 @@ function attrHtml(k, v) {
 }
 
 export function renderDetail() {
+  if (aux) { renderAux(); return; }
+  el.classList.remove('dt-aux-on');
+  auxEl.hidden = true;
   if (!S.openCardId) { el.hidden = true; return; }
   let c = card(S.openCardId);
   let arch = null; // the archive record when this is a frozen snapshot

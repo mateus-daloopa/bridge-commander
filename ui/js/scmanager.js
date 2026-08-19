@@ -28,8 +28,9 @@
 // off hookruns.jsonl, filtered to this schedule's trigger server-side, so the
 // screen and the CLI read one truth.
 import { api } from './api.js';
-import { ansiToHtml } from './ansi.js';
 import { hhmm } from './util.js';
+import { openAuxDetail, auxDetailKey, repaintAuxDetail, closeDetail } from './detail.js';
+import { openLog } from './logview.js';
 
 const listEl = document.getElementById('sc-list');
 const countEl = document.getElementById('sc-count');
@@ -54,7 +55,9 @@ function say(text) {
 let items = null; // the last GET /api/schedules answer
 let loading = false;
 let stale = false; // a render arrived while a read was in flight
-const open = new Set(); // schedules whose firings are showing
+// The schedule showing in the detail panel, and its firings as last read. One
+// at a time, because the panel holds one subject at a time.
+let openName = '';
 const runs = new Map(); // name -> its firings, as last read
 const busy = new Set(); // names with a press still in flight — state, not a mutated button
 
@@ -101,12 +104,12 @@ export async function renderSchedules(reload) {
     do {
       stale = false;
       items = (await api.schedules()).schedules || [];
-      // Only what he opened is re-read — the firings on screen must not go on
+      // Only the schedule in the panel is re-read — its firings must not go on
       // saying a firing ago is the newest one, and a panel nobody opened costs
       // nothing.
-      for (const name of [...open]) {
-        try { runs.set(name, (await api.schedule(name)).runs || []); }
-        catch (e) { open.delete(name); runs.delete(name); }
+      if (openName) {
+        try { runs.set(openName, (await api.schedule(openName)).runs || []); }
+        catch (e) { runs.delete(openName); shutPanel(); }
       }
     } while (stale);
   } catch (e) {
@@ -117,7 +120,11 @@ export async function renderSchedules(reload) {
     return;
   } finally { loading = false; }
   if (reload) loadPickers();
+  // A schedule removed from under an open panel takes the panel with it — the
+  // ✕ on this screen and one typed at a terminal are the same removal.
+  if (openName && !items.some((s) => s.name === openName)) shutPanel();
   paint();
+  repaintAuxDetail(); // the firings just re-read are what the panel is showing
 }
 
 function paint() {
@@ -167,23 +174,24 @@ function row(s) {
   // same news to him, and a rail that only lit for one of them would teach him
   // the other is fine.
   el.className = 'sc-row' + (isBad(s) ? ' au-bad' : '') + (s.paused ? ' sc-off' : '')
-    + (s.name === focus ? ' au-focus' : '');
+    + (s.name === focus ? ' au-focus' : '') + (s.name === openName ? ' au-open' : '');
   el.append(head(s), stats(s));
   // In full and above the fold: a problem is the reason to look at this tab, so
   // it is not a title attribute and it is not truncated.
   if (s.problem) el.append(problem(s));
-  if (open.has(s.name)) el.append(firings(s));
   return el;
 }
 
 function head(s) {
   const el = document.createElement('div');
   el.className = 'sc-head';
-  el.title = open.has(s.name) ? 'hide the firings' : 'the recent firings — time, how each ended, and the output';
+  el.title = s.name === openName ? 'close the firings panel' : 'the recent firings, in the panel';
   el.onclick = () => toggle(s);
   const caret = document.createElement('span');
   caret.className = 'au-caret';
-  caret.textContent = open.has(s.name) ? '▾' : '▸';
+  // ▸ / ▾ still means "this one is showing" — it just shows to the side now, so
+  // pressing a card never grows the column under his finger.
+  caret.textContent = s.name === openName ? '▾' : '▸';
   const nm = document.createElement('span');
   nm.className = 'sc-name';
   nm.textContent = s.name;
@@ -201,14 +209,25 @@ function head(s) {
   return el;
 }
 
+// The hint is OURS, not the browser's: a native title is drawn wherever the
+// pointer happens to be, and on this pill that is on top of the schedule's own
+// name — the one word the card exists to say. `data-tip` renders it under the
+// head row instead, where it covers nothing.
 function hookLink(s) {
   const b = document.createElement('button');
   b.type = 'button';
   b.className = 'sc-hook';
   b.textContent = '→ ' + s.hook;
-  b.title = 'the hook this fires — show it on the hooks tab';
+  b.setAttribute('aria-label', 'the hook this fires: ' + s.hook);
+  b.title = ''; // empty, not absent: it stops the head's own title firing here
   b.onclick = (e) => { e.stopPropagation(); if (openHookFn) openHookFn(s.hook); };
-  return b;
+  // The pill itself clips its text to an ellipsis, so the hint hangs off a
+  // wrapper — inside the pill it would be clipped away with the overflow.
+  const wrap = document.createElement('span');
+  wrap.className = 'sc-hook-wrap';
+  wrap.setAttribute('data-tip', 'the hook this fires — show it on the hooks list');
+  wrap.append(b);
+  return wrap;
 }
 
 function acts(s) {
@@ -333,52 +352,99 @@ function problem(s) {
   return el;
 }
 
+// ---------- the firings, in the board's own detail panel ----------
+// The panel holds the list and NOTHING else: one line per firing — when, how it
+// ended, how long it took. The output of a firing is a terminal's output, and
+// pouring it in here is what buried every other firing under one blob; it opens
+// in a modal instead, one firing at a time.
+const runKey = (name) => 'schedule:' + name;
+
+function panelSubject(name) {
+  return {
+    key: runKey(name),
+    emoji: '⚡',
+    title: name,
+    sub: 'schedule · firings',
+    paint: (el) => paintFirings(el, name),
+    onClose: () => { if (openName === name) { openName = ''; runs.delete(name); paint(); } },
+  };
+}
+
 // The firings, newest first — the trace's own records, not a second copy kept
 // on the schedule.
-function firings(s) {
+function paintFirings(el, name) {
+  const list = runs.get(name);
+  // Signature, not a blind rebuild: the panel repaints on every board event and
+  // a rebuild under a finger would drop the press that is landing on it.
+  const sig = name + '\n' + (list ? list.map((r) => r.started + '|' + r.ms + '|' + howRunEnded(r)).join('\n') : '…');
+  if (el.__bcSig === sig) return;
+  el.__bcSig = sig;
+  el.textContent = '';
+  const head = document.createElement('div');
+  head.className = 'dt-events-head';
+  head.textContent = 'firings';
+  el.append(head);
+  const box = document.createElement('div');
+  box.className = 'dt-runs';
+  el.append(box);
+  if (!list) { box.append(runNote('reading the firings…')); return; }
+  if (!list.length) { box.append(runNote('no firings recorded')); return; }
+  for (const r of list) box.append(firingLine(name, r));
+}
+
+function runNote(text) {
   const el = document.createElement('div');
-  el.className = 'sc-runs';
-  const list = runs.get(s.name);
-  if (!list) { el.textContent = 'reading the firings…'; return el; }
-  if (!list.length) { el.textContent = 'no firings recorded'; return el; }
-  for (const r of list) el.append(firing(r));
+  el.className = 'dt-run-note';
+  el.textContent = text;
   return el;
 }
 
-function firing(r) {
-  const el = document.createElement('div');
-  el.className = 'sc-run';
-  const line = document.createElement('div');
-  line.className = 'sc-run-head';
+// One line, and it is a button: the log is behind it.
+function firingLine(name, r) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'dt-run';
+  b.title = 'the output of this firing';
+  const when = document.createElement('span');
+  when.className = 'dt-run-when';
+  when.textContent = hhmm(r.started);
   const how = document.createElement('span');
-  how.className = outcomeClass(r);
+  how.className = 'dt-run-how ' + outcomeClass(r);
   how.textContent = howRunEnded(r);
-  line.append(hhmm(r.started) + '  ', how, '  ' + r.ms + 'ms');
-  el.append(line);
-  if (r.output) {
-    const pre = document.createElement('pre');
-    pre.className = 'sc-out';
-    // The output of a hook is a terminal's output — ansiToHtml escapes the text
-    // before it adds any markup, the same way the live pane reads a frame.
-    pre.innerHTML = ansiToHtml(r.output);
-    el.append(pre);
-  }
-  return el;
+  const ms = document.createElement('span');
+  ms.className = 'dt-run-ms';
+  ms.textContent = r.ms + 'ms';
+  b.append(when, how, ms);
+  b.onclick = () => openLog(name + ' · ' + hhmm(r.started), r.output);
+  return b;
 }
 
 // ---------- the presses ----------
 
+// Pressing a card opens its firings beside it; pressing the open one closes the
+// panel. The card itself never grows, so the column never reflows.
 async function toggle(s) {
-  if (open.has(s.name)) { open.delete(s.name); runs.delete(s.name); return paint(); }
-  open.add(s.name);
-  paint(); // the panel opens now and says it is reading — the fetch fills it in
+  if (openName === s.name && auxDetailKey() === runKey(s.name)) return closeDetail();
+  openName = s.name;
+  paint(); // the caret turns now; the panel says it is reading until the fetch lands
+  openAuxDetail(panelSubject(s.name));
   try {
     runs.set(s.name, (await api.schedule(s.name)).runs || []);
   } catch (e) {
-    open.delete(s.name);
     say('⚠ ' + s.name + ': ' + e.message);
+    shutPanel();
+    return paint();
   }
-  paint();
+  repaintAuxDetail();
+}
+
+// The panel is gone (closed from the ✕, or its schedule was removed): forget the
+// subject and let the cards say so.
+function shutPanel() {
+  const name = openName;
+  openName = '';
+  if (name) runs.delete(name);
+  if (auxDetailKey() === runKey(name)) closeDetail();
 }
 
 // The press is held HERE and not on the button, because a board event repaints
@@ -416,8 +482,7 @@ async function remove(s) {
     note = s.name + ' removed — the hook ' + s.hook + ' is untouched';
   } catch (e) { note = '⚠ ' + s.name + ': ' + e.message; }
   busy.delete(s.name);
-  open.delete(s.name);
-  runs.delete(s.name);
+  if (openName === s.name) shutPanel();
   await renderSchedules();
   say(note);
 }

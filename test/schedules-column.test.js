@@ -225,7 +225,7 @@ test('every render asks the server, and an in-flight press outlives the repaint'
   assert.ok(!/btn\.disabled|btn\.textContent/.test(src),
     'nothing writes to a button a repaint may already have thrown away');
   assert.ok(!/setInterval|setTimeout/.test(src), 'no polling — the board events are the nudge');
-  // Only what he opened is re-read: the firings on screen must stay current,
-  // and a panel nobody opened must cost nothing.
-  assert.match(src, /for \(const name of \[\.\.\.open\]\)/);
+  // Only the schedule the panel is showing is re-read: its firings must stay
+  // current, and a panel nobody opened must cost nothing.
+  assert.match(src, /if \(openName\) \{\n\s*try \{ runs\.set\(openName,/);
 });
