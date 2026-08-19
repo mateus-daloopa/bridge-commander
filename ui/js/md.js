@@ -13,6 +13,26 @@
 // again after a re-render is cheap and idempotent.
 import { esc } from './util.js';
 
+// Where an <img> in board markdown actually points. Markdown has no base of its
+// own — it renders into the board page — so `![](shot.png)` beside a document
+// asks the board for /shot.png and 404s. Two sources are rewritten:
+//   attachment://<id>  → the attachment serve (works in a card body too)
+//   a relative path    → the file next to the document, through the same
+//                        directory serve an html artifact's relative refs use
+// Everything else — absolute url, /api/…, data:, a bare #anchor — is left
+// exactly as written. `base` is the document's own directory (uriDir of its
+// uri); without one there is nothing for a relative path to resolve against, so
+// it stays untouched. Returns '' for "leave this src alone".
+export function mdImgSrc(src, base) {
+  const s = String(src == null ? '' : src).trim();
+  const am = /^attachment:\/\/([^/?#]+)/.exec(s);
+  if (am) return '/api/attachments/' + encodeURIComponent(am[1]);
+  if (!s || !base) return '';
+  if (/^[a-z][a-z0-9+.-]*:/i.test(s) || s[0] === '/' || s[0] === '#') return '';
+  const rel = s.replace(/^\.\//, '');
+  return '/artifacts/' + encodeURIComponent(base) + '/' + rel.split('/').map(encodeURIComponent).join('/');
+}
+
 // Keep harmless formatting HTML; no author-supplied SVG/MathML, styles or form
 // controls (input stays: GFM task lists render as disabled checkboxes).
 // Scripts, event handlers and iframes are gone by DOMPurify default.
@@ -21,6 +41,11 @@ const SANITIZE = {
   FORBID_TAGS: ['style', 'form', 'textarea', 'select', 'button', 'dialog'],
   ADD_ATTR: ['target'],
 };
+
+// The document currently being rendered, for the image hook below. md() is
+// synchronous end to end (marked.parse + DOMPurify.sanitize), so this is set and
+// cleared around the one sanitize call it belongs to.
+let mdBase = '';
 
 let configured = false;
 function configure(m, dp) {
@@ -34,13 +59,30 @@ function configure(m, dp) {
       node.setAttribute('rel', 'noopener');
     }
   });
+  // Image sources are rewritten INSIDE the sanitize, on the real node, before
+  // DOMPurify's URI check — never by patching the html string on the way in.
+  // It has to be here and not in the enhance pass: `attachment://id` is an
+  // unknown scheme, so the check would drop the attribute and the id with it.
+  // What the hook produces is a plain relative path, which is then validated
+  // like any other.
+  dp.addHook('uponSanitizeAttribute', (node, data) => {
+    if (data.attrName !== 'src' || node.tagName !== 'IMG') return;
+    const to = mdImgSrc(data.attrValue, mdBase);
+    if (to) data.attrValue = to;
+  });
 }
 
-export function md(src) {
+// `base` (optional): the directory of the document this markdown IS — a card
+// artifact's folder — so an image beside it resolves. Text with no file of its
+// own (a card body, a chat message) passes none, and only attachment:// images
+// resolve there.
+export function md(src, base) {
   const m = globalThis.marked, dp = globalThis.DOMPurify;
   if (!m || !dp || !dp.isSupported) return '<pre>' + esc(src || '') + '</pre>'; // fail closed
   configure(m, dp);
-  return dp.sanitize(m.parse(src || ''), SANITIZE);
+  mdBase = base || '';
+  try { return dp.sanitize(m.parse(src || ''), SANITIZE); }
+  finally { mdBase = ''; }
 }
 
 // ---------- post-render enhancement ----------

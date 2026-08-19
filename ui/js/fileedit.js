@@ -12,6 +12,7 @@
 // own mode/meta.js.
 import { md, mdEnhance, loadScript } from './md.js';
 import { fileLang } from './filectx.js';
+import { uriDir } from './util.js';
 
 const CM_BASE = '/ui/vendor/codemirror/';
 
@@ -132,7 +133,7 @@ export function mountFileEditor(host, opts) {
     const text = handle.getValue();
     prevWrap.className = 'fe-prev md';
     if (o.markdown) {
-      prevWrap.innerHTML = md(text);
+      prevWrap.innerHTML = md(text, uriDir(o.key));
     } else {
       // non-markdown previews as one highlighted block — mdEnhance lazy-loads
       // the same highlight.js every code fence on the board already uses

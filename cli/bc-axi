@@ -1178,6 +1178,41 @@ async function cmdArtifactWrite() {
   console.log('wrote ' + uri + '\n  ' + r.bytes + ' bytes, version ' + r.version);
 }
 
+// ---------- attach a file (an image you can put INSIDE a document) ----------
+// `card artifact add` puts a file NEXT TO the card as its own deliverable. This
+// puts one INSIDE a document: an attachment id is the one image source that
+// resolves from a markdown artifact AND from a card body, so the line printed
+// here pastes into either and renders. Zero-dep transport, same base64 POST the
+// chat upload uses.
+const ATTACH_MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.svg': 'image/svg+xml', '.bmp': 'image/bmp', '.avif': 'image/avif',
+  '.pdf': 'application/pdf', '.md': 'text/markdown; charset=utf-8', '.txt': 'text/plain; charset=utf-8',
+  '.log': 'text/plain; charset=utf-8', '.json': 'application/json', '.csv': 'text/csv',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.ogg': 'audio/ogg',
+};
+async function cmdAttach() {
+  const file = positional[0];
+  if (!file) {
+    die('usage: bc-axi attach <path> [--json]\n' +
+      '  Upload a file to the board and print its attachment id, then the markdown line\n' +
+      '  that shows it. Paste that line into a markdown artifact or a card body — a\n' +
+      '  relative path does NOT resolve in either, an attachment id always does.\n' +
+      '  --json prints {id, uri, name, mime, size, markdown}.');
+  }
+  let data;
+  try { data = fs.readFileSync(file); }
+  catch (e) { die('cannot read ' + file + ': ' + e.message); }
+  const name = path.basename(file);
+  const mime = ATTACH_MIME[path.extname(name).toLowerCase()] || 'application/octet-stream';
+  const r = await request('POST', '/api/attachments', { name, mime, dataBase64: data.toString('base64') });
+  const line = '![' + r.name + '](' + r.uri + ')';
+  if (opts.json) return console.log(JSON.stringify({ ...r, markdown: line }, null, 2));
+  console.log(r.id);
+  console.log(line);
+}
+
 // ---------- card.start / workers (F5) ----------
 async function cmdStart() {
   const id = positional[0];
@@ -1775,6 +1810,7 @@ const commands = {
   'card start': cmdStart, 'card park': cmdCardPark,
   'card artifact add': cmdArtifactAdd, 'card artifact rm': cmdArtifactRemove,
   'artifact read': cmdArtifactRead, 'artifact write': cmdArtifactWrite,
+  attach: cmdAttach,
   'worker signal': cmdWorkerSignal, 'worker done': cmdWorkerDone, 'worker send': cmdWorkerSend,
   'worker pause': cmdWorkerPause,
   show: cmdShow, // alias for card show
@@ -1920,6 +1956,10 @@ if (!commands[cmd]) {
     '                                         A bare path resolves against the SERVER\'s cwd, not yours —\n' +
     '                                         from a worktree pass file://<abs path> or an absolute path\n' +
     '  card artifact rm <card-id> --uri <...>  remove an artifact entry by uri\n' +
+    '  attach <path> [--json]                 upload a file and print its attachment id + the markdown\n' +
+    '                                         line that shows it. THE way to put an image inside a\n' +
+    '                                         markdown artifact or a card body (a relative path does\n' +
+    '                                         not resolve in either); --json adds name/mime/size\n' +
     '\nartifact (co-edited files — the captain may have one open RIGHT NOW):\n' +
     '  artifact read <uri> [--json]           read a card artifact through the board: content on\n' +
     '                                         stdout, "version: <sha256>" on stderr. A board-owned\n' +

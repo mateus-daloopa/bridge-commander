@@ -1,6 +1,6 @@
 // card detail: attributes header + markdown body + event timeline (chat lives in the chat panel)
 import { S, card, lieutenant, lieutenants, lieutenantColor, cardStatus, cardActivityTs, cardRecency, kindEmoji, render, toggleFilter, filterSelected } from './state.js';
-import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, artifactsHtml, cardStripHtml, uriBasename, setHtmlIfChanged, isImageMime, playbookAttrHtml } from './util.js';
+import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, artifactsHtml, cardStripHtml, uriBasename, uriDir, setHtmlIfChanged, isImageMime, playbookAttrHtml } from './util.js';
 import { md, mdEnhance, copyText } from './md.js';
 import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
@@ -298,6 +298,7 @@ const HTML_EXT = /\.html?$/i;
 const DRAW_EXT = /\.excalidraw$/i;
 // Reset the shared overlay to a clean text-mode state (used by both openers).
 function avReset(name, uri) {
+  avUri = uri || '';
   avName.textContent = name;
   avName.title = uri || name;
   avImgWrap.hidden = true;
@@ -332,6 +333,10 @@ function avReset(name, uri) {
 // head). avMd holds the raw text while a markdown preview is up; the toggle
 // re-renders in place, so it also survives expand/restore.
 let avMd = null, avShowSrc = false;
+// The uri of whatever the viewer is on, kept for the whole open: it is the
+// document a relative image in a markdown preview resolves against (a chat
+// attachment has no directory, so it resolves nothing).
+let avUri = '';
 // The full text source currently in the viewer (markdown or plain) — what the
 // head ⧉ copies, regardless of the rendered ⇄ source toggle. Text-only: image /
 // video / audio / iframe / download states never set it, so the button stays
@@ -352,7 +357,7 @@ function showMarkdown(text) {
 function renderAvMd() {
   avSrcBtn.classList.toggle('on', avShowSrc);
   if (avShowSrc) { avBody.className = ''; avBody.textContent = avMd; }
-  else { avBody.className = 'md'; avBody.innerHTML = md(avMd); mdEnhance(avBody); }
+  else { avBody.className = 'md'; avBody.innerHTML = md(avMd, uriDir(avUri)); mdEnhance(avBody); }
 }
 avSrcBtn.onclick = () => { avShowSrc = !avShowSrc; renderAvMd(); };
 

@@ -103,6 +103,17 @@ export function uriBasename(uri) {
   return i >= 0 ? s.slice(i + 1) : s;
 }
 
+// The directory a file's relative references sit in — the absolute folder of a
+// file:// (or bare absolute) uri, '' for anything without one (an attachment, an
+// http url, a card body). What md() takes as its base, and what the /artifacts/
+// directory serve keys on.
+export function uriDir(uri) {
+  const s = String(uri == null ? '' : uri).replace(/^file:\/\//, '');
+  if (s[0] !== '/') return '';
+  const i = s.lastIndexOf('/');
+  return i > 0 ? s.slice(0, i) : '';
+}
+
 // The ARTIFACTS block: a two-column table (label | filename) so both columns
 // line up down the whole list, wrapped in a container that scrolls SIDEWAYS
 // when it does not fit. Filenames are never clipped to an ellipsis — the
