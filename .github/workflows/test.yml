@@ -1,0 +1,33 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Many tests init throwaway repos and commit into them; git refuses
+      # without an identity.
+      - name: Give git an identity
+        run: |
+          git config --global user.name 'bridge-commander CI'
+          git config --global user.email 'ci@bridge-commander.invalid'
+
+      # The harness tests drive real tmux sessions. The runner image ships it,
+      # but install it if a future image does not, so nothing skips silently.
+      - name: Make sure tmux is here
+        run: tmux -V || (sudo apt-get update && sudo apt-get install -y tmux)
+
+      - name: Run the suite
+        run: node --test --test-concurrency=1 test/*.test.js harness/test/*.test.js
