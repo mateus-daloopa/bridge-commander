@@ -16,24 +16,24 @@ Seven verbs, nothing else:
 All verbs may be async. Zero dependencies — plain Node (>= 18; uses `node:test`, `fetch`).
 Beyond the seven, a harness MAY expose **optional capability verbs** — see below.
 
-## Optional capability verbs (pane viewing, window adoption)
+## Optional capability verbs (pane viewing, slash commands, session status, window adoption)
 
 Optional verbs are features not every harness can honor, so `port.js` never
 validates them — adding one to the required list would force every harness
 (the `fake` included) to implement it and break validation. The server
 capability-checks at the call site (`typeof impl.openPane === 'function'`)
 and degrades gracefully when the verb is absent (the pane endpoints answer
-`unsupported`). Current optional verbs:
+`unsupported`).
 
-| Verb | Signature | Purpose |
-|---|---|---|
-| `openPane` | `(ref, {onFrame, intervalMs?, lines?, burstMs?, burstWindowMs?}) → {close()}` | deliver the pane's CURRENT RENDERED SCREEN as successive frames: `onFrame(frameString)` fires whenever the content changes (identical frames are skipped); `close()` stops delivery and releases resources |
-| `paneSnapshot` | `(ref, {lines?}) → Promise<string>` | one-shot capture — the initial paint / non-streaming fallback |
-| `paneInput` | `(ref, {text?\|key?}) → Promise<void>` | forward RAW input to the pane — `text` typed literally (multi-line becomes a bracketed paste), `key` one tmux key name (`Enter`, `BSpace`, `Up`, `BTab`, `C-c`, …). Pass one, not both. **Not `send`**: no type→settle→Enter, no composer verification — one keystroke in, one keystroke out |
-| `adoptWindow` | `(ref, window, taken?) → Promise<HarnessRef\|null>` | migrate a SESSION-granular ref to window granularity **without restarting the agent** — the tmux adapters rename the session's first window; `taken` names windows that belong to someone else and must never be adopted; `null` = the agent's window cannot be identified, keep the old ref |
+**The inventory lives in one place:** [`docs/api/overview.md`](../docs/api/overview.md), which
+lists every optional verb with its signature and the endpoint it serves — `openPane`,
+`paneSnapshot`, `paneInput`, `commands`, `runCommand`, `status`, `adoptWindow`. `port.js` is the
+code-level contract beside it. Add a verb there and nowhere else; what follows is how to
+implement the pane ones, not what they are.
 
-`intervalMs` defaults to ~1000, `lines` (scrollback depth) to ~200. A frame is
-a string that MAY carry ANSI SGR escapes (colors/bold).
+`openPane` takes `{onFrame, intervalMs?, lines?, burstMs?, burstWindowMs?}`: `intervalMs`
+defaults to ~1000, `lines` (scrollback depth) to ~200. A frame is a string that MAY carry ANSI
+SGR escapes (colors/bold); identical frames are skipped, and `close()` releases the feed.
 
 `paneInput` also **bursts** the open feed for that pane: a 1s poll makes typing
 feel dead, so a keystroke drops the interval to `burstMs` (~120) for
