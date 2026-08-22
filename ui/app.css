@@ -1048,9 +1048,9 @@ a.a-uri { color: var(--accent); }
 .md pre { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 10px 0; }
 .md pre code { display: block; background: none; border: none; padding: 0; font-size: 12px; line-height: 1.5; }
 /* narrow surfaces (detail body, bubbles) — wide tables scroll inside a rounded border */
-.md table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border: 1px solid var(--line2); border-radius: 8px; border-collapse: collapse; font-size: 13px; line-height: 1.4; margin: 10px 0; }
+.md table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border: 1px solid var(--line2); border-radius: 8px; border-collapse: collapse; font-size: 14px; line-height: 1.45; margin: 10px 0; }
 .md th, .md td { border-bottom: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
-.md th { background: var(--panel2); color: var(--dim); font-weight: 600; font-size: 12px; white-space: nowrap; }
+.md th { background: var(--panel2); color: var(--dim); font-weight: 600; font-size: 13px; white-space: nowrap; }
 .md tbody tr:last-child td { border-bottom: none; }
 
 /* code block copy button — lives in the .codewrap wrapper (added by mdEnhance)
