@@ -1060,9 +1060,10 @@ function publicBoard(user) {
     // conversation still names whoever a `target: "line"` post would reach.
     line: holder ? holder.id : null,
     cards: board.cards.map((c) => publicCard(c, user, msgSeqs)),
+    workers: board.workers.map(withStatusAge),
     // chatOwed/chatQueued mirror status.owed/owedState:'queued' for a
     // lieutenant's MAIN chat — both queue-derived, same rules as cards.
-    lieutenants: board.lieutenants.map((l) => Object.assign({}, l, {
+    lieutenants: board.lieutenants.map((l) => Object.assign({}, withStatusAge(l), {
       chatOwed: targetOwed('lieutenant:' + l.id, msgSeqs),
       chatQueued: targetQueued('lieutenant:' + l.id, msgSeqs),
     })),
@@ -1563,13 +1564,13 @@ async function runChatCommand(target, text) {
     // the FULL line goes to the harness — pass-through commands (/compact,
     // claude's /autocompact) may carry arguments; `name` only did the match
     const impl = getHarness(r.ref.harness);
-    const result = await impl.runCommand(r.ref, text);
+    const result = await impl.runCommand(r.ref, text, { stateDir: HARNESS_STATE_DIR });
     // /status also fetches the structured status (a cheap transcript read) so the
     // reply carries both the formatted text (fallback) and the payload the UI
     // renders as model + context bar + rate lines — never parsing the prose.
     let extra;
     if (name === '/status' && typeof impl.status === 'function') {
-      try { const st = await impl.status(r.ref); if (st && typeof st === 'object') extra = { status: st }; } catch {}
+      try { const st = await impl.status(r.ref, { stateDir: HARNESS_STATE_DIR }); if (st && typeof st === 'object') extra = { status: st }; } catch {}
     }
     reply(r.ref.harness, String(result == null ? name + ' done' : result), extra);
   } catch (e) {
@@ -1588,13 +1589,30 @@ async function refreshAgentStatus(rec) {
   try { impl = getHarness(rec.ref.harness); } catch { return false; }
   if (typeof impl.status !== 'function') return false;
   try {
-    const st = await impl.status(rec.ref);
+    const st = await impl.status(rec.ref, { stateDir: HARNESS_STATE_DIR });
     if (!st || typeof st !== 'object') return false;
     rec.agentStatus = Object.assign({}, st, { ts: now() });
     return true;
   } catch {
     return false;
   }
+}
+// AGENT_STATUS_STALE_MS — how old a reading may be before the board stops
+// presenting it as current. Status refreshes at turn-end and nowhere else, so
+// a reading older than this means either the session has been quiet that long
+// or its status read is failing (a rollout/transcript the harness can no
+// longer resolve) — either way the numbers are a memory, not a measurement.
+// Ten minutes: longer than any one turn, short enough that a frozen bar is
+// marked within a single idle stretch.
+const AGENT_STATUS_STALE_MS = 10 * 60 * 1000;
+// Derived at serialization, never stored: the same untouched record reads
+// fresh and later stale with no writer involved. The flag is all the server
+// says — how (or whether) to show an old reading is the UI's call.
+function withStatusAge(rec) {
+  const st = rec && rec.agentStatus;
+  const at = st && st.ts ? Date.parse(st.ts) : NaN;
+  if (!Number.isFinite(at) || Date.now() - at <= AGENT_STATUS_STALE_MS) return rec;
+  return Object.assign({}, rec, { agentStatus: Object.assign({}, st, { stale: true }) });
 }
 function columnTitle(id) {
   const c = board.columns.find((k) => k.id === id);
@@ -2032,7 +2050,12 @@ function ownerSession(card) {
 }
 // workerName(ref) — the attach-facing address of a worker's pane:
 // `session:window` for window-granular refs, the bare session for legacy ones.
-function workerName(ref) { return ref.window ? ref.session + ':' + ref.window : ref.session; }
+// refKey — the harness state key an agent's turn-end hook posts as `session`:
+// the bare tmux session for a session-granular ref, `session:window` for a
+// window-granular one. Lieutenants are window-granular too (their own `lt`
+// window — names.LIEUTENANT_WINDOW), so this is NOT worker-only.
+function refKey(ref) { return ref.window ? ref.session + ':' + ref.window : ref.session; }
+function workerName(ref) { return refKey(ref); }
 function findWorker(cardId) { return board.workers.find((w) => w.card === cardId); }
 
 // The worker lease (card.status.worker) is a WRITTEN signal — status.set is its
@@ -4089,9 +4112,9 @@ const server = http.createServer(async (req, res) => {
     // gates its git reads: the tab asks, nobody else pays.
     if (route === 'GET /api/lieutenants') {
       if (!/^(1|true)$/.test(url.searchParams.get('live') || '')) {
-        return sendJson(res, 200, { lieutenants: board.lieutenants });
+        return sendJson(res, 200, { lieutenants: board.lieutenants.map(withStatusAge) });
       }
-      const lieutenants = await Promise.all(board.lieutenants.map(async (l) => Object.assign({}, l, {
+      const lieutenants = await Promise.all(board.lieutenants.map(async (l) => Object.assign({}, withStatusAge(l), {
         cards: board.cards.filter((c) => c.owner === l.id).length,
         next: l.prefix + '-' + ((l.cardSeq || 0) + 1),
         memory: charterPath(WORKSPACE, l.id),
@@ -4169,8 +4192,9 @@ const server = http.createServer(async (req, res) => {
     // ----- turn boundaries (the BC_TURNEND_URL target; posted by the Stop-hook relay) -----
     // The workspace-level hook fires for ANY claude in the workspace cwd, so
     // resolution dedupes by session_id: (1) a lieutenant ref whose resumeId
-    // matches; (2) a lieutenant ref whose session name matches the hook's
-    // session arg; (3) a WORKER ref by resumeId then session (workers' POSTs
+    // matches; (2) a lieutenant ref whose STATE KEY (refKey — `session:lt` for
+    // the usual window-granular lieutenant) matches the hook's session arg;
+    // (3) a WORKER ref by resumeId then session (workers' POSTs
     // arrive from the per-spawn hooks in their isolated worktrees — resolved
     // BEFORE lieutenant attribution so a worker's first POST can never be
     // mis-adopted); (4) tmux attribution — the hook runs inside the agent's
@@ -4187,7 +4211,10 @@ const server = http.createServer(async (req, res) => {
       const sname = body.session ? String(body.session) : '';
       const tmux = typeof body.tmux_session === 'string' ? body.tmux_session : null;
       let lt = sid ? board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.resumeId === sid) : null;
-      if (!lt && sname) lt = board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.session === sname);
+      // A lieutenant's hook posts its state key, which for a window-granular
+      // ref is `session:lt` — matching on ref.session alone never saw it, and
+      // a codex lieutenant (born without a resumeId) had no other way in.
+      if (!lt && sname) lt = board.lieutenants.find((l) => isHarnessRef(l.ref) && refKey(l.ref) === sname);
       if (!lt) {
         let w = sid ? board.workers.find((x) => x.ref.resumeId === sid) : null;
         // A window-granular worker's hook posts the `session:window` key —
@@ -4218,12 +4245,15 @@ const server = http.createServer(async (req, res) => {
           return sendJson(res, 200, { ok: true, lieutenant: null, worker: w.card });
         }
       }
-      // Window-granular worker hooks are excluded from tmux attribution: their
-      // `session:window` key carries a ':' no session name can (names.js emits
-      // [A-Za-z0-9-] only), and their pane's tmux_session IS the lieutenant
-      // session they cohabit — without this guard a stale worker POST (its
-      // record already gone) would corrupt that lieutenant's resumeId.
-      if (!lt && tmux && !sname.includes(':')) lt = board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.session === tmux);
+      // Worker hooks are excluded from tmux attribution: a worker's pane sits
+      // in the lieutenant session it cohabits, so its tmux_session IS that
+      // lieutenant's — without this guard a stale worker POST (its record
+      // already gone) would corrupt the lieutenant's resumeId. The WINDOW part
+      // of the key tells them apart: `:lt` is the lieutenant's own window,
+      // `:w-<card>` is a worker's (names.js — workerWindow / LIEUTENANT_WINDOW).
+      const keyWindow = sname.includes(':') ? sname.slice(sname.indexOf(':') + 1) : '';
+      const workerKey = !!keyWindow && keyWindow !== names.LIEUTENANT_WINDOW;
+      if (!lt && tmux && !workerKey) lt = board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.session === tmux);
       if (!lt && tmux === null && sid) {
         const cands = board.lieutenants.filter((l) => isHarnessRef(l.ref) && !l.ref.resumeId);
         if (cands.length === 1 && body.cwd && path.resolve(String(body.cwd)) === cands[0].ref.cwd) lt = cands[0];

@@ -81,6 +81,53 @@ test('a window-worker hook (session:window key) is never attributed to the cohab
   }
 });
 
+// A lieutenant lives in its own `lt` window, so its hook posts `session:lt` —
+// a key that carries a ':' exactly like a worker's. Matching lieutenants on
+// ref.session alone never saw it, and the ':' guard below rejected it as a
+// worker, so a codex lieutenant (born without a resumeId, and needing this POST
+// to adopt one) could never adopt: two of them blocked each other on the
+// single-candidate path forever.
+test('a lieutenant hook (session:lt key) resolves and adopts, with any number of candidates', async () => {
+  const s = await startServer();
+  try {
+    await s.api('POST', '/api/lieutenants', { name: 'Rex', id: 'rex',
+      ref: { harness: 'fake', session: 'bc-lt-rex', window: 'lt', cwd: '/tmp' } });
+    await s.api('POST', '/api/lieutenants', { name: 'Lennya', id: 'lennya',
+      ref: { harness: 'fake', session: 'bc-lt-lennya', window: 'lt', cwd: '/tmp' } });
+
+    let r = await s.api('POST', '/api/turn-end', { session: 'bc-lt-rex:lt', session_id: 'uuid-rex',
+      cwd: '/tmp', tmux_session: 'bc-lt-rex' });
+    assert.strictEqual(r.body.lieutenant, 'rex');
+    r = await s.api('POST', '/api/turn-end', { session: 'bc-lt-lennya:lt', session_id: 'uuid-lennya',
+      cwd: '/tmp', tmux_session: 'bc-lt-lennya' });
+    assert.strictEqual(r.body.lieutenant, 'lennya');
+
+    const all = await lts(s);
+    assert.strictEqual(all.find((l) => l.id === 'rex').ref.resumeId, 'uuid-rex');
+    assert.strictEqual(all.find((l) => l.id === 'lennya').ref.resumeId, 'uuid-lennya');
+  } finally {
+    await s.stop();
+  }
+});
+
+test('a worker key still cannot write a lieutenant resumeId, even sharing its session', async () => {
+  const s = await startServer();
+  try {
+    // Same session, both window-granular: the lieutenant in `lt`, the worker in
+    // `w-<card>`. The worker's record is gone (a stale POST), so nothing but
+    // the window part stands between it and the lieutenant's ref.
+    await s.api('POST', '/api/lieutenants', { name: 'Rex', id: 'rex',
+      ref: { harness: 'fake', session: 'bc-lt-rex', window: 'lt', cwd: '/tmp', resumeId: 'uuid-rex' } });
+    const r = await s.api('POST', '/api/turn-end', { session: 'bc-lt-rex:w-gone-card',
+      session_id: 'uuid-stale-worker', cwd: '/tmp/worktree', tmux_session: 'bc-lt-rex' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.lieutenant, null);
+    assert.strictEqual((await lts(s))[0].ref.resumeId, 'uuid-rex', 'lieutenant resumeId untouched');
+  } finally {
+    await s.stop();
+  }
+});
+
 test('legacy hooks (no tmux_session field): single-candidate adoption holds, foreign cwd refused', async () => {
   const s = await startServer();
   try {

@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { startServerWithLieutenant, withOwner, LT } = require('./helper');
+const { startServer, startServerWithLieutenant, withOwner, LT } = require('./helper');
 const { lieutenantSession, workerWindow } = require('../server/names.js');
 
 function fakeSession(dir, session) {
@@ -217,5 +217,51 @@ test('turn-end refreshes agentStatus onto the board payload (lieutenant)', async
     assert.ok(lt.agentStatus.ts, 'stamped with the refresh time');
   } finally {
     await teardown();
+  }
+});
+
+// A status is only ever refreshed at turn-end, and a failed refresh leaves the
+// last successful reading in place (refreshAgentStatus returns false and
+// touches nothing). Without an age mark the board presents that frozen reading
+// as current — which is how a lieutenant whose status read is broken shows a
+// confident number nobody has measured in hours. The server marks it; the UI
+// decides what to do with the mark.
+test('a reading older than the stale window is marked stale on the payload; a fresh one is not', async () => {
+  const nowIso = new Date().toISOString();
+  const iso = (agoMs) => new Date(Date.now() - agoMs).toISOString();
+  const st = (ts) => ({ model: 'gpt-5.6-sol', contextUsed: 140190, contextWindow: 258400, ts });
+  const s = await startServer({
+    seed: (dir) => {
+      const sd = path.join(dir, '.bridge-commander');
+      fs.mkdirSync(sd, { recursive: true });
+      fs.writeFileSync(path.join(sd, 'board.json'), JSON.stringify({
+        title: 'seeded', seq: 0, cards: [], events: [], labels: [], reads: {}, kinds: {}, projects: [],
+        lieutenants: [
+          { id: 'rex', name: 'Rex', color: '#58b6ff', chat: [], created: nowIso,
+            ref: { harness: 'fake', session: 'bc-rex', window: 'lt', cwd: '/tmp' },
+            agentStatus: st(iso(3 * 60 * 60 * 1000)) },
+          { id: 'freya', name: 'Freya', color: '#58b6ff', chat: [], created: nowIso,
+            ref: { harness: 'fake', session: 'bc-freya', window: 'lt', cwd: '/tmp' },
+            agentStatus: st(iso(30 * 1000)) },
+        ],
+        workers: [{ card: 'RX-1', project: 'p', ref: { harness: 'fake', session: 'bc-rex', window: 'w-rx-1', cwd: '/tmp' },
+          worktree: { path: '/tmp/wt', tool: 'git' }, agentStatus: st(iso(3 * 60 * 60 * 1000)) }],
+      }, null, 2));
+    },
+  });
+  try {
+    const board = (await s.api('GET', '/api/board')).body;
+    const lt = (id) => board.lieutenants.find((l) => l.id === id);
+    assert.strictEqual(lt('rex').agentStatus.stale, true, 'a three-hour-old reading is not current');
+    assert.strictEqual(lt('rex').agentStatus.contextUsed, 140190, 'the numbers still ride along');
+    assert.strictEqual(lt('freya').agentStatus.stale, undefined, 'a fresh reading carries no mark');
+    assert.strictEqual(board.workers[0].agentStatus.stale, true, 'workers are marked the same way');
+
+    // the mark is derived, never written — the stored record stays untouched
+    const stored = JSON.parse(fs.readFileSync(path.join(s.dir, '.bridge-commander', 'board.json'), 'utf8'));
+    const storedRex = stored.lieutenants.find((l) => l.id === 'rex');
+    if (storedRex.agentStatus) assert.strictEqual(storedRex.agentStatus.stale, undefined);
+  } finally {
+    await s.stop();
   }
 });

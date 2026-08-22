@@ -10,7 +10,7 @@ const path = require('node:path');
 const {
   claudeProjectSlug, claudeContextWindow, claudeStatus,
   claudeSidecarStatus, findBridgeWorkspace,
-  codexRolloutFile, codexStatus, formatStatus,
+  codexRolloutFile, codexThreadId, codexStatus, formatStatus,
 } = require('../agent-status.js');
 
 function tmpdir(prefix) {
@@ -343,6 +343,59 @@ test('codexStatus: null on unknown thread / ref without resumeId — never a thr
     assert.strictEqual(codexStatus({}, { sessionsDir }), null);
   } finally {
     fs.rmSync(sessionsDir, { recursive: true, force: true });
+  }
+});
+
+// The thread-id: a codex ref is born WITHOUT resumeId (codex assigns the id
+// itself and the ref only adopts it from a turn-end POST), so status that reads
+// ref.resumeId alone is blank for any lieutenant whose adoption never landed.
+// The notify relay rewrites <stateDir>/<key>.session-id every turn — the same
+// ground truth resume() already prefers.
+test('codexThreadId: recorded session-id file first, ref.resumeId second, null when neither', () => {
+  const stateDir = tmpdir('bc-status-tid-');
+  try {
+    const ref = { session: 'bc-lt-rex', window: 'lt' };
+    assert.strictEqual(codexThreadId(ref, { stateDir }), null, 'nothing recorded, nothing on the ref');
+    assert.strictEqual(codexThreadId({ ...ref, resumeId: 'from-ref' }, { stateDir }), 'from-ref');
+
+    // the key is the state key: `session:window` for a window-granular ref
+    fs.writeFileSync(path.join(stateDir, 'bc-lt-rex:lt.session-id'), 'from-file\n');
+    assert.strictEqual(codexThreadId(ref, { stateDir }), 'from-file');
+    assert.strictEqual(codexThreadId({ ...ref, resumeId: 'from-ref' }, { stateDir }), 'from-file',
+      'the file is refreshed every turn — it wins over an older adopted id');
+
+    // a session-granular ref keys on the bare session name
+    fs.writeFileSync(path.join(stateDir, 'bc-solo.session-id'), 'solo-thread\n');
+    assert.strictEqual(codexThreadId({ session: 'bc-solo' }, { stateDir }), 'solo-thread');
+
+    // no stateDir (a caller that does not know where harness state lives)
+    assert.strictEqual(codexThreadId({ ...ref, resumeId: 'from-ref' }), 'from-ref');
+    assert.strictEqual(codexThreadId(null, { stateDir }), null);
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('codexStatus: a ref with no resumeId still reads, via the recorded session-id', () => {
+  const sessionsDir = tmpdir('bc-status-codex4-');
+  const stateDir = tmpdir('bc-status-codex4s-');
+  try {
+    writeRollout(sessionsDir, '2026/08/20', THREAD,
+      JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5.6-sol' } }) + '\n'
+      + tokenCountLine(140190));
+    const ref = { session: 'bc-lt-rex', window: 'lt' };
+    assert.strictEqual(codexStatus(ref, { sessionsDir, stateDir }), null, 'no id anywhere yet');
+
+    fs.writeFileSync(path.join(stateDir, 'bc-lt-rex:lt.session-id'), THREAD + '\n');
+    assert.deepStrictEqual(codexStatus(ref, { sessionsDir, stateDir }),
+      { model: 'gpt-5.6-sol', contextUsed: 140190, contextWindow: 258400 });
+
+    // a ref carrying a DEAD id is not trusted over the file either
+    assert.deepStrictEqual(codexStatus({ ...ref, resumeId: 'no-such-thread' }, { sessionsDir, stateDir }),
+      { model: 'gpt-5.6-sol', contextUsed: 140190, contextWindow: 258400 });
+  } finally {
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
 

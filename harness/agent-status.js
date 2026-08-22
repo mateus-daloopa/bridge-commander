@@ -209,7 +209,7 @@ function claudeStatus(ref, opts = {}) {
 
 // ---------- codex ----------
 // Rollout path: ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<threadId>.jsonl
-// (threadId = ref.resumeId). The date dirs are walked newest-first and the
+// (threadId — see codexThreadId). The date dirs are walked newest-first and the
 // first match wins, so a thread resumed on a later day resolves to its newest
 // rollout file.
 function codexRolloutFile(threadId, sessionsDir) {
@@ -247,6 +247,8 @@ function codexRateLimits(rl) {
 }
 
 // codexStatus(ref, opts?) -> status | null
+// The thread-id comes from codexThreadId (recorded session-id file, then the
+// ref) — NOT from ref.resumeId alone: a codex ref is born without one.
 // The last token_count event carries current context occupancy
 // (info.last_token_usage.total_tokens = input+cached+output of the last turn)
 // and the model context window; the model rides every turn_context line, so the
@@ -256,11 +258,32 @@ function codexRateLimits(rl) {
 // deliberate: rollouts where info is populated always carry it (verified on
 // real rollouts), and the only ones missing it have info === null, which the
 // null-guards below already reject — so no total_token_usage fallback is needed.
+// codexThreadId(ref, opts) -> the thread-id whose rollout to read, or null.
+// The notify relay rewrites <stateDir>/<key>.session-id at every turn, so that
+// file is ground truth; ref.resumeId is adopted once from a turn-end POST and a
+// ref can live its whole life without one (codex assigns the id itself — see
+// codex-tmux.js). Same order resume() uses: recorded file first, ref second.
+// opts.stateDir comes from the caller that knows where harness state lives
+// (codex-tmux status()); without it only the ref can answer.
+function codexThreadId(ref, opts = {}) {
+  if (ref && ref.session && opts.stateDir) {
+    const key = ref.window ? ref.session + ':' + ref.window : ref.session;
+    try {
+      const rec = fs.readFileSync(path.join(opts.stateDir, key + '.session-id'), 'utf8').trim();
+      if (rec) return rec;
+    } catch {
+      // no recorded id — the ref's is all there is
+    }
+  }
+  return (ref && ref.resumeId) || null;
+}
+
 function codexStatus(ref, opts = {}) {
-  if (!ref || !ref.resumeId) return null;
+  const threadId = codexThreadId(ref, opts);
+  if (!threadId) return null;
   const sessionsDir = opts.sessionsDir || process.env.BC_CODEX_SESSIONS_DIR
     || path.join(os.homedir(), '.codex', 'sessions');
-  const file = codexRolloutFile(ref.resumeId, sessionsDir);
+  const file = codexRolloutFile(threadId, sessionsDir);
   if (!file) return null;
   const text = tailRead(file, TAIL_BYTES);
   if (text === null) return null;
@@ -356,6 +379,7 @@ module.exports = {
   claudeSidecarStatus,
   claudeStatus,
   codexRolloutFile,
+  codexThreadId,
   codexStatus,
   SLASH_COMMANDS,
   helpText,

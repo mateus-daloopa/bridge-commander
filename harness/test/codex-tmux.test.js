@@ -34,6 +34,32 @@ test('resumable: ref.resumeId, else the relay-recorded session-id file, else fal
   }
 });
 
+// status() resolves its thread-id the same way resume() does — the recorded
+// session-id file it passes stateDir for, then the ref. Without that plumbing
+// a codex lieutenant that never adopted a resumeId shows a blank context bar.
+test('status resolves the thread-id from the recorded session-id, not ref.resumeId alone', async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-codex-status-'));
+  const sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-codex-rollout-'));
+  try {
+    const thread = '01a00181-3b6b-7b43-b7e4-2fe0555a190b';
+    const day = path.join(sessionsDir, '2026', '08', '20');
+    fs.mkdirSync(day, { recursive: true });
+    fs.writeFileSync(path.join(day, 'rollout-2026-08-20T10-00-00-' + thread + '.jsonl'),
+      JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5.6-sol' } }) + '\n'
+      + JSON.stringify({ payload: { type: 'token_count',
+        info: { last_token_usage: { total_tokens: 140190 }, model_context_window: 258400 } } }) + '\n');
+
+    const ref = { harness: 'codex', session: 'bc-lt-rex', window: 'lt', cwd: '/tmp' };
+    assert.strictEqual(await codex.status(ref, { stateDir, sessionsDir }), null, 'no id anywhere yet');
+    fs.writeFileSync(path.join(stateDir, 'bc-lt-rex:lt.session-id'), thread + '\n');
+    assert.deepStrictEqual(await codex.status(ref, { stateDir, sessionsDir }),
+      { model: 'gpt-5.6-sol', contextUsed: 140190, contextWindow: 258400 });
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
+  }
+});
+
 test('resumable for a window-granular ref reads the session:window keyed record', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-codex-state-'));
   try {

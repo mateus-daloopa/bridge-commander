@@ -221,25 +221,27 @@ async function kill(ref) {
 }
 
 // ---------- slash commands + status (OPTIONAL capability verbs — port.js) ----------
-// status(ref) reads the rollout log codex already writes
+// status(ref, opts?) reads the rollout log codex already writes
 // (~/.codex/sessions/YYYY/MM/DD/rollout-*-<threadId>.jsonl — agent-status.js).
-// The thread-id IS ref.resumeId, adopted from the first turn-end; before that
-// (or with no rollout on disk) status is null, never a throw.
+// The thread-id comes from the relay-recorded session-id file first and
+// ref.resumeId second — the same order resume() uses, and the reason status
+// works for a ref that never adopted a resumeId. With no rollout on disk
+// status is null, never a throw.
 function commands() {
   return SLASH_COMMANDS.map((c) => ({ ...c }));
 }
-async function status(ref) {
-  return codexStatus(ref);
+async function status(ref, opts = {}) {
+  return codexStatus(ref, { ...opts, stateDir: s.stateDirOf(opts) });
 }
 // No /autocompact here: codex has no such slash command (its binary only
 // carries the model_auto_compact_token_limit CONFIG scope — verified 0.144.x).
-async function runCommand(ref, command) {
+async function runCommand(ref, command, opts = {}) {
   const line = String(command || '').trim();
   const name = line.split(/\s+/)[0];
   const key = s.stateKey(ref.session, ref.window);
   if (name === '/help') return helpText(commands());
   if (name === '/status') {
-    const st = await status(ref);
+    const st = await status(ref, opts);
     if (!st) throw new Error('no status for ' + key + ' — rollout log not found (thread-id not adopted yet?)');
     return formatStatus(st);
   }

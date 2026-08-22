@@ -68,17 +68,21 @@
 //       the slash commands this harness answers (/status /compact /help
 //       where applicable; claude adds /autocompact — verified against the
 //       binary, the public docs lag behind).
-//   runCommand(ref, command) -> Promise<string>
+//   runCommand(ref, command, opts?) -> Promise<string>
 //       execute one command line against the session (first token names the
-//       command; arguments ride along); resolves to the reply text.
+//       command; arguments ride along); resolves to the reply text. opts is
+//       the same bag spawn/resume take — `stateDir` is the one field that
+//       matters here, since /status reads from it.
 //       Pass-through commands (/compact, claude's /autocompact) type the
 //       LITERAL line through the verified-submit send path — the harness's
 //       own implementation runs in-session; /status formats status(); /help
 //       renders commands(). Unknown names throw.
-//   status(ref) -> Promise<{ model, contextUsed, contextWindow, rateLimits? } | null>
+//   status(ref, opts?) -> Promise<{ model, contextUsed, contextWindow, rateLimits? } | null>
 //       model + context usage read from the files the harness already
 //       writes (transcript / rollout log); null — never a throw — when
-//       nothing is readable. rateLimits only where the harness persists
+//       nothing is readable. opts.stateDir points at the board's harness
+//       state (codex resolves its thread-id from the session-id file there);
+//       omitting it falls back to whatever the ref alone can answer. rateLimits only where the harness persists
 //       them (codex); claude omits the field.
 
 const VERBS = ['spawn', 'send', 'alive', 'resumable', 'resume', 'kill', 'onTurnEnd'];
