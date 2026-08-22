@@ -1221,6 +1221,7 @@ async function cmdStart() {
       '                             [--harness h] [--model m] [--effort l]\n' +
       '  ONE atomic op: provision an isolated worktree, spawn the worker session with the brief\n' +
       '  as launch prompt, bind session/worktree/branch to the card, move it to Working.\n' +
+      '  Legal from Backlog AND from Your review: rework restarts here, with no captain drag.\n' +
       '  --brief-file adds/overrides the task text (default: the card body).\n' +
       '  --resume reincarnates the card\'s recorded (dead) worker in the same worktree.\n' +
       '  --model overrides the spawned worker\'s model (e.g. claude-fable-5); ignored with --resume.\n' +

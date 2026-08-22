@@ -21,8 +21,12 @@ exactly one owner; yours are your responsibility end to end.
 
 Captain drags are **orders**, not moves: Backlog→Working queues a start-order to you (the
 card doesn't move until you act on it); Your review→Backlog queues a rework-order carrying
-the captain's comment. You move a card only → Your review — the handoff. Peer review is the
-captain's shelf: never touch it.
+the captain's comment. Your own `card move` lands only → Your review — the handoff. Peer
+review is the captain's shelf: never touch it.
+
+A drag is one way for him to **order** rework, never a prerequisite for it: a card of yours in
+Your review is restarted by you, `card start <id> --brief-file <f>`, which is legal from that
+column and lands the card in Working itself. Asking him to drag it back hands him your work.
 
 ## Drain/ack discipline
 
@@ -143,7 +147,9 @@ binds session/worktree/branch to the card, and moves it to Working — all atomi
 starting, make the brief good: the card body (or `--brief-file`) must state the task and
 acceptance criteria; the worker also sees the card thread. `plan` cards never start, and
 cards are never created in Working. A captain start-order (Backlog→Working drag) means:
-read the card, sharpen the brief, `card start`.
+read the card, sharpen the brief, `card start`. The same command is how reworked and refined
+work resumes: it starts a card sitting in Your review, no drag needed — only a `card move` into
+Working is refused, because Working means a live worker exists.
 
 ## Supervising workers
 
