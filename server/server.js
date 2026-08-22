@@ -1513,6 +1513,29 @@ async function resetLieutenant(id) {
   if (pendingItems(id).length) scheduleWake(id);
   return { ok: true, session: lt.ref.session };
 }
+// /reset kills a lieutenant's session and spawns it fresh on its launch prompt
+// — a whole spawn, with a brief to deliver. Supervision has one rule about a
+// lieutenant that is down: it died, so respawn it, which mid-reset means a
+// second spawn racing this one for the same pane and a captain told his
+// lieutenant crashed when he is the one who restarted it.
+//
+// pauseWorker sets w.paused before its own kill for exactly this reason ("the
+// death must never look like a crash"); a lieutenant has no such field, so the
+// mark lives here, wrapped around the call for the whole of it.
+//
+// Cleared in a `finally`, including when the reset throws: a marker left behind
+// would silence supervision for that lieutenant permanently, which is a worse
+// failure than the one this is preventing.
+const cyclingLieutenants = new Set(); // ids being restarted by /reset right now
+async function withCycleGuard(id, fn) {
+  cyclingLieutenants.add(id);
+  try {
+    return await fn();
+  } finally {
+    cyclingLieutenants.delete(id);
+  }
+}
+
 // A captain chat message starting with "/" routes HERE instead of becoming a
 // say: the command runs against the target session's harness and both the
 // command and its reply land in the thread — nothing rides the delivery queue
@@ -1542,7 +1565,7 @@ async function runChatCommand(target, text) {
   // on one whose session has died — bringing it back is the whole point.
   if (boardCommands(target).some((c) => c.name === name)) {
     const id = /^lieutenant:(.+)$/.exec(target)[1];
-    const out = await resetLieutenant(id);
+    const out = await withCycleGuard(id, () => resetLieutenant(id));
     if (out.error) reply('bridge', '⚠ ' + name + ' — ' + out.error);
     else reply('bridge', 'reset — ' + id + ' is a new session on the launch prompt (doctrine, charter, and what it owns). The conversation before this one is gone.');
     return { ok: true, command: name };
@@ -2989,6 +3012,10 @@ async function superviseTick() {
           if (ref) { lt.ref = ref; changed = true; }
         } catch (e) { /* keep the old ref; the next tick tries again */ }
       }
+      // /reset is restarting this lieutenant right now: between its kill and
+      // its spawn it is legitimately down, and respawning here would race that
+      // spawn for the same pane.
+      if (cyclingLieutenants.has(lt.id)) continue;
       let up = false;
       try { up = impl ? await impl.alive(lt.ref) : false; } catch (e) { up = false; }
       if (up) {
@@ -3000,6 +3027,10 @@ async function superviseTick() {
         if (pendingItems(lt.id).length) scheduleWake(lt.id);
         continue;
       }
+      // Asked again on the way out: the kill can land DURING the alive()
+      // round-trip, so a tick that passed the check above still gets down=true
+      // from a lieutenant /reset is legitimately restarting.
+      if (cyclingLieutenants.has(lt.id)) continue;
       const n = (respawnAttempts.get(lt.id) || 0) + 1;
       if (n > 3) continue; // already flagged needs-captain; a manual revival resets via alive
       respawnAttempts.set(lt.id, n);

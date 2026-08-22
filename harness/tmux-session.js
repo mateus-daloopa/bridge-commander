@@ -31,6 +31,62 @@ function stateDirOf(opts = {}) {
   return dir;
 }
 
+// The extra launch flags a spawn was given, kept next to the other per-agent
+// state files (<key>.prompt, <key>.session-id, <key>.turnend.jsonl) so a RESUME
+// can replay them.
+//
+// Those flags are not decoration. The server pins a worker's --model/--effort
+// from its playbook at spawn, and every resume path built its own launch line
+// without them — so a worker pinned to a model came back on the default one,
+// silently, with nobody told. The oldest of those paths is `card start --resume`
+// after a death, which is exactly the moment the pinning matters most.
+//
+// Recorded here rather than in each adapter because both tmux adapters take the
+// same `extraArgs` and both rebuild a launch line on resume; one copy of the
+// decision is one place for it to stay true.
+//
+// A missing, unreadable or corrupt record reads as "no extra flags" — today's
+// behaviour — and never throws: a resume that cannot read a hint must still
+// resume. A spawn with no extra flags REMOVES any stale record, so a card
+// restarted onto a different model does not inherit the last run's.
+function spawnArgsFile(stateDir, key) {
+  return path.join(stateDir, `${key}.spawn-args`);
+}
+// The launch facts a resume has to replay, taken straight off the spawn's opts:
+// the extra flags (--model/--effort, pinned by the card's playbook) and the
+// caller's allowRoot consent (the IS_SANDBOX=1 prefix without which claude
+// refuses to come back as uid 0). Written as an object; a bare array is the
+// older record's shape and still reads as flags-only.
+function recordSpawnArgs(stateDir, key, opts = {}) {
+  const file = spawnArgsFile(stateDir, key);
+  try {
+    const rec = { args: (opts.extraArgs || []).map(String) };
+    if (opts.allowRoot) rec.allowRoot = true;
+    if (rec.args.length || rec.allowRoot) fs.writeFileSync(file, JSON.stringify(rec) + '\n');
+    else fs.rmSync(file, { force: true });
+  } catch {
+    // best-effort: the record is an optimisation, never a precondition
+  }
+}
+// -> { args: string[], allowRoot: boolean }. Missing, unreadable or corrupt
+// reads as "nothing extra" and never throws: a resume that cannot read a hint
+// must still resume.
+function recordedSpawnArgs(stateDir, key) {
+  try {
+    const v = JSON.parse(fs.readFileSync(spawnArgsFile(stateDir, key), 'utf8'));
+    if (Array.isArray(v)) return { args: v.filter((a) => typeof a === 'string'), allowRoot: false };
+    if (v && typeof v === 'object') {
+      return {
+        args: Array.isArray(v.args) ? v.args.filter((a) => typeof a === 'string') : [],
+        allowRoot: !!v.allowRoot,
+      };
+    }
+  } catch {
+    // fall through to the empty record
+  }
+  return { args: [], allowRoot: false };
+}
+
 function shellQuote(s) {
   return `'` + String(s).replace(/'/g, `'\\''`) + `'`;
 }
@@ -457,6 +513,8 @@ function openFeedCount() { return feeds.size; }
 module.exports = {
   SHELLS,
   stateDirOf,
+  recordSpawnArgs,
+  recordedSpawnArgs,
   shellQuote,
   newSessionName,
   stateKey,

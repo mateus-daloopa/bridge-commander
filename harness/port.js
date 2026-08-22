@@ -64,10 +64,20 @@
 //       window comes back unchanged.
 // — and slash commands + session status (the UI composer's "/" and the
 // context bars; agent-status.js holds the shared machinery):
-//   commands(ref?) -> [{ name, description }]
+//   commands(ref?) -> [{ name, description, args? }]
 //       the slash commands this harness answers (/status /compact /help
-//       where applicable; claude adds /autocompact — verified against the
-//       binary, the public docs lag behind).
+//       where applicable; claude adds /autocompact and /output-style — verified
+//       against the binary, the public docs lag behind).
+//       `ref`, when given, scopes the answer to that session — claude's style
+//       list includes the ones installed in the session's own cwd.
+//       `args` is OPTIONAL metadata: [{ value, description }], the values this
+//       command accepts as its single argument, for a composer that wants to
+//       keep completing AFTER the command name (ui/js/slash.js). A harness that
+//       does not send it behaves exactly as before — the picker closes on the
+//       space, as it always did — so this is additive for every existing
+//       implementation. Everything a caller types after the command name is ONE
+//       argument: a `value` may contain spaces, and runCommand must not tokenize
+//       it. The server passes the field through untouched.
 //   runCommand(ref, command, opts?) -> Promise<string>
 //       execute one command line against the session (first token names the
 //       command; arguments ride along); resolves to the reply text. opts is
@@ -76,7 +86,14 @@
 //       Pass-through commands (/compact, claude's /autocompact) type the
 //       LITERAL line through the verified-submit send path — the harness's
 //       own implementation runs in-session; /status formats status(); /help
-//       renders commands(). Unknown names throw.
+//       renders commands(). Unknown names throw — and so does a command whose
+//       argument is missing or unrecognised, BEFORE it does anything: claude's
+//       /output-style writes a setting to disk, and a typo must not sit there
+//       waiting to surprise the next conversation. A command that changes
+//       something the session only reads at STARTUP says WHEN it applies in
+//       its reply (/output-style: the next time this session starts) without
+//       naming a command to get there, which a harness cannot know exists —
+//       no verb here restarts a session on the caller's behalf.
 //   status(ref, opts?) -> Promise<{ model, contextUsed, contextWindow, rateLimits? } | null>
 //       model + context usage read from the files the harness already
 //       writes (transcript / rollout log); null — never a throw — when

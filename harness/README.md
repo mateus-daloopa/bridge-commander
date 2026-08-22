@@ -104,7 +104,9 @@ focus, so an agent with siblings must always carry its window.
 - `fake.js` — in-memory implementation for unit-testing server code; set
   `BC_FAKE_STATE=<dir>` for file-backed mode (cross-process: spawn writes a
   `<session>.json` marker, sends append to `<session>.sends.jsonl`, and a
-  marker on disk counts as a live session)
+  marker on disk counts as a live session). `BC_FAKE_SPAWN_MS` holds `spawn`
+  open so the seconds a real one blocks for are visible to a test — the window
+  `/reset` spends with its lieutenant down
 - `smoke.js` — real end-to-end smoke (spawns actual claude sessions)
 - `smoke-codex.js` — the codex twin (skips cleanly when codex is not on PATH)
 - `test/` — unit tests (`node --test harness/test/*.test.js`)
@@ -141,18 +143,44 @@ focus, so an agent with siblings must always carry its window.
   `--resume` keeps the SAME session id (no fork by default), so refs stay valid
   across any number of death/resume cycles. The Stop hook also records the live
   session id to `<stateDir>/<session>.session-id`, which resume prefers over the
-  ref (ground truth wins). Without any id: fresh session, memory lost.
+  ref (ground truth wins). Without any id: fresh session, memory lost. The
+  spawn's launch facts are REPLAYED from `<session>.spawn-args`, not rebuilt:
+  its extra flags (`opts.extraArgs` wins when the caller passes them) and its
+  `allowRoot` consent, without which a resume as uid 0 comes back missing the
+  `IS_SANDBOX=1` prefix and claude refuses to start.
 - **onTurnEnd** — spawn merges a `Stop` hook into the worktree's
   `.claude/settings.local.json` (kept out of git via `info/exclude`) running
   `turnend-hook.js`, which appends one JSON line per turn boundary to
   `<stateDir>/<session>.turnend.jsonl` and optionally POSTs it to a callback URL
   (`opts.callbackUrl` / `BC_TURNEND_URL`). `onTurnEnd()` tails that file
   (fs.watch + 1s polling backstop) and fires the hook per event.
+- **slash commands** — beyond the shared set, claude reports `/autocompact` and
+  `/output-style` (both verified against the binary; the public docs lag). The
+  latter is NOT a pass-through — the 2.1.239 binary removed the command and
+  moved output styles into the interactive `/config` dialog — so it does what
+  claude itself does with the setting: it WRITES it and says when it lands. The
+  style goes into the SESSION's own `<cwd>/.claude/settings.local.json` (merged,
+  so the Stop hook survives; never `~/.claude/settings.json`, which would
+  repaint every claude on the machine), and the reply says it applies the next
+  time this session starts — the setting is read at process start. It names no
+  command to get there: `/reset` is a board command that exists only for
+  lieutenant targets, so a card thread would be sent at a command its worker
+  session refuses. Nothing is killed and nothing is resumed. The
+  offered styles are the built-ins plus every `*.md` under
+  `<cwd>/.claude/output-styles/` and `~/.claude/output-styles/` (project shadows
+  user; `opts.stylesDir` / `BC_CLAUDE_OUTPUT_STYLES_DIR` override the user
+  directory), each named by its front-matter `name:` with the basename as
+  fallback. A missing or unknown name throws before anything is written.
 
 State lives in `opts.stateDir` — the server and CLI always pass the
 workspace's `.bridge-commander/harness/` (`BC_HARNESS_STATE` overrides; the
 global `~/.bridge-commander/harness/` is a last-resort for bare embedders only):
-`<session>.prompt`, `<session>.session-id`, `<session>.turnend.jsonl`.
+`<session>.prompt`, `<session>.session-id`, `<session>.turnend.jsonl`,
+`<session>.spawn-args` (the launch facts a spawn was given — `opts.extraArgs`
+and `opts.allowRoot` — recorded by the shared `tmux-session.js` so a RESUME
+replays them: a worker pinned to a `--model` by its playbook must not come back
+on the default one. A missing or corrupt record reads as "nothing extra" and
+never throws — a resume that cannot read a hint must still resume).
 
 ## The codex implementation
 
@@ -192,7 +220,9 @@ launch line, the screen signatures, and where the turn-end relay rides
   turn-end (the server writes it back into the ref; the `.session-id` file is
   the ground truth either way).
 - **resume** — `codex resume <thread-id>` with the same bypass + notify flags,
-  in a fresh pane under the same name. Resuming continues the SAME thread-id
+  in a fresh pane under the same name, plus the spawn's extra flags replayed
+  from `<session>.spawn-args` (`opts.extraArgs` wins when given), so a worker
+  pinned to a `--model` comes back on it. Resuming continues the SAME thread-id
   (verified empirically — `smoke-codex.js --resume` asserts it), so refs
   survive any number of death/resume cycles. Without any id: fresh launch,
   memory lost.
