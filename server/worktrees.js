@@ -12,7 +12,10 @@
 // fm-spawn.sh, with --lease replacing the interactive-subshell dance), else
 // plain `git worktree add -d` under <workspace>/.bridge-commander/worktrees/.
 // BC_WORKTREE_TOOL=git|treehouse forces the choice (tests pin `git` for
-// hermetic cleanup).
+// hermetic cleanup). A pooled worktree is backed by whatever clone treehouse
+// built its pool from — NOT the project clone this board registered — so the
+// base is carried into it by sha and checked afterwards (freshBase/applyBase/
+// assertOnBase below).
 //
 // All subprocess work is async (the server's event loop must never block on
 // a multi-GB worktree add), and provision/release are serialized per project
@@ -76,7 +79,7 @@ async function assertIsolated(wt, projectPath) {
   if (wGit === pGit) throw new Error('worktree shares the clone\'s git dir (not isolated): ' + wt);
 }
 
-// freshBase(proj) -> commit-ish for a new worktree, or null.
+// freshBase(proj) -> { ref, fullRef, sha, warnings }
 //
 // `git worktree add` with no commit-ish uses the clone's HEAD, and nothing
 // keeps a long-lived clone's HEAD current — so every worker was starting from
@@ -85,36 +88,121 @@ async function assertIsolated(wt, projectPath) {
 // before the agent read the brief. Fetch, then cut from origin's default
 // branch.
 //
+// The SHA is the load-bearing half. A ref name means whatever the ref store
+// reading it happens to hold, and a pooled worktree reads a different clone
+// than the one fetched here (see createWorktree) — so the tip is carried by
+// value, and every path that applies the base is checked against it.
+//
 // A fetch that fails must not block the board: fall back to the local
 // origin/HEAD ref (stale, but still a real base), then to the clone's HEAD
-// (the old behaviour). Both fallbacks say so on stderr — a silent fallback is
-// how this bug hid in the first place.
+// (the old behaviour). Both fallbacks return a warning — a silent fallback is
+// how this bug hid in the first place, and stderr is where nobody read it.
 async function freshBase(proj) {
-  let fetched = true;
+  const warnings = [];
+  const none = { ref: null, fullRef: null, sha: null, warnings };
   try {
     await git(proj, 'fetch', '--quiet', 'origin');
   } catch (e) {
-    fetched = false;
-    process.stderr.write('worktrees: fetch failed in ' + proj + ' — base may be stale: ' + String(e.message || e) + '\n');
+    warnings.push('fetch failed in ' + proj + ' — the base may be stale: ' + String(e.message || e));
   }
+  let fullRef;
   try {
-    const ref = await git(proj, 'rev-parse', '--abbrev-ref', 'origin/HEAD');
-    if (!fetched) process.stderr.write('worktrees: cutting from the last-fetched ' + ref + '\n');
-    return ref;
+    fullRef = await git(proj, 'rev-parse', '--symbolic-full-name', 'origin/HEAD');
   } catch (e) {
-    process.stderr.write('worktrees: no origin/HEAD in ' + proj + ' — cutting from the clone HEAD: ' + String(e.message || e) + '\n');
-    return null;
+    warnings.push('no origin/HEAD in ' + proj + ' — cutting from the clone HEAD: ' + String(e.message || e));
+    return none;
+  }
+  const ref = fullRef.replace(/^refs\/remotes\//, '');
+  let sha;
+  try {
+    sha = await git(proj, 'rev-parse', fullRef);
+  } catch (e) {
+    warnings.push('cannot resolve ' + ref + ' in ' + proj + ' — cutting from the clone HEAD: ' + String(e.message || e));
+    return none;
+  }
+  return { ref, fullRef, sha, warnings };
+}
+
+// applyBase(wt, proj, base, cardId, warnings) — records into `warnings`
+//
+// The pooled worktree's ref store is NOT the clone freshBase() fetched.
+// treehouse keeps one pool per repository per machine, and which clone backs
+// it is decided by whoever asked for it first — here, a checkout in another
+// workspace entirely. So `checkout --detach origin/master` inside the lease
+// reads that other clone's `origin/master`, whatever it last happened to know,
+// and the fetch we just paid for lands somewhere nobody reads. When the two
+// clones agree the start looks fine, which is why the stale base was
+// intermittent rather than obvious.
+//
+// Fetching the fetched clone's own ref, BY PATH, into the lease puts the exact
+// tip in the ref store the checkout will read. No treehouse internals: it is
+// git, run inside the leased path.
+//
+// The fetch carries a DESTINATION refspec because a tip reachable only through
+// FETCH_HEAD is held by no ref at all, and releaseWorktree reads exactly that:
+// its dangling probe (`rev-list HEAD --not --branches --tags --remotes`) would
+// return HEAD itself and refuse to release a worker that committed nothing —
+// leaking the lease forever. The destination is a bc-owned
+// refs/remotes/bc-base/* namespace, never refs/remotes/origin/*: the pool clone
+// belongs to another workspace and moving ITS remote-tracking refs is not ours
+// to do, while `--remotes` still matches ours.
+//
+// The destination is named for the CARD, not the branch, because refs/remotes/*
+// is shared by every worktree cut from the clone while the pool is shared by
+// every workspace on the repo — a per-branch name is one ref two boards race to
+// force-update, and the loser's checkout reads the winner's tip and 502s on an
+// assertion meant to catch real staleness. One ref per card has no contenders;
+// the force-update keeps it from accumulating stale tips across starts.
+function baseDest(cardId) {
+  const slug = String(cardId).replace(/[^A-Za-z0-9_-]/g, '-');
+  return 'refs/remotes/bc-base/' + (slug || 'card');
+}
+async function applyBase(wt, proj, base, cardId, warnings) {
+  const dest = baseDest(cardId);
+  try {
+    await git(wt, 'fetch', '--quiet', '--no-tags', proj, '+' + base.fullRef + ':' + dest);
+    await git(wt, 'checkout', '--detach', dest);
+    return;
+  } catch (e) {
+    warnings.push('could not carry ' + base.ref + ' from ' + proj + ' into the leased worktree ('
+      + String(e.message || e) + ') — falling back to that worktree\'s own ' + base.ref);
+  }
+  await git(wt, 'checkout', '--detach', base.ref);
+}
+
+// assertOnBase — the checkout landed on the tip that was actually fetched.
+// Without this the base is a hope: two ref stores, two `origin/master`s, and
+// nothing downstream can tell which one the worker got.
+async function assertOnBase(wt, base) {
+  if (!base.sha) return;
+  const head = await git(wt, 'rev-parse', 'HEAD');
+  if (head !== base.sha) {
+    throw new Error('worktree is on ' + head + ' but the fetched ' + base.ref + ' is ' + base.sha
+      + ' — refusing to start a worker on a stale base');
   }
 }
 
-// createWorktree(projectPath, cardId, workspace) -> { path, tool, base? }
-// Always returns an asserted-isolated worktree or throws.
+// A refusal is the only thing the caller ever sees of a failed start: the
+// warnings are RETURNED, not logged, so every throw out of createWorktree has
+// to carry them or the reason the base went stale dies with the request.
+function carrying(e, warnings) {
+  if (warnings.length) e.message += ' (' + warnings.join('; ') + ')';
+  return e;
+}
+
+// createWorktree(projectPath, cardId, workspace)
+//   -> { path, tool, base, baseSha, warnings }
+// Always returns an asserted-isolated worktree standing on the tip that was
+// just fetched, or throws. `warnings` is what the caller must make audible on
+// the card: a start that fell back to a stale base is still a start, and
+// nobody reads the server's stderr.
 function createWorktree(projectPath, cardId, workspace) {
   const proj = fs.realpathSync(projectPath);
   return withProjectLock(proj, async () => {
     let wt = null;
     let tool = 'git';
     const base = await freshBase(proj);
+    const warnings = base.warnings;
     if (await treehouseAvailable()) {
       try {
         const out = await run('treehouse', ['get', '--lease', '--lease-holder', 'bc-w-' + cardId], { cwd: proj });
@@ -123,19 +211,39 @@ function createWorktree(projectPath, cardId, workspace) {
         if (cand && fs.existsSync(cand)) { wt = cand; tool = 'treehouse'; }
       } catch (e) { wt = null; /* fall back to git worktree */ }
       // A pooled worktree comes back on whatever the pool left it on, so the
-      // base has to be applied after the fact rather than at creation.
-      if (wt && base) await git(wt, 'checkout', '--detach', base);
+      // base has to be applied after the fact rather than at creation — into
+      // ITS ref store, which is not the clone we fetched.
+      if (wt && base.ref) {
+        try {
+          await applyBase(wt, proj, base, cardId, warnings);
+        } catch (e) {
+          await run('treehouse', ['return', wt], { cwd: proj }).catch(() => {}); // no lease left behind
+          throw carrying(e, warnings);
+        }
+      }
     }
     if (!wt) {
       tool = 'git';
       const dir = path.join(workspace, '.bridge-commander', 'worktrees');
       fs.mkdirSync(dir, { recursive: true });
       wt = path.join(dir, String(cardId).replace(/[^A-Za-z0-9_.-]/g, '-'));
-      if (fs.existsSync(wt)) throw new Error('worktree path already exists: ' + wt);
-      await git(proj, 'worktree', 'add', '-d', wt, ...(base ? [base] : []));
+      if (fs.existsSync(wt)) throw carrying(new Error('worktree path already exists: ' + wt), warnings);
+      try {
+        await git(proj, 'worktree', 'add', '-d', wt, ...(base.ref ? [base.ref] : []));
+      } catch (e) { throw carrying(e, warnings); }
     }
-    await assertIsolated(wt, proj);
-    return { path: fs.realpathSync(wt), tool, base: base || null };
+    try {
+      await assertIsolated(wt, proj);
+      await assertOnBase(wt, base);
+    } catch (e) {
+      // Nothing half-provisioned survives a refusal: a leaked lease starves the
+      // pool, and a leaked git worktree owns the deterministic path this card
+      // would be handed on its next start.
+      if (tool === 'treehouse') await run('treehouse', ['return', wt], { cwd: proj }).catch(() => {});
+      else await git(proj, 'worktree', 'remove', '--force', wt).catch(() => {});
+      throw carrying(e, warnings);
+    }
+    return { path: fs.realpathSync(wt), tool, base: base.ref || null, baseSha: base.sha || null, warnings };
   });
 }
 
